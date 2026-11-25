@@ -15,7 +15,8 @@ _GLB_MAGIC = 0x46546C67  # 'glTF'
 _CHUNK_JSON = 0x4E4F534A  # 'JSON'
 _CHUNK_BIN = 0x004E4942  # 'BIN\0'
 _SPEC_GLOSS_EXT = "KHR_materials_pbrSpecularGlossiness"
-_DEFAULT_SOURCE_GLB = Path(__file__).resolve().parents[2] / "fps_arms.glb"
+_ROOT_SOURCE_GLB = Path(__file__).resolve().parents[2] / "fps_arms.glb"
+_ASSET_SOURCE_GLB = Path(__file__).resolve().parents[1] / "assets" / "fps_arms.glb"
 
 FPS_ARMS_METADATA: dict[str, object] = {
     "character": "FPS_Arms_Tactical",
@@ -287,10 +288,16 @@ def _pack_glb(gltf: dict[str, Any], bin_bytes: bytes) -> bytes:
     return header + json_hdr + json_bytes + bin_hdr + padded_bin
 
 
+def _resolve_default_source_glb() -> Path:
+    if _ROOT_SOURCE_GLB.is_file():
+        return _ROOT_SOURCE_GLB
+    return _ASSET_SOURCE_GLB
+
+
 def build_fps_arms_glb(texture_size: int = 512, source_path: Path | None = None) -> bytes:
-    """Load root fps_arms.glb, convert Specular-Glossiness textures to standard PBR, and normalize root scale/facing."""
+    """Load root or tracked asset fps_arms.glb, convert Specular-Glossiness textures to standard PBR, and normalize root scale/facing."""
     _validate_texture_size(texture_size)
-    glb_path = _DEFAULT_SOURCE_GLB if source_path is None else Path(source_path)
+    glb_path = _resolve_default_source_glb() if source_path is None else Path(source_path)
     if not glb_path.is_file():
         raise FileNotFoundError(f"Source fps_arms GLB not found: {glb_path}")
 
