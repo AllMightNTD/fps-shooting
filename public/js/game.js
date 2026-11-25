@@ -784,10 +784,17 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       obj.material = matCache.get(ck);
       if (obj.isSkinnedMesh) obj.material.skinning = true;
     });
+    const ctrl = createSkinnedArmsController(root, THREE);
+    if (!ctrl || !ctrl.ready) {
+      armsCtrl = null;
+      window.__armsLoaded = false;
+      console.warn("fps_arms asset missing required skinned rig bones; rebuild with python -m model.build");
+      return;
+    }
+    armsCtrl = ctrl;
     gun.add(root);
-    armsCtrl = createSkinnedArmsController(root, THREE);
     gunAnim(0, 0);
-    window.__armsLoaded = Boolean(armsCtrl && armsCtrl.ready);
+    window.__armsLoaded = true;
   });
 
   loadModelAsset("soldier", "/model/dist/soldier.glb", (gltf) => {
