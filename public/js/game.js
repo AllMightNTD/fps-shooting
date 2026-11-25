@@ -591,13 +591,13 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       envMapIntensity: isGlass ? 1.8 : isArmsSkinGlove ? 0.62 : isSkin ? 0.45 : isGlove ? 0.55 : envScale,
       clearcoat: phys.clearcoat || 0,
       clearcoatRoughness: phys.clearcoatRoughness || 0,
-      sheen: phys.sheenColor !== undefined ? new THREE.Color(phys.sheenColor) : undefined,
       skinning: Boolean(src.skinning),
       transparent: isGlass,
       opacity: isGlass ? 0.26 : 1,
       depthWrite: !isGlass,
       side: src.side,
     });
+    if (phys.sheenColor !== undefined) mat.sheen = new THREE.Color(phys.sheenColor);
     if (objName === "watch_dial" && src.map) {
       mat.emissiveMap = src.map;
       mat.emissive = new THREE.Color(0x88ffcc);
@@ -1320,7 +1320,7 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     if (armsCtrl) {
       armsCtrl.update({
         weaponId: cfg.id,
-        triggerPull: isPistol ? pistolTrigPull : trigPull,
+        triggerPull: isPistol ? pistolTrigPull / 0.42 : trigPull,
         reloadProgress: rl,
         isTactical: Boolean(st.isTactical),
         isSprinting,
