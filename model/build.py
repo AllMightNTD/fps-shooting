@@ -9,7 +9,7 @@ from pathlib import Path
 import struct
 from typing import Sequence
 
-from model.characters import build_fps_arms_nodes, build_soldier_nodes
+from model.characters import build_fps_arms_glb, build_soldier_nodes
 from model.core import export_glb, export_js_bundle
 from model.weapons import build_m416_nodes, build_pistol_nodes
 
@@ -71,15 +71,15 @@ def build_all(output_dir: Path, texture_size: int = 512, seed: int = 42) -> list
     output_dir.mkdir(parents=True, exist_ok=True)
     glove_size = max(64, texture_size // 2)
     models_spec = [
-        ("m416", "M416_PBR_Scene", build_m416_nodes(texture_size=texture_size, seed=seed)),
-        ("pistol", "Pistol_PBR_Scene", build_pistol_nodes(texture_size=texture_size, seed=seed)),
-        ("fps_arms", "FPS_Arms_PBR_Scene", build_fps_arms_nodes(skin_size=texture_size, glove_size=glove_size, seed=seed)),
-        ("soldier", "Soldier_PBR_Scene", build_soldier_nodes(tex_size=glove_size, seed=seed)),
+        ("m416", lambda: export_glb(build_m416_nodes(texture_size=texture_size, seed=seed), scene_name="M416_PBR_Scene")),
+        ("pistol", lambda: export_glb(build_pistol_nodes(texture_size=texture_size, seed=seed), scene_name="Pistol_PBR_Scene")),
+        ("fps_arms", lambda: build_fps_arms_glb(texture_size=texture_size)),
+        ("soldier", lambda: export_glb(build_soldier_nodes(tex_size=glove_size, seed=seed), scene_name="Soldier_PBR_Scene")),
     ]
     artifacts: list[BuildArtifact] = []
 
-    for name, scene_name, nodes in models_spec:
-        glb_bytes = export_glb(nodes, scene_name=scene_name)
+    for name, build_fn in models_spec:
+        glb_bytes = build_fn()
         stats = inspect_glb_stats(glb_bytes)
 
         glb_path = output_dir / f"{name}.glb"

@@ -1,469 +1,344 @@
-"""Detailed PBR first-person arms, fingerless tactical gloves, and military watch builder."""
+"""Convert and normalize the rigged SkinnedMesh fps_arms.glb to glTF 2.0 metallic-roughness PBR."""
 
 from __future__ import annotations
 
-import math
-from typing import Sequence
+import io
+import json
+from pathlib import Path
+import struct
+from typing import Any, Sequence
 
 import numpy as np
+from PIL import Image
 
-from model.core import (
-    GLBMaterial,
-    GLBNode,
-    MeshData,
-    create_beveled_box,
-    create_box,
-    create_capsule,
-    create_circle,
-    create_cylinder,
-    create_glove_textures,
-    create_realistic_skin_textures,
-    create_torus,
-    create_tube_along_curve,
-    merge_meshes,
-    transform_mesh,
-)
-
-# Rig coordinates shared with FPS.html so reload/trigger animations align cleanly with M416.
-_LEFT_ELBOW: tuple[float, float, float] = (-0.30, -0.30, 0.22)
-_RIGHT_ELBOW: tuple[float, float, float] = (0.17, -0.28, 0.48)
-
-
-def _basis_euler_xyz(y_axis: Sequence[float], z_axis: Sequence[float]) -> tuple[float, float, float]:
-    """Compute intrinsic XYZ Euler angles from desired local +Y and +Z directions."""
-    y = np.asarray(y_axis, dtype=np.float64)
-    y /= np.linalg.norm(y)
-    z = np.asarray(z_axis, dtype=np.float64)
-    z = z - y * float(np.dot(z, y))
-    z /= np.linalg.norm(z)
-    x = np.cross(y, z)
-    x /= np.linalg.norm(x)
-    mat = np.column_stack((x, y, z))
-
-    # Extract XYZ Euler angles from rotation matrix R = Rx(rx) @ Ry(ry) @ Rz(rz)
-    sy = max(-1.0, min(1.0, float(mat[0, 2])))
-    ry = math.asin(sy)
-    if abs(mat[0, 2]) < 0.99999:
-        rx = math.atan2(-mat[1, 2], mat[2, 2])
-        rz = math.atan2(-mat[0, 1], mat[0, 0])
-    else:
-        rx = math.atan2(mat[2, 1], mat[1, 1])
-        rz = 0.0
-    return (round(rx, 6), round(ry, 6), round(rz, 6))
-
-
-def _rot_xyz(rx: float, ry: float, rz: float) -> np.ndarray:
-    cx, sx = math.cos(rx), math.sin(rx)
-    cy, sy = math.cos(ry), math.sin(ry)
-    cz, sz = math.cos(rz), math.sin(rz)
-    mx = np.array([[1.0, 0.0, 0.0], [0.0, cx, -sx], [0.0, sx, cx]], dtype=np.float64)
-    my = np.array([[cy, 0.0, sy], [0.0, 1.0, 0.0], [-sy, 0.0, cy]], dtype=np.float64)
-    mz = np.array([[cz, -sz, 0.0], [sz, cz, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64)
-    return mx @ my @ mz
-
-
-def _mat4_to_euler_xyz(mat3: np.ndarray) -> tuple[float, float, float]:
-    sy = max(-1.0, min(1.0, float(mat3[0, 2])))
-    ry = math.asin(sy)
-    if abs(mat3[0, 2]) < 0.99999:
-        rx = math.atan2(-mat3[1, 2], mat3[2, 2])
-        rz = math.atan2(-mat3[0, 1], mat3[0, 0])
-    else:
-        rx = math.atan2(mat3[2, 1], mat3[1, 1])
-        rz = 0.0
-    return (round(rx, 6), round(ry, 6), round(rz, 6))
-
-
-def _transform_mesh_mat4(mesh: MeshData, mat4: np.ndarray) -> MeshData:
-    rot = mat4[:3, :3]
-    trans = mat4[:3, 3]
-    new_pos = (mesh.positions.astype(np.float64) @ rot.T) + trans
-    norm_mat = np.linalg.inv(rot).T
-    new_norm = mesh.normals.astype(np.float64) @ norm_mat.T
-    nl = np.linalg.norm(new_norm, axis=1, keepdims=True)
-    new_norm = new_norm / np.where(nl > 1e-12, nl, 1.0)
-    return MeshData(
-        positions=new_pos.astype(np.float32),
-        normals=new_norm.astype(np.float32),
-        uvs=mesh.uvs.copy(),
-        indices=mesh.indices.copy(),
-    )
-
-
-def _make_mat4(
-    translation: tuple[float, float, float] = (0.0, 0.0, 0.0),
-    rotation: tuple[float, float, float] = (0.0, 0.0, 0.0),
-) -> np.ndarray:
-    m = np.eye(4, dtype=np.float64)
-    m[:3, :3] = _rot_xyz(*rotation)
-    m[:3, 3] = np.asarray(translation, dtype=np.float64)
-    return m
-
-
-# Left hand poses aligned cleanly around M416 handguard, curved STANAG mag, and charging handle.
-_LEFT_GRIP_POS = (-0.042, -0.022, -0.236)
-_LEFT_GRIP_ROT = _basis_euler_xyz(y_axis=(-0.48, -0.26, 0.84), z_axis=(-0.82, 0.44, -0.36))
-
-_LEFT_MAG_POS = (-0.044, -0.118, -0.078)
-_LEFT_MAG_ROT = _basis_euler_xyz(y_axis=(-0.78, -0.18, 0.60), z_axis=(-0.55, 0.35, -0.76))
-
-_LEFT_CH_POS = (-0.064, 0.032, 0.122)
-_LEFT_CH_ROT = _basis_euler_xyz(y_axis=(-0.80, -0.44, 0.40), z_axis=(-0.28, 0.76, 0.58))
-
-_RIGHT_GRIP_POS = (0.012, -0.070, 0.068)
-_RIGHT_GRIP_ROT = (0.34, 0.10, 0.14)
+_GLB_MAGIC = 0x46546C67  # 'glTF'
+_CHUNK_JSON = 0x4E4F534A  # 'JSON'
+_CHUNK_BIN = 0x004E4942  # 'BIN\0'
+_SPEC_GLOSS_EXT = "KHR_materials_pbrSpecularGlossiness"
+_DEFAULT_SOURCE_GLB = Path(__file__).resolve().parents[2] / "fps_arms.glb"
 
 FPS_ARMS_METADATA: dict[str, object] = {
     "character": "FPS_Arms_Tactical",
-    "leftElbow": list(_LEFT_ELBOW),
-    "rightElbow": list(_RIGHT_ELBOW),
-    "leftWristLocal": [0.0, 0.042, 0.0],
-    "rightWristLocal": [0.008, -0.036, 0.024],
-    "poses": {
-        "grip": {"p": list(_LEFT_GRIP_POS), "r": list(_LEFT_GRIP_ROT)},
-        "mag": {"p": list(_LEFT_MAG_POS), "r": list(_LEFT_MAG_ROT)},
-        "out": {"p": [-0.088, -0.182, -0.042], "r": list(_LEFT_MAG_ROT)},
-        "ch": {"p": list(_LEFT_CH_POS), "r": list(_LEFT_CH_ROT)},
-        "chPulled": {"p": [_LEFT_CH_POS[0], _LEFT_CH_POS[1], _LEFT_CH_POS[2] + 0.055], "r": list(_LEFT_CH_ROT)},
-        "rightGrip": {"p": list(_RIGHT_GRIP_POS), "r": list(_RIGHT_GRIP_ROT)},
+    "rigType": "skinned",
+    "upperLen": 0.2587,
+    "forearmLen": 0.2543,
+    "bones": {
+        "leftArm": "L_arm_01",
+        "leftElbow": "L_elbow_02",
+        "leftWrist": "L_wrist_03",
+        "rightArm": "R_arm_023",
+        "rightElbow": "R_elbow_024",
+        "rightWrist": "R_wrist_025",
+        "rightIndex": ["R_point1_030", "R_point2_031", "R_point3_032"],
     },
-    "indexBaseRotX": -math.pi * 0.5 + 0.10,
 }
 
 
-def _create_materials(skin_size: int = 512, glove_size: int = 256, seed: int = 42) -> dict[str, GLBMaterial]:
-    skin_tex = create_realistic_skin_textures(size=skin_size, pore_count=4000, droplet_count=180, seed=seed)
-    glove_tex = create_glove_textures(size=glove_size, seed=seed + 100)
+def _validate_texture_size(texture_size: int) -> int:
+    if isinstance(texture_size, bool) or not isinstance(texture_size, int):
+        raise ValueError(f"texture_size must be an integer, got {type(texture_size).__name__}")
+    if texture_size < 64 or texture_size > 2048 or (texture_size & (texture_size - 1)) != 0:
+        raise ValueError(f"texture_size must be a power of two in [64, 2048], got {texture_size}")
+    return texture_size
 
-    return {
-        "skin": GLBMaterial(
-            name="Arms_WetSkin",
-            color=0xFFFFFF,
-            metalness=0.0,
-            roughness=0.52,
-            base_color_png=skin_tex.albedo_png,
-            metallic_roughness_png=skin_tex.mr_png,
-            normal_png=skin_tex.normal_png,
-            normal_scale=0.65,
-            clearcoat=0.45,
-            clearcoat_roughness=0.22,
-            sheen_color=0xFFD2B8,
-            sheen_roughness=0.60,
-        ),
-        "nail": GLBMaterial(
-            name="Arms_Fingernail",
-            color=0xC28D78,
-            metalness=0.0,
-            roughness=0.30,
-            clearcoat=0.35,
-            clearcoat_roughness=0.20,
-        ),
-        "glove": GLBMaterial(
-            name="Arms_TacticalGlove",
-            color=0xFFFFFF,
-            metalness=0.05,
-            roughness=0.85,
-            base_color_png=glove_tex.glove_albedo_png,
-            metallic_roughness_png=glove_tex.glove_mr_png,
-            normal_png=glove_tex.glove_normal_png,
-            normal_scale=0.85,
-            sheen_color=0x6E7562,
-            sheen_roughness=0.75,
-        ),
-        "knuckle": GLBMaterial(
-            name="Arms_KnuckleGuard",
-            color=0x1D201B,
-            metalness=0.30,
-            roughness=0.45,
-            clearcoat=0.35,
-            clearcoat_roughness=0.25,
-        ),
-        "camo": GLBMaterial(
-            name="Arms_CamoSleeve",
-            color=0xFFFFFF,
-            metalness=0.0,
-            roughness=0.90,
-            double_sided=True,
-            base_color_png=glove_tex.camo_albedo_png,
-        ),
-        "watch_strap": GLBMaterial(
-            name="Arms_WatchStrap",
-            color=0x181A18,
-            metalness=0.0,
-            roughness=0.82,
-        ),
-        "watch_case": GLBMaterial(
-            name="Arms_WatchCase",
-            color=0x222629,
-            metalness=0.90,
-            roughness=0.25,
-            clearcoat=0.80,
-            clearcoat_roughness=0.12,
-        ),
-        "watch_dial": GLBMaterial(
-            name="Arms_WatchDial",
-            color=0xFFFFFF,
-            metalness=0.10,
-            roughness=0.22,
-            base_color_png=glove_tex.watch_dial_png,
-        ),
+
+def _parse_glb(raw_bytes: bytes) -> tuple[dict[str, Any], bytes]:
+    if len(raw_bytes) < 20:
+        raise ValueError("GLB payload too small")
+
+    magic, version, total_len = struct.unpack_from("<III", raw_bytes, 0)
+    if magic != _GLB_MAGIC:
+        raise ValueError(f"Invalid GLB magic: 0x{magic:08x}")
+    if version != 2:
+        raise ValueError(f"Unsupported glTF version: {version}")
+    if total_len != len(raw_bytes):
+        raise ValueError(f"GLB length mismatch: header={total_len}, actual={len(raw_bytes)}")
+
+    json_len, json_type = struct.unpack_from("<II", raw_bytes, 12)
+    if json_type != _CHUNK_JSON:
+        raise ValueError("First GLB chunk must be JSON")
+    json_end = 20 + json_len
+    if json_end + 8 > len(raw_bytes):
+        raise ValueError("GLB JSON chunk truncated or missing BIN header")
+
+    try:
+        gltf = json.loads(raw_bytes[20:json_end].decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Invalid glTF JSON chunk") from exc
+
+    if not isinstance(gltf, dict):
+        raise ValueError("glTF root JSON must be an object")
+
+    bin_len, bin_type = struct.unpack_from("<II", raw_bytes, json_end)
+    if bin_type != _CHUNK_BIN:
+        raise ValueError("Second GLB chunk must be BIN")
+    bin_start = json_end + 8
+    bin_end = bin_start + bin_len
+    if bin_end > len(raw_bytes):
+        raise ValueError("GLB BIN chunk truncated")
+
+    return gltf, raw_bytes[bin_start:bin_end]
+
+
+def _extract_image_bytes(gltf: dict[str, Any], bin_chunk: bytes, image_idx: int) -> bytes:
+    images = gltf.get("images")
+    buffer_views = gltf.get("bufferViews")
+    if not isinstance(images, list) or not isinstance(buffer_views, list):
+        raise ValueError("glTF must contain images and bufferViews")
+    if image_idx < 0 or image_idx >= len(images):
+        raise ValueError(f"Missing image[{image_idx}] in source GLB")
+
+    bv_idx = images[image_idx].get("bufferView")
+    if not isinstance(bv_idx, int) or bv_idx < 0 or bv_idx >= len(buffer_views):
+        raise ValueError(f"image[{image_idx}] has invalid bufferView")
+
+    bv = buffer_views[bv_idx]
+    offset = int(bv.get("byteOffset", 0))
+    length = int(bv.get("byteLength", 0))
+    if offset < 0 or length <= 0 or offset + length > len(bin_chunk):
+        raise ValueError(f"bufferView[{bv_idx}] out of BIN bounds")
+    return bin_chunk[offset : offset + length]
+
+
+def _resize_image(img_bytes: bytes, texture_size: int, target_mode: str) -> Image.Image:
+    # Convert mode before LANCZOS resizing so palette ('P') images interpolate grayscale values cleanly.
+    with Image.open(io.BytesIO(img_bytes)) as opened:
+        converted = opened.convert(target_mode)
+        return converted.resize((texture_size, texture_size), Image.Resampling.LANCZOS)
+
+
+def _encode_png(image: Image.Image) -> bytes:
+    buf = io.BytesIO()
+    image.save(buf, format="PNG", optimize=True)
+    return buf.getvalue()
+
+
+def _convert_spec_gloss_to_mr_png(
+    spec_gloss_img: Image.Image,
+    gloss_factor: float,
+    specular_factor: Sequence[float],
+) -> bytes:
+    arr = np.asarray(spec_gloss_img, dtype=np.float32)
+    spec_scale = np.asarray(specular_factor, dtype=np.float32)
+    if spec_scale.shape != (3,):
+        spec_scale = np.ones(3, dtype=np.float32)
+
+    spec_rgb = arr[..., :3] * spec_scale
+    alpha = arr[..., 3]
+    spec_lin = np.power(np.clip(spec_rgb.mean(axis=2) / 255.0, 0.0, 1.0), 2.2)
+
+    r_chan = np.full(alpha.shape, 255, dtype=np.uint8)
+    g_chan = np.clip(255.0 - np.round(alpha * gloss_factor), 45, 238).astype(np.uint8)
+    b_chan = np.clip(np.round(((spec_lin - 0.08) / 0.28) * 255.0), 0, 220).astype(np.uint8)
+
+    mr_rgb = np.stack((r_chan, g_chan, b_chan), axis=-1)
+    return _encode_png(Image.fromarray(mr_rgb, mode="RGB"))
+
+
+def _resolve_material_textures(gltf: dict[str, Any], material: dict[str, Any]) -> tuple[int, int, int, int]:
+    textures = gltf.get("textures")
+    if not isinstance(textures, list):
+        raise ValueError("glTF must contain textures")
+
+    pbr_spec = material.get("extensions", {}).get(_SPEC_GLOSS_EXT)
+    if not isinstance(pbr_spec, dict):
+        raise ValueError(f"Material missing {_SPEC_GLOSS_EXT} extension")
+
+    try:
+        diffuse_tex_idx = int(pbr_spec["diffuseTexture"]["index"])
+        spec_tex_idx = int(pbr_spec["specularGlossinessTexture"]["index"])
+        normal_tex_idx = int(material["normalTexture"]["index"])
+        occ_tex_idx = int(material["occlusionTexture"]["index"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("Source material missing required PBR/normal/occlusion textures") from exc
+
+    for tex_idx in (diffuse_tex_idx, spec_tex_idx, normal_tex_idx, occ_tex_idx):
+        if tex_idx < 0 or tex_idx >= len(textures) or not isinstance(textures[tex_idx].get("source"), int):
+            raise ValueError(f"Invalid texture[{tex_idx}] source reference")
+
+    return diffuse_tex_idx, spec_tex_idx, normal_tex_idx, occ_tex_idx
+
+
+def _rebuild_bin_and_views(
+    gltf: dict[str, Any],
+    orig_bin: bytes,
+    converted_png_by_bv: dict[int, bytes],
+) -> bytes:
+    new_bin = bytearray()
+    for bv_idx, bv in enumerate(gltf["bufferViews"]):
+        pad = (-len(new_bin)) % 4
+        if pad:
+            new_bin.extend(b"\x00" * pad)
+
+        new_offset = len(new_bin)
+        if bv_idx in converted_png_by_bv:
+            payload = converted_png_by_bv[bv_idx]
+        else:
+            orig_off = int(bv.get("byteOffset", 0))
+            orig_len = int(bv["byteLength"])
+            if orig_off < 0 or orig_off + orig_len > len(orig_bin):
+                raise ValueError(f"bufferView[{bv_idx}] slice exceeds BIN chunk")
+            payload = orig_bin[orig_off : orig_off + orig_len]
+
+        new_bin.extend(payload)
+        bv["buffer"] = 0
+        bv["byteOffset"] = new_offset
+        bv["byteLength"] = len(payload)
+
+    trailing_pad = (-len(new_bin)) % 4
+    if trailing_pad:
+        new_bin.extend(b"\x00" * trailing_pad)
+
+    gltf["buffers"] = [{"byteLength": len(new_bin)}]
+    return bytes(new_bin)
+
+
+def _upgrade_material_and_extensions(
+    gltf: dict[str, Any],
+    material: dict[str, Any],
+    diffuse_tex_idx: int,
+    mr_tex_idx: int,
+    normal_tex_idx: int,
+    occ_tex_idx: int,
+) -> None:
+    for ext_key in ("extensionsUsed", "extensionsRequired"):
+        ext_list = gltf.get(ext_key)
+        if isinstance(ext_list, list):
+            filtered = [name for name in ext_list if name != _SPEC_GLOSS_EXT]
+            if filtered:
+                gltf[ext_key] = filtered
+            else:
+                del gltf[ext_key]
+
+    mat_exts = material.get("extensions")
+    if isinstance(mat_exts, dict):
+        mat_exts.pop(_SPEC_GLOSS_EXT, None)
+        if not mat_exts:
+            del material["extensions"]
+
+    material["pbrMetallicRoughness"] = {
+        "baseColorFactor": [1.0, 1.0, 1.0, 1.0],
+        "baseColorTexture": {"index": diffuse_tex_idx},
+        "metallicFactor": 1.0,
+        "roughnessFactor": 1.0,
+        "metallicRoughnessTexture": {"index": mr_tex_idx},
+    }
+
+    orig_normal = material.get("normalTexture", {})
+    material["normalTexture"] = {"index": normal_tex_idx}
+    if "scale" in orig_normal:
+        material["normalTexture"]["scale"] = orig_normal["scale"]
+
+    orig_occ = material.get("occlusionTexture", {})
+    material["occlusionTexture"] = {
+        "index": occ_tex_idx,
+        "strength": float(orig_occ.get("strength", 0.41)),
+    }
+
+    material["extras"] = {
+        "pbrPhysical": {
+            "clearcoat": 0.16,
+            "clearcoatRoughness": 0.36,
+            "sheenColor": 0x8A9280,
+            "sheenRoughness": 0.72,
+        }
     }
 
 
-def _append_finger_meshes(
-    root_mat: np.ndarray,
-    lengths: Sequence[float],
-    radius: float,
-    curl_angles: Sequence[float],
-    glove_parts: list[MeshData],
-    skin_parts: list[MeshData],
-    nail_parts: list[MeshData],
-) -> None:
-    """Build articulated multi-segment fingerless glove digit transformed by ``root_mat``."""
-    cur_mat = root_mat.copy()
-    n_seg = len(lengths)
+def _wrap_arms_root(gltf: dict[str, Any]) -> None:
+    scenes = gltf.get("scenes")
+    nodes = gltf.get("nodes")
+    if not isinstance(scenes, list) or not scenes or not isinstance(nodes, list):
+        raise ValueError("glTF must contain non-empty scenes and nodes")
 
-    for idx, seg_len in enumerate(lengths):
-        curl = curl_angles[idx] if idx < len(curl_angles) else 0.0
-        cur_mat = cur_mat @ _make_mat4((0.0, 0.0, 0.0), (curl, 0.0, 0.0))
+    scene_idx = int(gltf.get("scene", 0))
+    if scene_idx < 0 or scene_idx >= len(scenes):
+        raise ValueError("Invalid default scene index")
 
-        is_gloved = idx < n_seg - 1
-        r_top = radius * (1.0 - idx * 0.12)
-        r_bot = radius * (1.0 - (idx + 1) * 0.12)
-        cap = create_capsule(r_top, r_bot, seg_len, cap_segments=5, radial_segments=12)
-        seg_mat = cur_mat @ _make_mat4((0.0, -seg_len * 0.5, 0.0))
-        seg_mesh = _transform_mesh_mat4(cap, seg_mat)
-        (glove_parts if is_gloved else skin_parts).append(seg_mesh)
+    orig_roots = list(scenes[scene_idx].get("nodes", []))
+    if not orig_roots:
+        raise ValueError("Source scene has no root nodes")
 
-        # Stitched cuff ring at the fingerless cut line
-        if idx == n_seg - 2:
-            cuff = create_torus(r_bot * 1.05, 0.0014, radial_segments=8, tubular_segments=16)
-            cuff_mat = cur_mat @ _make_mat4((0.0, -seg_len, 0.0), (math.pi * 0.5, 0.0, 0.0))
-            glove_parts.append(_transform_mesh_mat4(cuff, cuff_mat))
-
-        # Subtle fingernail on exposed fingertip
-        if idx == n_seg - 1:
-            nail_geo = transform_mesh(create_box(r_bot * 1.15, seg_len * 0.52, 0.0022), (0.0, -seg_len * 0.72, r_bot * 0.85))
-            nail_parts.append(_transform_mesh_mat4(nail_geo, cur_mat))
-
-        cur_mat = cur_mat @ _make_mat4((0.0, -seg_len, 0.0))
-
-
-def _build_left_hand_node(mats: dict[str, GLBMaterial]) -> GLBNode:
-    glove_parts: list[MeshData] = []
-    skin_parts: list[MeshData] = []
-    nail_parts: list[MeshData] = []
-
-    # Palm + wrist cuff + carbon knuckle guard
-    glove_parts.append(create_beveled_box(0.072, 0.078, 0.026, bevel=0.006))
-    glove_parts.append(transform_mesh(create_beveled_box(0.064, 0.018, 0.028, bevel=0.004), (0.0, 0.040, 0.0)))
-    knuckle = transform_mesh(create_beveled_box(0.068, 0.016, 0.012, bevel=0.003), (0.0, -0.025, 0.014))
-
-    # Four fingers wrapping from beneath handguard up along the right side
-    for x_off in (-0.026, -0.009, 0.008, 0.025):
-        _append_finger_meshes(
-            _make_mat4((x_off, -0.036, 0.0)),
-            lengths=(0.028, 0.022, 0.018),
-            radius=0.0085,
-            curl_angles=(0.78, 0.88, 0.62),
-            glove_parts=glove_parts,
-            skin_parts=skin_parts,
-            nail_parts=nail_parts,
-        )
-
-    # C-clamp left thumb resting forward/inward along the upper-left handguard rail
-    thumb_mat = _make_mat4((-0.032, -0.018, 0.008), (-0.1228, -0.2075, 0.1916))
-    _append_finger_meshes(
-        thumb_mat,
-        lengths=(0.025, 0.020),
-        radius=0.0092,
-        curl_angles=(0.18, 0.26),
-        glove_parts=glove_parts,
-        skin_parts=skin_parts,
-        nail_parts=nail_parts,
+    arms_root_idx = len(nodes)
+    nodes.append(
+        {
+            "name": "arms_root",
+            "scale": [0.01, 0.01, 0.01],
+            "rotation": [0.0, 1.0, 0.0, 0.0],
+            "children": orig_roots,
+            "extras": dict(FPS_ARMS_METADATA),
+        }
     )
+    scenes[scene_idx]["nodes"] = [arms_root_idx]
 
-    return GLBNode(
-        name="left_hand_group",
-        translation=_LEFT_GRIP_POS,
-        rotation_xyz=_LEFT_GRIP_ROT,
-        children=[
-            GLBNode(name="left_hand_glove", mesh=merge_meshes(glove_parts), material=mats["glove"]),
-            GLBNode(name="left_hand_knuckle", mesh=knuckle, material=mats["knuckle"]),
-            GLBNode(name="left_hand_skin", mesh=merge_meshes(skin_parts), material=mats["skin"]),
-            GLBNode(name="left_hand_nails", mesh=merge_meshes(nail_parts), material=mats["nail"]),
-            GLBNode(name="left_wrist_anchor", translation=(0.0, 0.042, 0.0)),
-        ],
+
+def _pack_glb(gltf: dict[str, Any], bin_bytes: bytes) -> bytes:
+    json_raw = json.dumps(gltf, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    json_pad = (-len(json_raw)) % 4
+    json_bytes = json_raw + (b" " * json_pad)
+
+    bin_pad = (-len(bin_bytes)) % 4
+    padded_bin = bin_bytes + (b"\x00" * bin_pad)
+
+    total_length = 12 + 8 + len(json_bytes) + 8 + len(padded_bin)
+    header = struct.pack("<III", _GLB_MAGIC, 2, total_length)
+    json_hdr = struct.pack("<II", len(json_bytes), _CHUNK_JSON)
+    bin_hdr = struct.pack("<II", len(padded_bin), _CHUNK_BIN)
+    return header + json_hdr + json_bytes + bin_hdr + padded_bin
+
+
+def build_fps_arms_glb(texture_size: int = 512, source_path: Path | None = None) -> bytes:
+    """Load root fps_arms.glb, convert Specular-Glossiness textures to standard PBR, and normalize root scale/facing."""
+    _validate_texture_size(texture_size)
+    glb_path = _DEFAULT_SOURCE_GLB if source_path is None else Path(source_path)
+    if not glb_path.is_file():
+        raise FileNotFoundError(f"Source fps_arms GLB not found: {glb_path}")
+
+    gltf, orig_bin = _parse_glb(glb_path.read_bytes())
+
+    materials = gltf.get("materials")
+    if not isinstance(materials, list) or not materials:
+        raise ValueError("Source GLB must contain at least one material")
+    material = materials[0]
+
+    diffuse_tex_idx, spec_tex_idx, normal_tex_idx, occ_tex_idx = _resolve_material_textures(gltf, material)
+    textures = gltf["textures"]
+    diffuse_img_idx = int(textures[diffuse_tex_idx]["source"])
+    spec_img_idx = int(textures[spec_tex_idx]["source"])
+    normal_img_idx = int(textures[normal_tex_idx]["source"])
+    occ_img_idx = int(textures[occ_tex_idx]["source"])
+
+    pbr_spec = material["extensions"][_SPEC_GLOSS_EXT]
+    gloss_factor = float(pbr_spec.get("glossinessFactor", 1.0))
+    specular_factor = pbr_spec.get("specularFactor", [1.0, 1.0, 1.0])
+
+    diffuse_png = _encode_png(_resize_image(_extract_image_bytes(gltf, orig_bin, diffuse_img_idx), texture_size, "RGB"))
+    spec_gloss_img = _resize_image(_extract_image_bytes(gltf, orig_bin, spec_img_idx), texture_size, "RGBA")
+    mr_png = _convert_spec_gloss_to_mr_png(spec_gloss_img, gloss_factor, specular_factor)
+    normal_png = _encode_png(_resize_image(_extract_image_bytes(gltf, orig_bin, normal_img_idx), texture_size, "RGB"))
+    occ_png = _encode_png(_resize_image(_extract_image_bytes(gltf, orig_bin, occ_img_idx), texture_size, "L"))
+
+    images = gltf["images"]
+    converted_png_by_bv = {
+        int(images[diffuse_img_idx]["bufferView"]): diffuse_png,
+        int(images[spec_img_idx]["bufferView"]): mr_png,
+        int(images[normal_img_idx]["bufferView"]): normal_png,
+        int(images[occ_img_idx]["bufferView"]): occ_png,
+    }
+    for img_idx in (diffuse_img_idx, spec_img_idx, normal_img_idx, occ_img_idx):
+        images[img_idx]["mimeType"] = "image/png"
+
+    spec_bv = gltf["bufferViews"][int(images[spec_img_idx]["bufferView"])]
+    spec_bv["name"] = "material_metallicRoughness.png"
+
+    new_bin = _rebuild_bin_and_views(gltf, orig_bin, converted_png_by_bv)
+    _upgrade_material_and_extensions(
+        gltf,
+        material,
+        diffuse_tex_idx=diffuse_tex_idx,
+        mr_tex_idx=spec_tex_idx,
+        normal_tex_idx=normal_tex_idx,
+        occ_tex_idx=occ_tex_idx,
     )
-
-
-def _build_right_hand_node(mats: dict[str, GLBMaterial]) -> GLBNode:
-    glove_parts: list[MeshData] = []
-    skin_parts: list[MeshData] = []
-    nail_parts: list[MeshData] = []
-
-    # Palm + wrist glove cuff + knuckle protector
-    glove_parts.append(transform_mesh(create_beveled_box(0.040, 0.080, 0.072, bevel=0.007), (0.014, 0.0, 0.0)))
-    glove_parts.append(transform_mesh(create_beveled_box(0.042, 0.068, 0.022, bevel=0.005), (0.012, -0.010, 0.038)))
-    knuckle = transform_mesh(create_beveled_box(0.012, 0.074, 0.018, bevel=0.003), (0.035, 0.0, -0.024))
-
-    # Middle, ring, and pinky fingers gripping firmly around pistol grip
-    for y_off in (0.008, -0.011, -0.029):
-        _append_finger_meshes(
-            _make_mat4((0.015, y_off, -0.030), (0.0, 0.0, math.pi * 0.5 + 0.14)),
-            lengths=(0.025, 0.019, 0.015),
-            radius=0.0082,
-            curl_angles=(1.28, 1.38, 1.02),
-            glove_parts=glove_parts,
-            skin_parts=skin_parts,
-            nail_parts=nail_parts,
-        )
-
-    # Right thumb wrapping around left-back neck of pistol grip
-    _append_finger_meshes(
-        _make_mat4((-0.012, 0.022, -0.014), (-0.50, 0.0, -1.10)),
-        lengths=(0.026, 0.020),
-        radius=0.0095,
-        curl_angles=(0.60, 0.72),
-        glove_parts=glove_parts,
-        skin_parts=skin_parts,
-        nail_parts=nail_parts,
-    )
-
-    # Trigger index finger kept as an animated child node so shooting bends it onto the trigger!
-    idx_glove: list[MeshData] = []
-    idx_skin: list[MeshData] = []
-    idx_nail: list[MeshData] = []
-    _append_finger_meshes(
-        np.eye(4, dtype=np.float64),
-        lengths=(0.030, 0.022, 0.016),
-        radius=0.0082,
-        curl_angles=(0.14, 0.24, 0.20),
-        glove_parts=idx_glove,
-        skin_parts=idx_skin,
-        nail_parts=idx_nail,
-    )
-
-    index_node = GLBNode(
-        name="right_index_joint_0",
-        translation=(0.017, 0.027, -0.032),
-        rotation_xyz=(-math.pi * 0.5 + 0.10, 0.0, 0.22),
-        children=[
-            GLBNode(name="right_index_glove", mesh=merge_meshes(idx_glove), material=mats["glove"]),
-            GLBNode(name="right_index_skin", mesh=merge_meshes(idx_skin), material=mats["skin"]),
-            GLBNode(name="right_index_nail", mesh=merge_meshes(idx_nail), material=mats["nail"]),
-        ],
-    )
-
-    return GLBNode(
-        name="right_hand_group",
-        translation=_RIGHT_GRIP_POS,
-        rotation_xyz=_RIGHT_GRIP_ROT,
-        children=[
-            GLBNode(name="right_hand_glove", mesh=merge_meshes(glove_parts), material=mats["glove"]),
-            GLBNode(name="right_hand_knuckle", mesh=knuckle, material=mats["knuckle"]),
-            GLBNode(name="right_hand_skin", mesh=merge_meshes(skin_parts), material=mats["skin"]),
-            GLBNode(name="right_hand_nails", mesh=merge_meshes(nail_parts), material=mats["nail"]),
-            GLBNode(name="right_wrist_anchor", translation=(0.008, -0.036, 0.024)),
-            index_node,
-        ],
-    )
-
-
-def _build_arm_rig_node(
-    name: str,
-    elbow_pos: tuple[float, float, float],
-    mats: dict[str, GLBMaterial],
-    with_watch: bool,
-    curve_bow_x: float,
-) -> GLBNode:
-    """Build unit-length (Y=0..1) muscular forearm spline rig + rolled camo cuff (+ optional watch)."""
-    # Slight anatomical bow along X/Z normalized along Y in [0, 1] so aimForearm() aims & scales cleanly
-    ctrl = [
-        (0.0, 0.0, 0.0),
-        (curve_bow_x, 0.34, 0.018),
-        (curve_bow_x * 0.45, 0.72, 0.008),
-        (0.0, 1.0, 0.0),
-    ]
-    forearm_mesh = create_tube_along_curve(
-        ctrl,
-        radius=0.042,
-        tubular_segments=28,
-        radial_segments=20,
-        taper_fn=lambda t: 1.24 - t * 0.48,
-        flatten_xy=(0.92, 1.08),
-        uv_scale=2.2,
-    )
-
-    # Rolled camo sleeve hugging forearm bicep cleanly (oval cross-section matching forearm curve)
-    sleeve_parts = [
-        transform_mesh(create_torus(0.049, 0.009, radial_segments=12, tubular_segments=24), (curve_bow_x * 0.28, 0.088, 0.005), (math.pi * 0.5, 0.0, 0.0), (0.94, 1.09, 1.0)),
-        transform_mesh(create_torus(0.050, 0.0085, radial_segments=12, tubular_segments=24), (curve_bow_x * 0.22, 0.072, 0.004), (math.pi * 0.5, 0.0, 0.0), (0.94, 1.09, 1.0)),
-        transform_mesh(create_cylinder(0.050, 0.052, 0.088, radial_segments=20, open_ended=False), (curve_bow_x * 0.14, 0.044, 0.002), (0.0, 0.0, 0.0), (0.94, 1.0, 1.09)),
-    ]
-
-    children = [
-        GLBNode(name=f"{name}_forearm", mesh=forearm_mesh, material=mats["skin"]),
-        GLBNode(name=f"{name}_sleeve", mesh=merge_meshes(sleeve_parts), material=mats["camo"]),
-    ]
-
-    if with_watch:
-        # Tactical watch band hugs the anatomical wrist radius (~0.033m, matching forearm flatten_xy 0.92 x 1.08)
-        rx, rz = 0.0315, 0.036
-        th = -0.52
-        sx, sz = rx * math.sin(th), rz * math.cos(th)
-        strap_mesh = transform_mesh(
-            create_cylinder(0.0338, 0.0342, 0.019, radial_segments=24, open_ended=True),
-            (0.0, 0.0, 0.0),
-            (0.0, 0.0, 0.0),
-            (0.94, 1.0, 1.07),
-        )
-        case_parts = [
-            transform_mesh(create_cylinder(0.0195, 0.0195, 0.0095, 24), (0.0, 0.0, 0.004), (math.pi * 0.5, 0.0, 0.0)),
-            transform_mesh(create_torus(0.0185, 0.0026, 8, 24), (0.0, 0.0, 0.0085)),
-            transform_mesh(create_cylinder(0.0024, 0.0024, 0.005, 10), (0.021, 0.0, 0.004), (0.0, 0.0, math.pi * 0.5)),
-        ]
-        dial_mesh = transform_mesh(create_circle(0.0165, 24), (0.0, 0.0, 0.0092))
-
-        watch_node = GLBNode(
-            name="left_watch",
-            translation=(0.0, 0.52, 0.0),
-            children=[
-                GLBNode(name="watch_strap", mesh=strap_mesh, material=mats["watch_strap"]),
-                GLBNode(
-                    name="watch_head",
-                    translation=(sx, 0.0, sz),
-                    rotation_xyz=(0.0, th, 0.0),
-                    children=[
-                        GLBNode(name="watch_case", mesh=merge_meshes(case_parts), material=mats["watch_case"]),
-                        GLBNode(name="watch_dial", mesh=dial_mesh, material=mats["watch_dial"]),
-                    ],
-                ),
-            ],
-        )
-        children.append(watch_node)
-
-    return GLBNode(
-        name=name,
-        translation=elbow_pos,
-        children=children,
-    )
-
-
-def build_fps_arms_nodes(skin_size: int = 512, glove_size: int = 256, seed: int = 42) -> list[GLBNode]:
-    """Assemble the complete rigged PBR FPS arms scene graph."""
-    mats = _create_materials(skin_size=skin_size, glove_size=glove_size, seed=seed)
-
-    children = [
-        _build_left_hand_node(mats),
-        _build_right_hand_node(mats),
-        _build_arm_rig_node("left_arm_rig", _LEFT_ELBOW, mats, with_watch=True, curve_bow_x=-0.018),
-        _build_arm_rig_node("right_arm_rig", _RIGHT_ELBOW, mats, with_watch=False, curve_bow_x=0.014),
-    ]
-    return [
-        GLBNode(
-            name="arms_root",
-            children=children,
-            extras=dict(FPS_ARMS_METADATA),
-        )
-    ]
+    _wrap_arms_root(gltf)
+    return _pack_glb(gltf, new_bin)

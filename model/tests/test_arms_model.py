@@ -83,22 +83,20 @@ class TestArmsPrimitivesAndTextures(unittest.TestCase):
 
 
 class TestFPSArmsBuildPipeline(unittest.TestCase):
-    def test_build_all_generates_rigged_fps_arms_glb_and_bundle(self) -> None:
+    def test_build_all_converts_skinned_fps_arms_to_standard_pbr_and_bundle(self) -> None:
         # Arrange
         required_nodes = {
             "arms_root",
-            "left_hand_group",
-            "left_wrist_anchor",
-            "right_hand_group",
-            "right_wrist_anchor",
-            "right_index_joint_0",
-            "left_arm_rig",
-            "left_arm_rig_forearm",
-            "left_arm_rig_sleeve",
-            "left_watch",
-            "watch_dial",
-            "right_arm_rig",
-            "right_arm_rig_forearm",
+            "_rootJoint",
+            "L_arm_01",
+            "L_elbow_02",
+            "L_wrist_03",
+            "R_arm_023",
+            "R_elbow_024",
+            "R_wrist_025",
+            "R_point1_030",
+            "R_point2_031",
+            "R_point3_032",
         }
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -110,25 +108,91 @@ class TestFPSArmsBuildPipeline(unittest.TestCase):
             glb_bytes = arms_art.glb_path.read_bytes()
             bundle_text = arms_art.bundle_path.read_text(encoding="utf-8")
 
-            # Assert GLB validity & required rig nodes
+            # Assert GLB binary structure, standard PBR conversion, and meter/-Z root transform
             stats = inspect_glb_stats(glb_bytes)
-            self.assertGreater(stats["triangles"], 4000)
+            self.assertGreater(stats["vertices"], 3000)
             json_len, _ = struct.unpack_from("<II", glb_bytes, 12)
             gltf = json.loads(glb_bytes[20 : 20 + json_len].decode("utf-8"))
 
             for bv in gltf["bufferViews"]:
                 self.assertEqual(bv["byteOffset"] % 4, 0)
 
+            self.assertNotIn("KHR_materials_pbrSpecularGlossiness", gltf.get("extensionsUsed", []))
+            self.assertNotIn("KHR_materials_pbrSpecularGlossiness", gltf.get("extensionsRequired", []))
+
+            self.assertEqual(len(gltf["skins"]), 1)
+            self.assertEqual(len(gltf["skins"][0]["joints"]), 47)
+
+            prim = gltf["meshes"][0]["primitives"][0]
+            self.assertIn("JOINTS_0", prim["attributes"])
+            self.assertIn("WEIGHTS_0", prim["attributes"])
+
+            mat = gltf["materials"][0]
+            self.assertNotIn("KHR_materials_pbrSpecularGlossiness", mat.get("extensions", {}))
+            self.assertIn("pbrMetallicRoughness", mat)
+            self.assertIn("baseColorTexture", mat["pbrMetallicRoughness"])
+            self.assertIn("metallicRoughnessTexture", mat["pbrMetallicRoughness"])
+            self.assertIn("normalTexture", mat)
+            self.assertIn("occlusionTexture", mat)
+            self.assertAlmostEqual(mat["occlusionTexture"]["strength"], 0.41, places=2)
+            self.assertEqual(mat["extras"]["pbrPhysical"]["sheenColor"], 0x8A9280)
+            self.assertAlmostEqual(mat["extras"]["pbrPhysical"]["clearcoat"], 0.16)
+
             node_names = {n["name"] for n in gltf["nodes"]}
             self.assertTrue(required_nodes.issubset(node_names))
 
-            skin_mat = next(m for m in gltf["materials"] if m["name"] == "Arms_WetSkin")
-            self.assertAlmostEqual(skin_mat["extras"]["pbrPhysical"]["clearcoat"], 0.45)
-            self.assertIn("sheenColor", skin_mat["extras"]["pbrPhysical"])
+            root_node = next(n for n in gltf["nodes"] if n["name"] == "arms_root")
+            self.assertEqual(root_node["scale"], [0.01, 0.01, 0.01])
+            self.assertEqual(root_node["rotation"], [0.0, 1.0, 0.0, 0.0])
+            self.assertEqual(root_node["extras"]["rigType"], "skinned")
+            self.assertAlmostEqual(root_node["extras"]["upperLen"], 0.2587, places=4)
+            self.assertAlmostEqual(root_node["extras"]["forearmLen"], 0.2543, places=4)
+            self.assertEqual(root_node["extras"]["bones"]["leftArm"], "L_arm_01")
+            self.assertEqual(
+                root_node["extras"]["bones"]["rightIndex"],
+                ["R_point1_030", "R_point2_031", "R_point3_032"],
+            )
+
+            # Assert downscaled image dimensions and converted modes
+            bin_off = 20 + json_len + 8
+            for idx, img_meta in enumerate(gltf["images"]):
+                bv = gltf["bufferViews"][img_meta["bufferView"]]
+                raw = glb_bytes[bin_off + bv["byteOffset"] : bin_off + bv["byteOffset"] + bv["byteLength"]]
+                img = Image.open(io.BytesIO(raw))
+                self.assertEqual(img.size, (128, 128))
+                if idx == 1:
+                    self.assertEqual(img.mode, "RGB")
+                if idx == 3:
+                    self.assertEqual(img.mode, "L")
 
             match = re.search(r'FPS_MODELS\["fps_arms"\]\s*=\s*"([^"]+)"', bundle_text)
             self.assertIsNotNone(match)
             self.assertEqual(base64.b64decode(match.group(1)), glb_bytes)
+
+    def test_build_fps_arms_glb_rejects_invalid_inputs(self) -> None:
+        # Arrange
+        from model.characters import build_fps_arms_glb
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            bad_glb = Path(tmpdir) / "corrupt.glb"
+            bad_glb.write_bytes(b"NOT_A_GLB_FILE_00000000")
+            short_glb = Path(tmpdir) / "short.glb"
+            short_glb.write_bytes(b"glTF")
+            missing_glb = Path(tmpdir) / "missing.glb"
+
+            # Act / Assert (Unhappy Paths)
+            with self.assertRaises(ValueError):
+                build_fps_arms_glb(texture_size=100)
+            with self.assertRaises(ValueError):
+                build_fps_arms_glb(texture_size=32)
+            with self.assertRaises(ValueError):
+                build_fps_arms_glb(texture_size=4096)
+            with self.assertRaises(FileNotFoundError):
+                build_fps_arms_glb(texture_size=128, source_path=missing_glb)
+            with self.assertRaises(ValueError):
+                build_fps_arms_glb(texture_size=128, source_path=bad_glb)
+            with self.assertRaises(ValueError):
+                build_fps_arms_glb(texture_size=128, source_path=short_glb)
 
 
 if __name__ == "__main__":
