@@ -20,7 +20,8 @@ Trò chơi bắn súng góc nhìn thứ nhất (FPS) trên nền WebGL sử dụ
 │   │   ├── TDM.js          # Đấu Đội (▲ Đặc Nhiệm #2F80FF vs ● Nổi Loạn #FF4D2E): khóa lệch >=2, cấm bắn đồng đội
 │   │   └── FFA.js          # Đấu Đơn (màu trung tính #8A8F98): xếp theo killLimit/hết giờ, spawn khuất LoS
 │   └── tests/
-│       └── test_lan_v2.js  # Bộ kiểm thử Node.js (5 suite, gồm 6 edge case + reload/switch/TOL/posture hitbox)
+│       ├── test_lan_v2.js  # Bộ kiểm thử Node.js (5 test, gồm 6 edge case + reload/switch/TOL/posture hitbox)
+│       └── test_arm_rig.mjs # Unit test AAA cho IK 2 xương & controller tay SkinnedMesh (3 test)
 ├── public/                 # Giao diện & Engine phía Client (ES Modules)
 │   ├── FPS.html            # HUD vô hạn đạn, vòng tiến độ nạp, Radar, ống ngắm Sniper & Modal Cài đặt
 │   └── js/
@@ -29,19 +30,21 @@ Trò chơi bắn súng góc nhìn thứ nhất (FPS) trên nền WebGL sử dụ
 │       ├── room.js         # Phòng chờ 2 cột TDM / FFA, Sẵn sàng, Đổi phe, Kick, Chat & Cài đặt Host
 │       ├── settings.js     # Lưu cấu hình chuột, FOV, Hold/Toggle, gán lại phím BIND qua localStorage
 │       ├── input.js        # Input 3 lớp dùng e.code, Alt+Tab reset(), chặn cuộn trang & click khóa chuột đầu
-│       └── game.js         # Engine Three.js r128: vật lý 60Hz, M416/Pistol/Sniper, TeamColor & Radar
+│       ├── arm_rig.js      # Bộ giải IK 2 xương giải tích, SKINNED_ARM_POSES (M416/Pistol/Sniper) & gập ngón bóp cò
+│       └── game.js         # Engine Three.js r128: vật lý 60Hz, M416/Pistol/Sniper, tay SkinnedMesh, TeamColor & Radar
 ├── FPS.html                # Trang chuyển hướng trỏ về public/FPS.html
 ├── GEMINI.md               # Quy chuẩn kỹ thuật và quy trình làm việc của dự án
 ├── README.md               # Tài liệu hướng dẫn dự án
 ├── agents/
 │   └── context.md          # Bộ nhớ ngữ cảnh và nhật ký bàn giao của các vai trò AI
-└── model/                  # Bộ dựng model 3D PBR bằng Python thuần + NumPy + Pillow
+└── model/                  # Bộ dựng & chuyển đổi model 3D PBR bằng Python thuần + NumPy + Pillow
     ├── build.py            # CLI build ra .glb và .bundle.js
+    ├── assets/             # Asset nguồn theo dõi trong Git (fps_arms.glb SkinnedMesh 47 xương)
     ├── core/               # Lõi hình học, texture PBR & glTF 2.0 exporter
-    ├── weapons/            # Mô tả hình học từng vũ khí (m416.py)
-    ├── characters/         # Mô tả hình học & rig tay FPP (fps_arms.py) và chiến binh (soldier.py - TeamColor)
-    ├── tests/              # Unit test AAA kiểm tra geometry, textures và chuẩn binary .glb (16 test cases)
-    └── dist/               # Asset đã build (m416, fps_arms, soldier ở dạng .glb và .bundle.js)
+    ├── weapons/            # Mô tả hình học từng vũ khí (m416.py, pistol.py)
+    ├── characters/         # Chuyển đổi tay FPP (fps_arms.py -> pbrMetallicRoughness) & dựng chiến binh (soldier.py - TeamColor)
+    ├── tests/              # Unit test AAA kiểm tra geometry, textures, chuyển đổi PBR & chuẩn binary .glb (23 test cases)
+    └── dist/               # Asset đã build (m416, pistol, fps_arms, soldier ở dạng .glb và .bundle.js)
 ```
 
 ## Yêu cầu & Cấu hình môi trường
@@ -59,7 +62,7 @@ Trò chơi bắn súng góc nhìn thứ nhất (FPS) trên nền WebGL sử dụ
 python3 -m model.build
 ```
 
-Lệnh trên tạo mới các cặp asset `m416`, `fps_arms` và `soldier` trong `model/dist/` (`.glb` nhị phân glTF 2.0 và `.bundle.js` Base64 nhúng). Xem chi tiết tại [model/README.md](model/README.md).
+Lệnh trên dựng/chuyển đổi và tạo mới các cặp asset `m416`, `pistol`, `fps_arms` (chuyển đổi từ nguồn `fps_arms.glb` `SkinnedMesh` 47 xương sang glTF 2.0 `pbrMetallicRoughness`, bọc `arms_root` `scale=0.01`, `rotY=π`) và `soldier` trong `model/dist/` (`.glb` nhị phân glTF 2.0 và `.bundle.js` Base64 nhúng). Xem chi tiết tại [model/README.md](model/README.md).
 
 ### Chơi PvP Mạng LAN kiểu Truy Kích & Luyện tập Drone
 
@@ -108,8 +111,13 @@ Server mặc định lắng nghe `0.0.0.0:8090` (tự động chuyển sang cổ
 
 ## Kiểm thử
 
-- **Python Unit Tests (`python3 -m unittest discover -s model/tests -v`):** **16/16 PASS** (`1.201s`) kiểm tra geometry, textures PBR và chuẩn nhị phân glTF 2.0 `.glb` + `.bundle.js` (gồm `soldier.glb` với vật liệu `TeamColor`).
-- **Node.js Server Tests (`node --test server/tests/test_lan_v2.js`):** **5/5 suite PASS** (`145.69ms`) kiểm tra LoS FFA spawn, trọn vòng đời phòng, 6 tình huống biên, HTTP static allowlist (`/js/weapons.js`, chặn traversal), nạp chiến thuật/rỗng, `TOL=80ms`, `switchWeapon` giữ mag, chặn bắn khi sprint, crouch hitbox ẩn sau vật cản thấp `1.45m` và khôi phục đúng số đạn khi reconnect bằng token.
+- **Python Unit Tests (`uv run --python 3.12 --with "numpy>=1.24.0" --with "Pillow>=9.5.0" python -m unittest discover -s model/tests -v`):** **22/23 PASS**, **1 ERROR** có sẵn từ trước ở `model/tests/test_pistol_model.py:56` (`extrude_hollow_profile` nhận `outer=` thay vì `outer_pts=`); kiểm tra geometry, textures PBR, chuyển đổi Spec-Gloss → Metallic-Roughness `fps_arms.glb` và chuẩn nhị phân glTF 2.0 `.glb` + `.bundle.js`.
+- **Node.js Server & Arm Rig Tests (`node --test server/tests/test_lan_v2.js server/tests/test_arm_rig.mjs`):** **8/8 PASS** (gồm `5` test LAN server: LoS FFA spawn, trọn vòng đời phòng, 6 tình huống biên, HTTP static allowlist `/js/weapons.js`, `/js/arm_rig.js`, `/model/dist/fps_arms.bundle.js`, chặn traversal, nạp chiến thuật/rỗng, `TOL=80ms`, `switchWeapon`, crouch hitbox; và `3` test `arm_rig`: IK 2 xương giải tích trên 18 pose M416/Glock-17/AWM, edge cases không `NaN`, biến đổi `arms_root` cm/`rotY=π`, và gập ngón bóp cò).
 - **Trình duyệt Headless (Chrome/Playwright):**
   - `verify_lan_v2_e2e.py` (**PASS**): 3-tab Lobby → Phòng chờ → Mật khẩu → Chat → Kick → Host Cài đặt → `STARTING` → `PLAYING` → Headshot → `ENDING` → `"Về phòng ngay"` → Reconnect tab → Solo Drone (`0` console/pageerror).
   - `verify_lan_v2_1_e2e.py` (**PASS**): Lưu cài đặt & gán phím `localStorage` qua reload, chuyển súng `1/2/3`, đổi súng hủy nạp giữ nguyên mag, `Alt+Tab`/`blur` không kẹt phím, `Shift+R` nạp khi chạy nhưng chặn bắn, phân biệt đội `30m` trong mưa + giả lập mù màu Chromium `protanopia`, nameplate chỉ hiện đồng đội, tư thế ngồi đồng bộ & hoạt ảnh nạp người chơi khác, Radar chấm địch khi bắn, chặn cheat `w.mag=99` trên console, khôi phục đúng `m416.mag = 26` khi reconnect giữa trận, ống ngắm AWM Sniper & tâm ngắm đổi đỏ (`0` console/pageerror).
+  - Kiểm định trực quan viewmodel Chrome headless cho `M416`, `Glock-17` và `AWM Sniper` với tay `SkinnedMesh` + IK 2 xương (`0` console/pageerror).
+
+## Ghi công (Attribution)
+
+- Model tay nhân vật FPP **"fps arms"** của tác giả **DJMaesen**, cấp phép theo **CC-BY-4.0** (<http://creativecommons.org/licenses/by/4.0/>), nguồn: <https://sketchfab.com/3d-models/fps-arms-08ec4403a47645d8ad80633abf13d39d> (đã chuyển đổi PBR & chuẩn hóa node gốc `arms_root`).
