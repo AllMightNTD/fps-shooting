@@ -1,0 +1,620 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Bến cảng mưa – Truy Kích Mạng LAN</title>
+    <link rel="icon" href="data:," />
+    <style>
+      :root {
+        --panel: rgba(11, 18, 26, 0.94);
+        --ink: #e6f1f6;
+        --sub: #96acb9;
+        --amber: #f0b429;
+        --hud: #e6f1f6;
+        --field: rgba(18, 30, 42, 0.85);
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        height: 100%; margin: 0; overflow: hidden;
+        background: #070c11;
+        font-family: "Segoe UI", system-ui, sans-serif;
+        color: var(--hud);
+        user-select: none;
+      }
+      canvas { position: fixed; inset: 0; display: block; }
+      button {
+        padding: 9px 16px; border: 0; border-radius: 3px;
+        background: var(--amber); color: #1a1405;
+        font: 700 13.5px inherit; cursor: pointer;
+      }
+      button:disabled { opacity: 0.45; cursor: not-allowed; }
+      button.sec { background: rgba(128, 150, 168, 0.24); color: var(--ink); font-weight: 600; }
+      button.btnSm { padding: 5px 11px; font-size: 12.5px; }
+      button.btnKick { padding: 3px 8px; font-size: 11.5px; background: #d64538; color: #fff; }
+      input, select {
+        padding: 7px 10px; border: 1px solid rgba(130, 155, 175, 0.45);
+        background: var(--field); color: var(--ink);
+        border-radius: 3px; font-family: inherit; font-size: 13px;
+      }
+      select option { background: #101923; color: #e6f1f6; }
+
+      /* Screen Container Overlay */
+      .screenLayer {
+        position: fixed; inset: 0; display: none;
+        place-items: center; padding: 16px;
+        background: rgba(4, 9, 14, 0.62); z-index: 20;
+      }
+      .card {
+        background: var(--panel); color: var(--ink);
+        padding: 22px 26px; width: min(760px, 95vw);
+        max-height: 92vh; overflow-y: auto;
+        border-left: 6px solid var(--amber);
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.55);
+      }
+      .topBar {
+        display: flex; justify-content: space-between; align-items: center;
+        flex-wrap: wrap; gap: 10px; margin-bottom: 12px;
+        border-bottom: 1px solid rgba(130, 155, 175, 0.22); padding-bottom: 10px;
+      }
+      .statusPill { font-size: 12.5px; font-weight: 700; color: #4ec3b0; }
+      .statusPill.warn { color: #f0b429; }
+      .statusPill.err { color: #ff6b4a; }
+      .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      .lanShare {
+        display: none; justify-content: space-between; align-items: center; gap: 8px;
+        background: rgba(78, 195, 176, 0.12); border: 1px solid rgba(78, 195, 176, 0.35);
+        padding: 7px 10px; border-radius: 3px; font-size: 12.5px; margin-bottom: 10px;
+      }
+      .errBox {
+        display: none; background: rgba(214, 69, 56, 0.16);
+        border-left: 3px solid #d64538; padding: 7px 10px;
+        font-size: 13px; color: #ff6b5b; margin: 8px 0;
+      }
+      table.cleanTable { width: 100%; border-collapse: collapse; font-size: 13px; margin: 8px 0; }
+      table.cleanTable th, table.cleanTable td {
+        padding: 7px 8px; text-align: left;
+        border-bottom: 1px solid rgba(130, 155, 175, 0.18);
+      }
+      .subPanel {
+        display: none; margin: 10px 0; padding: 12px;
+        background: rgba(128, 150, 168, 0.1); border-radius: 4px;
+      }
+
+      /* Room Columns */
+      .teamCols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 10px 0; }
+      .teamBox {
+        background: rgba(128, 150, 168, 0.08);
+        border: 1px solid rgba(130, 155, 175, 0.25);
+        padding: 10px; border-radius: 4px; min-height: 150px;
+      }
+      .teamBox h3 { margin: 0 0 8px; font-size: 14px; }
+      .rosterRow {
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 6px 8px; margin-bottom: 5px; background: rgba(128, 150, 168, 0.12);
+        border-radius: 3px; font-size: 13px;
+      }
+      .rosterActions { display: flex; gap: 6px; align-items: center; }
+      .badgeHost { font-size: 11px; padding: 2px 6px; border-radius: 3px; background: var(--amber); color: #1a1405; font-weight: 700; }
+      .badgeReady { font-size: 11px; padding: 2px 6px; border-radius: 3px; background: #2c8f73; color: #fff; font-weight: 700; }
+      .badgeWait { font-size: 11px; padding: 2px 6px; border-radius: 3px; background: rgba(128, 150, 168, 0.35); color: var(--ink); }
+      .countdownBanner {
+        display: none; text-align: center; font-size: 20px; font-weight: 800;
+        color: var(--amber); padding: 10px; margin: 8px 0;
+        background: rgba(240, 180, 41, 0.14); border-radius: 4px;
+      }
+      .chatBox {
+        margin-top: 10px; border-top: 1px solid rgba(130, 155, 175, 0.2); padding-top: 8px;
+      }
+      #roomChatLog {
+        height: 92px; overflow-y: auto; padding: 6px;
+        background: rgba(0, 0, 0, 0.16); border-radius: 3px; font-size: 12.5px; margin-bottom: 6px;
+      }
+      .chatLine { margin-bottom: 3px; line-height: 1.35; }
+
+      /* In-Game HUD */
+      #hud { position: fixed; inset: 0; pointer-events: none; font-weight: 600; display: none; z-index: 10; }
+      #top { position: absolute; left: 16px; top: 14px; font-size: 18px; text-shadow: 0 1px 4px #000; }
+      #top b { color: var(--amber); font-size: 24px; }
+      #pvpTop {
+        position: absolute; left: 50%; top: 12px; transform: translateX(-50%);
+        display: none; align-items: center; gap: 14px;
+        background: rgba(7, 13, 20, 0.72); border: 1px solid rgba(255, 255, 255, 0.16);
+        padding: 6px 16px; border-radius: 4px; font-size: 15px;
+      }
+      .scA { color: #2F80FF; font-size: 22px; font-weight: 800; }
+      .scB { color: #FF4D2E; font-size: 22px; font-weight: 800; }
+      #killfeed { position: absolute; right: 16px; top: 14px; display: flex; flex-direction: column; gap: 4px; align-items: flex-end; font-size: 13px; }
+      .kfRow { background: rgba(7, 13, 20, 0.74); padding: 4px 10px; border-radius: 3px; border-right: 3px solid var(--amber); }
+      #radarCanvas {
+        position: absolute; left: 16px; top: 14px; width: 124px; height: 124px;
+        border-radius: 50%; background: rgba(6, 12, 18, 0.74);
+        border: 2px solid rgba(180, 210, 230, 0.28); display: none;
+      }
+      #hudChatLog {
+        position: absolute; left: 16px; bottom: 84px; width: 320px;
+        display: flex; flex-direction: column; gap: 3px; font-size: 12.5px;
+        text-shadow: 0 1px 3px #000;
+      }
+      .hudChatRow { background: rgba(7, 13, 20, 0.55); padding: 3px 8px; border-radius: 3px; }
+      #hudChatInput {
+        position: fixed; left: 16px; bottom: 52px; width: 320px; display: none;
+        z-index: 25; background: rgba(8, 15, 22, 0.9); color: #fff;
+      }
+      #killAlert {
+        position: absolute; left: 50%; top: 34%; transform: translateX(-50%);
+        font-size: 20px; font-weight: 800; color: #ff4747;
+        text-shadow: 0 2px 10px rgba(0, 0, 0, 0.9); opacity: 0; transition: opacity 0.18s;
+      }
+      #respawnBanner {
+        position: absolute; left: 50%; top: 62%; transform: translateX(-50%);
+        background: rgba(9, 15, 22, 0.86); border: 1px solid rgba(255, 90, 60, 0.55);
+        padding: 10px 20px; border-radius: 4px; font-size: 16px; display: none;
+      }
+      #sniperScope {
+        position: fixed; inset: 0; display: none; pointer-events: none; z-index: 9;
+        background: radial-gradient(circle at center, transparent 22%, rgba(2, 5, 9, 0.96) 24.5%, #020408 100%);
+      }
+      #sniperScope::before, #sniperScope::after {
+        content: ""; position: absolute; background: rgba(15, 20, 24, 0.9);
+      }
+      #sniperScope::before { left: 50%; top: 24%; bottom: 24%; width: 1.5px; transform: translateX(-50%); }
+      #sniperScope::after { top: 50%; left: 32%; right: 32%; height: 1.5px; transform: translateY(-50%); }
+      #cross { position: absolute; left: 50%; top: 50%; width: 22px; height: 22px; margin: -11px 0 0 -11px; transition: opacity 0.1s, transform 0.08s; }
+      #cross::before, #cross::after { content: ""; position: absolute; background: #fff; opacity: 0.85; transition: background 0.08s; }
+      #cross.targetEnemy::before, #cross.targetEnemy::after { background: #ff3838; opacity: 1; }
+      #cross::before { left: 10px; top: 0; width: 2px; height: 22px; clip-path: polygon(0 0, 100% 0, 100% 35%, 0 35%, 0 65%, 100% 65%, 100% 100%, 0 100%); }
+      #cross::after { top: 10px; left: 0; height: 2px; width: 22px; clip-path: polygon(0 0, 35% 0, 35% 100%, 0 100%, 65% 0, 100% 0, 100% 100%, 65% 100%); }
+      #reloadRingWrap {
+        position: absolute; left: 50%; top: 50%; width: 46px; height: 46px;
+        margin: -23px 0 0 -23px; display: none; pointer-events: none;
+      }
+      #reloadHint {
+        position: absolute; left: 50%; top: calc(50% + 28px); transform: translateX(-50%);
+        font-size: 12.5px; font-weight: 700; color: #ff5b4a;
+        text-shadow: 0 1px 4px #000; display: none;
+      }
+      #hm { position: absolute; left: 50%; top: 50%; width: 30px; height: 30px; margin: -15px 0 0 -15px; border: 2px solid var(--amber); transform: rotate(45deg); opacity: 0; }
+      #dmg { position: absolute; inset: 0; box-shadow: inset 0 0 140px 30px #c0291e; opacity: 0; }
+      #bot { position: absolute; left: 16px; right: 16px; bottom: 16px; display: flex; justify-content: space-between; align-items: flex-end; }
+      #hpWrap { display: flex; flex-direction: column; gap: 5px; }
+      #postureBadge { font-size: 12px; color: #b5cbd8; text-shadow: 0 1px 3px #000; }
+      #hp { width: 220px; height: 12px; background: rgba(0, 0, 0, 0.5); border: 1px solid #ffffff55; }
+      #hpb { height: 100%; width: 100%; background: #4ec3b0; transition: width 0.15s; }
+      #ammoWrap { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+      #weaponBar { display: flex; gap: 6px; }
+      .wSlot {
+        font-size: 11.5px; padding: 3px 8px; border-radius: 3px;
+        background: rgba(7, 13, 20, 0.65); border: 1px solid rgba(255, 255, 255, 0.16); color: #9ab0be;
+      }
+      .wSlot.active { background: rgba(240, 180, 41, 0.22); border-color: var(--amber); color: #fff; font-weight: 700; }
+      #am { font-size: 32px; text-shadow: 0 1px 4px #000; }
+      #am.amLow { color: #ff4747; }
+      .bindRow {
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 4px 6px; border-bottom: 1px solid rgba(130, 155, 175, 0.14); font-size: 13px;
+      }
+      #scoreboard {
+        position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+        width: min(640px, 90vw); background: rgba(9, 16, 24, 0.92);
+        border: 1px solid rgba(240, 180, 41, 0.45); padding: 14px 18px;
+        display: none; z-index: 15; pointer-events: none; color: #eef6fa;
+      }
+      #scoreboard h2 { margin: 0 0 8px; font-size: 16px; color: var(--amber); }
+      #scoreboard th, #scoreboard td { padding: 6px 8px; text-align: left; border-bottom: 1px solid rgba(255, 255, 255, 0.08); font-size: 13px; }
+    </style>
+  </head>
+  <body>
+    <!-- HUD trong trận -->
+    <div id="hud">
+      <div id="top">Đợt <b id="wv">0</b> &nbsp; Điểm <b id="sc">0</b></div>
+      <canvas id="radarCanvas" width="124" height="124"></canvas>
+      <div id="pvpTop">
+        <span style="color:#2F80FF">▲ Đặc Nhiệm <b class="scA" id="scA">0</b></span>
+        <span id="pvpMeta">10:00 | 30 Mạng</span>
+        <span style="color:#FF4D2E"><b class="scB" id="scB">0</b> Nổi Loạn ●</span>
+      </div>
+      <div id="killfeed"></div>
+      <div id="hudChatLog"></div>
+      <div id="killAlert"></div>
+      <div id="respawnBanner"></div>
+      <div id="dmg"></div>
+      <div id="sniperScope"></div>
+      <div id="cross"></div>
+      <svg id="reloadRingWrap" viewBox="0 0 46 46">
+        <circle cx="23" cy="23" r="17" fill="none" stroke="rgba(255,255,255,0.22)" stroke-width="3"></circle>
+        <circle id="reloadArc" cx="23" cy="23" r="17" fill="none" stroke="#f0b429" stroke-width="3"
+                stroke-linecap="round" stroke-dasharray="106.81" stroke-dashoffset="106.81"
+                transform="rotate(-90 23 23)"></circle>
+      </svg>
+      <div id="reloadHint">Nạp đạn (R)</div>
+      <div id="hm"></div>
+      <div id="bot">
+        <div id="hpWrap">
+          <div id="postureBadge">Đứng</div>
+          <div id="hp"><div id="hpb"></div></div>
+        </div>
+        <div id="ammoWrap">
+          <div id="weaponBar">
+            <span id="slotPill1" class="wSlot active">[1] M416</span>
+            <span id="slotPill2" class="wSlot">[2] Glock-17</span>
+            <span id="slotPill3" class="wSlot">[3] AWM</span>
+          </div>
+          <div id="am">30 / ∞</div>
+        </div>
+      </div>
+    </div>
+    <input id="hudChatInput" maxlength="120" placeholder="Nhắn nhanh trong trận (Enter gửi, Esc đóng)..." />
+
+    <div id="scoreboard">
+      <h2 id="sbTitle">Bảng điểm</h2>
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr><th>Chiến binh</th><th>Phe</th><th>Hạ</th><th>Tử</th><th>HS</th><th>Trạng thái</th></tr></thead>
+        <tbody id="sbBody"></tbody>
+      </table>
+    </div>
+
+    <!-- Màn 1: LOBBY -->
+    <div id="screenLobby" class="screenLayer" style="display:grid">
+      <div class="card">
+        <div class="topBar">
+          <div>
+            <h1 style="margin:0;font-size:24px">Bến Cảng Mưa — Truy Kích Mạng LAN</h1>
+            <span id="netStatusBadge" class="statusPill warn">Đang kết nối máy chủ LAN...</span>
+          </div>
+          <div class="row">
+            <label style="font-size:12.5px;color:var(--sub)">Tên:</label>
+            <input id="nickInput" maxlength="16" placeholder="Tên chiến binh" style="width:150px" />
+            <button id="btnOpenSettingsLobby" type="button" class="sec btnSm">Cài đặt</button>
+          </div>
+        </div>
+
+        <div id="lanShare" class="lanShare">
+          <span id="lanShareText"></span>
+          <button id="btnCopyUrl" type="button" class="sec btnSm">Copy link</button>
+        </div>
+
+        <div id="lobbyError" class="errBox"></div>
+
+        <div class="row" style="justify-content:space-between;margin-bottom:8px">
+          <div class="row">
+            <button id="btnOpenCreate" type="button">+ Tạo phòng</button>
+            <button id="btnQuickJoin" type="button" class="sec">Vào trận nhanh</button>
+          </div>
+          <button id="btnSoloMode" type="button" class="sec">Luyện tập Offline (Drone)</button>
+        </div>
+
+        <div id="createRoomPanel" class="subPanel">
+          <div class="row" style="margin-bottom:8px">
+            <input id="createRoomName" maxlength="24" placeholder="Tên phòng" value="Cảng Mưa TDM" style="flex:1.4;min-width:140px" />
+            <select id="createMode"><option value="TDM">Đấu Đội (TDM)</option><option value="FFA">Đấu Đơn (FFA)</option></select>
+            <select id="createKills"><option value="10">10 Mạng</option><option value="20">20 Mạng</option><option value="30" selected>30 Mạng</option><option value="50">50 Mạng</option></select>
+            <select id="createTime"><option value="300">5 Phút</option><option value="600" selected>10 Phút</option></select>
+            <select id="createMaxPlayers"><option value="4">4 Người</option><option value="6">6 Người</option><option value="10" selected>10 Người</option></select>
+          </div>
+          <div class="row" style="justify-content:space-between">
+            <div class="row">
+              <input id="createPassword" maxlength="24" placeholder="Mật khẩu (tùy chọn)" style="width:170px" />
+              <label style="font-size:12.5px;display:flex;align-items:center;gap:4px">
+                <input id="createAllowSolo" type="checkbox" /> Cho phép test 1 người (Dev)
+              </label>
+            </div>
+            <button id="btnCreateSubmit" type="button">Xác nhận tạo</button>
+          </div>
+        </div>
+
+        <div id="pwModal" class="subPanel" style="gap:8px;align-items:center">
+          <span style="font-size:13px;font-weight:600">Nhập mật khẩu phòng:</span>
+          <input id="pwJoinInput" type="password" maxlength="24" placeholder="Mật khẩu" />
+          <button id="btnPwConfirm" type="button" class="btnSm">Vào</button>
+          <button id="btnPwCancel" type="button" class="sec btnSm">Hủy</button>
+        </div>
+
+        <table class="cleanTable">
+          <thead><tr><th>Tên phòng</th><th>Chế độ</th><th>Bản đồ</th><th>Sĩ số</th><th>Trạng thái</th><th></th></tr></thead>
+          <tbody id="lobbyRoomBody"></tbody>
+        </table>
+        <p id="lobbyEmpty" style="font-size:13px;color:var(--sub)">Chưa có phòng nào đang mở. Bấm <b>+ Tạo phòng</b> hoặc <b>Vào trận nhanh</b> để khởi tạo.</p>
+      </div>
+    </div>
+
+    <!-- Màn 2: PHÒNG CHỜ & CÀI ĐẶT -->
+    <div id="screenRoom" class="screenLayer">
+      <div class="card">
+        <div class="topBar">
+          <div>
+            <h2 id="roomTitle" style="margin:0;font-size:22px">Phòng chờ</h2>
+            <span id="roomMeta" style="font-size:13px;color:var(--sub)"></span>
+          </div>
+          <button id="btnRoomLeave" type="button" class="sec">Rời phòng</button>
+        </div>
+
+        <div id="roomError" class="errBox"></div>
+        <div id="roomCountdown" class="countdownBanner"></div>
+
+        <div class="row" style="padding:8px;background:rgba(128,150,168,0.1);border-radius:4px;margin-bottom:8px">
+          <select id="roomSetMode"><option value="TDM">Đấu Đội (TDM)</option><option value="FFA">Đấu Đơn (FFA)</option></select>
+          <select id="roomSetKills"><option value="1">1 Mạng</option><option value="10">10 Mạng</option><option value="20">20 Mạng</option><option value="30">30 Mạng</option><option value="50">50 Mạng</option></select>
+          <select id="roomSetTime"><option value="300">5 Phút</option><option value="600">10 Phút</option></select>
+          <select id="roomSetMax"><option value="2">2 Người</option><option value="4">4 Người</option><option value="6">6 Người</option><option value="10">10 Người</option></select>
+          <input id="roomSetPassword" maxlength="24" placeholder="Đổi mật khẩu (trống = bỏ)" style="width:155px" />
+          <label style="font-size:12px;display:flex;align-items:center;gap:4px">
+            <input id="roomSetSolo" type="checkbox" /> Test 1 người
+          </label>
+          <button id="btnSaveRoomSettings" type="button" class="sec btnSm">Lưu cài đặt</button>
+        </div>
+
+        <div id="roomTeamCols" class="teamCols">
+          <div class="teamBox"><h3 style="color:#2F80FF">▲ Phe Đặc Nhiệm (Đội A)</h3><div id="teamAList"></div></div>
+          <div class="teamBox"><h3 style="color:#FF4D2E">● Phe Nổi Loạn (Đội B)</h3><div id="teamBList"></div></div>
+        </div>
+        <div id="roomFfaCol" class="teamBox" style="display:none;margin:10px 0">
+          <h3 style="color:var(--amber)">Danh sách Đấu Đơn (FFA)</h3>
+          <div id="ffaList"></div>
+        </div>
+
+        <div class="row" style="justify-content:space-between;margin-top:10px">
+          <button id="btnRoomSwitchTeam" type="button" class="sec">Đổi phe</button>
+          <div class="row">
+            <button id="btnRoomReady" type="button">Sẵn sàng</button>
+            <button id="btnRoomStart" type="button">Bắt đầu trận</button>
+          </div>
+        </div>
+
+        <div class="chatBox">
+          <div id="roomChatLog"></div>
+          <div class="row">
+            <input id="roomChatInput" maxlength="120" placeholder="Chat với phòng..." style="flex:1" />
+            <button id="btnRoomChatSend" type="button" class="sec btnSm">Gửi</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Màn 3: TỔNG KẾT TRẬN (ENDING) -->
+    <div id="screenEnding" class="screenLayer">
+      <div class="card">
+        <h2 id="endTitle" style="margin:0 0 6px;font-size:24px;color:var(--amber)">Kết quả trận đấu</h2>
+        <p id="endAutoReturn" style="font-size:13.5px;color:var(--sub);margin:0 0 10px"></p>
+        <table class="cleanTable">
+          <thead><tr><th>#</th><th>Chiến binh</th><th>Phe</th><th>Hạ</th><th>Tử</th><th>HS</th></tr></thead>
+          <tbody id="endScoreBody"></tbody>
+        </table>
+        <div class="row" style="justify-content:flex-end;margin-top:12px">
+          <button id="btnReturnRoom" type="button">Về phòng ngay</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Màn Tạm Dừng / Mở khóa chuột Trong Trận -->
+    <div id="pauseOverlay" class="screenLayer">
+      <div class="card" style="width:min(460px,92vw)">
+        <h2 id="pauseTitle" style="margin:0 0 6px">Menu trận đấu</h2>
+        <p id="pauseSub" style="font-size:13.5px;color:var(--sub)"></p>
+        <p style="font-size:12.5px;color:var(--sub)">WASD di chuyển • C / Ctrl ngồi • Shift chạy • Space nhảy • Chuột trái bắn • Chuột phải ngắm • R nạp • 1/2/3/Q/Cuộn đổi súng • L laser • Tab bảng điểm • Enter chat</p>
+        <div class="row">
+          <button id="btnPauseResume" type="button">Tiếp tục</button>
+          <button id="btnOpenSettingsPause" type="button" class="sec">Cài đặt</button>
+          <button id="btnPauseLeave" type="button" class="sec">Rời phòng</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal Cài Đặt -->
+    <div id="settingsModal" class="screenLayer" style="z-index:35">
+      <div class="card" style="width:min(540px,94vw)">
+        <div class="topBar">
+          <h2 style="margin:0;font-size:20px">Cài đặt Điều khiển & Camera</h2>
+          <button id="btnSetClose" type="button" class="btnSm">Đóng</button>
+        </div>
+        <div style="display:grid;gap:8px;font-size:13px;margin-bottom:10px">
+          <div class="row" style="justify-content:space-between">
+            <span>Độ nhạy chuột: <b id="setSensVal">1.00</b></span>
+            <input id="setSens" type="range" min="0.2" max="3.0" step="0.05" style="width:200px" />
+          </div>
+          <div class="row" style="justify-content:space-between">
+            <span>Độ nhạy ngắm (ADS): <b id="setAdsSensVal">0.58</b></span>
+            <input id="setAdsSens" type="range" min="0.2" max="1.2" step="0.02" style="width:200px" />
+          </div>
+          <div class="row" style="justify-content:space-between">
+            <span>Góc nhìn FOV: <b id="setFovVal">75°</b></span>
+            <input id="setFov" type="range" min="65" max="95" step="1" style="width:200px" />
+          </div>
+          <div class="row" style="justify-content:space-between">
+            <label style="display:flex;align-items:center;gap:6px"><input id="setInvertY" type="checkbox" /> Đảo ngược trục dọc Y</label>
+            <div class="row">
+              <label>Ngồi: <select id="setCrouchMode"><option value="hold">Giữ (Hold)</option><option value="toggle">Bật/tắt (Toggle)</option></select></label>
+              <label>Ngắm: <select id="setAdsMode"><option value="hold">Giữ (Hold)</option><option value="toggle">Bật/tắt (Toggle)</option></select></label>
+            </div>
+          </div>
+        </div>
+        <h3 style="margin:8px 0 4px;font-size:14px">Gán phím điều khiển</h3>
+        <div id="setBindList" style="max-height:220px;overflow-y:auto;margin-bottom:10px"></div>
+        <div class="row" style="justify-content:space-between">
+          <span style="font-size:12px;color:var(--sub)">Bấm vào nút phím rồi nhấn phím mới (Esc để hủy)</span>
+          <button id="btnSetReset" type="button" class="sec btnSm">Khôi phục mặc định</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="/model/dist/m416.bundle.js"></script>
+    <script src="/model/dist/pistol.bundle.js"></script>
+    <script src="/model/dist/fps_arms.bundle.js"></script>
+    <script src="/model/dist/soldier.bundle.js"></script>
+    <script type="module">
+      import { MSG, ROOM_STATE, sanitizeText } from "/js/protocol.js";
+      import { createNetClient } from "/js/net.js";
+      import { createLobbyController } from "/js/lobby.js";
+      import { createRoomController } from "/js/room.js";
+      import { createSettingsStore, mountSettingsUI } from "/js/settings.js";
+      import { InputController } from "/js/input.js";
+      import { createGameEngine } from "/js/game.js";
+
+      const nickInput = document.getElementById("nickInput");
+      try {
+        const saved = localStorage.getItem("fpsNick");
+        nickInput.value = saved ? sanitizeText(saved, "ChienBinh", 16) : "Linh_" + ((100 + Math.random() * 899) | 0);
+      } catch {
+        nickInput.value = "Linh_" + ((100 + Math.random() * 899) | 0);
+      }
+      function getNick() {
+        const v = sanitizeText(nickInput.value, "ChienBinh", 16);
+        nickInput.value = v;
+        try { localStorage.setItem("fpsNick", v); } catch {}
+        return v;
+      }
+
+      const screenLobby = document.getElementById("screenLobby");
+      const screenRoom = document.getElementById("screenRoom");
+      const screenEnding = document.getElementById("screenEnding");
+      const statusBadge = document.getElementById("netStatusBadge");
+
+      function showScreen(name) {
+        screenLobby.style.display = name === "lobby" ? "grid" : "none";
+        screenRoom.style.display = name === "room" ? "grid" : "none";
+        screenEnding.style.display = name === "ending" ? "grid" : "none";
+      }
+
+      function showErrorBanner(msgText) {
+        const activeErr =
+          screenRoom.style.display === "grid"
+            ? document.getElementById("roomError")
+            : document.getElementById("lobbyError");
+        activeErr.textContent = msgText;
+        activeErr.style.display = "block";
+        setTimeout(() => (activeErr.style.display = "none"), 4000);
+      }
+
+      const net = createNetClient(getNick);
+      net.onStatus((st, detail) => {
+        statusBadge.textContent = detail;
+        statusBadge.className = "statusPill" + (st === "connected" ? "" : st === "offline" ? " err" : " warn");
+      });
+
+      const settings = createSettingsStore();
+      let game = null;
+      const input = new InputController({
+        settings,
+        onLockChange: (isLocked) => {
+          if (game && typeof game.onPointerLockChanged === "function") {
+            game.onPointerLockChanged(isLocked);
+          }
+        },
+        onPauseMenu: () => {
+          if (game && typeof game.onPointerUnlocked === "function") {
+            game.onPointerUnlocked();
+          }
+        },
+        onLockError: () => {
+          if (game && typeof game.onPointerLockFailed === "function") {
+            game.onPointerLockFailed();
+          }
+        },
+      });
+      const settingsUI = mountSettingsUI(settings, input);
+
+      document.getElementById("btnOpenSettingsLobby").onclick = () => settingsUI.open();
+      document.getElementById("btnOpenSettingsPause").onclick = () => settingsUI.open();
+
+      window.addEventListener("beforeunload", (e) => {
+        if (game && game.getState().engineMode === "lan" && game.getState().activeState === "play") {
+          e.preventDefault();
+          e.returnValue = "";
+        }
+      });
+
+      const lobby = createLobbyController({
+        net,
+        getNickFn: getNick,
+        onEnterSolo: () => {
+          showScreen("none");
+          game.startSolo();
+        },
+        onError: showErrorBanner,
+      });
+
+      const roomCtrl = createRoomController({
+        net,
+        onNotice: showErrorBanner,
+      });
+
+      game = createGameEngine({
+        net,
+        settings,
+        input,
+        onRequestExitToRoom: () => {
+          game.stopEngine();
+          showScreen("room");
+        },
+        onRequestExitToLobby: () => {
+          game.stopEngine();
+          if (roomCtrl.getRoom()) net.send(MSG.ROOM_LEAVE);
+          roomCtrl.clearRoom();
+          showScreen("lobby");
+        },
+      });
+
+      function handleRoomStateView(room, snapshot = null) {
+        if (!room) {
+          roomCtrl.stopEndTimer();
+          game.stopEngine();
+          showScreen("lobby");
+          return;
+        }
+        roomCtrl.renderRoom(room);
+        if (room.state === ROOM_STATE.PLAYING) {
+          roomCtrl.stopEndTimer();
+          showScreen("none");
+          if (game.getState().engineMode !== "lan" || game.getState().activeState !== "play") {
+            game.startLanMatch(room, snapshot);
+          } else if (snapshot) {
+            game.applySnapshot(snapshot);
+          }
+        } else if (room.state === ROOM_STATE.ENDING) {
+          game.stopEngine();
+          showScreen("ending");
+        } else {
+          roomCtrl.stopEndTimer();
+          game.stopEngine();
+          showScreen("room");
+        }
+      }
+
+      net.on(MSG.ROOM_JOINED, (msg) => handleRoomStateView(msg.room, msg.snapshot));
+      net.on(MSG.ROOM_UPDATE, (msg) => handleRoomStateView(msg.room, null));
+      net.on(MSG.MATCH_START, (msg) => handleRoomStateView(msg.room, msg.snapshot));
+      net.on(MSG.MATCH_END, (msg) => {
+        game.stopEngine();
+        roomCtrl.renderMatchEnd(msg);
+        showScreen("ending");
+      });
+      net.on(MSG.ROOM_HOST_CHANGED, (msg) => showErrorBanner(`Chủ phòng mới: ${msg.hostName}`));
+      net.on(MSG.ROOM_KICKED, (msg) => {
+        game.stopEngine();
+        roomCtrl.clearRoom();
+        showScreen("lobby");
+        showErrorBanner(msg.reason || "Bạn đã bị mời khỏi phòng");
+      });
+      net.on(MSG.ROOM_LIST, () => {
+        if (!roomCtrl.getRoom() && game.getState().engineMode !== "solo") showScreen("lobby");
+      });
+      net.on(MSG.CHAT, (msg) => {
+        if (roomCtrl.getRoom() && roomCtrl.getRoom().state !== ROOM_STATE.PLAYING) {
+          roomCtrl.appendChat(msg);
+        }
+      });
+      net.on(MSG.ERROR, (msg) => showErrorBanner(`${msg.message || msg.code}`));
+
+      // Clicking Leave inside Room sets local room null immediately before ROOM_LIST confirmation
+      document.getElementById("btnRoomLeave").addEventListener("click", () => {
+        roomCtrl.clearRoom();
+        showScreen("lobby");
+      });
+
+      net.connect();
+      window.__fpsApp = { net, lobby, roomCtrl, game, settings, input, settingsUI };
+    </script>
+  </body>
+</html>

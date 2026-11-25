@@ -1,0 +1,8 @@
+{
+  "name": "fps-harbor-lan-v2",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Authoritative LAN PvP server (Truy Kích TDM/FFA) for Bến Cảng Mưa FPS"
+}
+
