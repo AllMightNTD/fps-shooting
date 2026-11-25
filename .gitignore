@@ -26,6 +26,9 @@ logs/
 tmp/
 temp/
 .cache/
+__pycache__/
+*.py[cod]
+*$py.class
 
 # IDE / Editor Files
 .vscode/

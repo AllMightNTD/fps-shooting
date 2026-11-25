@@ -54,15 +54,15 @@ class TestPistolGeometryAndTextures(unittest.TestCase):
         with self.assertRaises(ValueError):
             # Inner loop larger than outer loop must fail
             extrude_hollow_profile(
-                outer=[(-0.01, -0.01), (0.01, -0.01), (0.01, 0.01)],
-                inner=[(-0.05, -0.05), (0.05, -0.05), (0.05, 0.05)],
+                outer_pts=[(-0.01, -0.01), (0.01, -0.01), (0.01, 0.01)],
+                inner_pts=[(-0.05, -0.05), (0.05, -0.05), (0.05, 0.05)],
                 depth=0.01,
             )
         with self.assertRaises(ValueError):
             # Mismatched outer/inner vertex counts must fail
             extrude_hollow_profile(
-                outer=[(-0.05, -0.05), (0.05, -0.05), (0.05, 0.05), (-0.05, 0.05)],
-                inner=[(-0.01, -0.01), (0.01, -0.01), (0.01, 0.01)],
+                outer_pts=[(-0.05, -0.05), (0.05, -0.05), (0.05, 0.05), (-0.05, 0.05)],
+                inner_pts=[(-0.01, -0.01), (0.01, -0.01), (0.01, 0.01)],
                 depth=0.01,
             )
 
@@ -102,6 +102,10 @@ class TestPistolGLBExport(unittest.TestCase):
             "pistol_muzzle",
             "pistol_tritium_dots",
             "pistol_sight_rings",
+            "socket_handguard",
+            "socket_grip",
+            "socket_mag",
+            "socket_slide",
         }
 
         with tempfile.TemporaryDirectory() as tmpdir:

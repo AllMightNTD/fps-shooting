@@ -6,11 +6,11 @@
 
 _(ghi đè mỗi lần cập nhật)_
 
-- **Cập nhật lần cuối:** 2026-11-26 01:02 — Technical Writer & Tech Lead
-- **Dự án / Giai đoạn:** FPS Web Game ("Bến cảng mưa") — Hoàn tất tích hợp tay nhân vật FPP `fps_arms.glb` (`SkinnedMesh` 47 xương, chuyển đổi `KHR_materials_pbrSpecularGlossiness` → glTF 2.0 `pbrMetallicRoughness`, bộ giải IK 2 xương giải tích `public/js/arm_rig.js` cho `M416`/`Glock-17`/`AWM Sniper`) cùng tài liệu và ghi công `CC-BY-4.0`.
-- **Nhánh Git đang làm:** `feat/skinned-fps-arms` (worktree `D:\FPS\fps-shooting\.worktrees\feat-skinned-fps-arms`)
-- **Đang làm dở:** Không có (sẵn sàng tổng hợp / merge nhánh `feat/skinned-fps-arms`).
-- **Blocker:** Ghi nhận 1 lỗi test có sẵn từ trước ở `model/tests/test_pistol_model.py:56` (`extrude_hollow_profile()` nhận `outer=` thay vì `outer_pts=`).
+- **Cập nhật lần cuối:** 2026-11-26 01:56 — Tech Lead, Developer, QA & Security Engineer
+- **Dự án / Giai đoạn:** FPS Web Game ("Bến cảng mưa") — Đã xử lý triệt để toàn bộ 22 conflict sau khi pull PR #1 (`cd2b57d`) lên nhánh `main` (hợp nhất pipeline PBR `fps_arms.py` + fallback `model/assets/fps_arms.glb` + test hermetic từ upstream với hệ thống socket gắn tay + camera `vmCam` + sửa lỗi `test_pistol_model.py` từ stash local); đồng thời gỡ tracking `__pycache__/*.pyc` và cập nhật `.gitignore`.
+- **Nhánh Git đang làm:** `main` (đồng bộ `origin/main` `cd2b57d`, còn thay đổi đã stage gồm phần giải quyết conflict + các asset mới chưa tích hợp: `awm.glb`, `m200.glb`, `pistol.glb`, `toon_m416.glb`, `sound/{m416,pistol,m200}/*.wav`; bản sao dự phòng gốc vẫn giữ nguyên trong `stash@{0}`).
+- **Đang làm dở:** Chờ người dùng xác nhận hướng thực hiện "các bước sau" (tích hợp các model `.glb` súng mới & âm thanh `.wav`, hay kiểm thử trình duyệt / commit bản hiện tại trước).
+- **Blocker:** Không có (toàn bộ 23/23 test Python và 11/11 test Node.js đều PASS).
 
 ## 2. Quyết định đã chốt
 
@@ -29,6 +29,7 @@ _(ghi đè mỗi lần cập nhật)_
 - [2026-11-25] Theo dõi bản dự phòng `model/assets/fps_arms.glb` (`10,314,692 B`) trong Git làm fallback cho `build_fps_arms_glb()` khi không có `fps_arms.glb` ở thư mục gốc — Lý do: Đảm bảo `python -m model.build` và unit test luôn chạy độc lập trên mọi máy/worktree.
 - [2026-11-25] Tách module IK 2 xương giải tích `public/js/arm_rig.js` (`solveTwoBoneArmIK`, `SKINNED_ARM_POSES` cho `m416`/`pistol`/`sniper`, `createSkinnedArmsController`) vận hành trên `L_arm_01/L_elbow_02/L_wrist_03`, `R_arm_023/R_elbow_024/R_wrist_025` (chiều dài `0.2587m` / `0.2543m`) kèm gập ngón & bóp cò `R_point1_030..R_point3_032`, tích hợp vào `gunAnim()` và `hydratePbrMaterial` (`aoMap`/skinning) trong `public/js/game.js` — Lý do: Điều khiển tự nhiên bộ xương 47 joints theo từng vũ khí và hoạt ảnh nạp đạn/bắn mà không phụ thuộc animation nhúng ngoài.
 - [2026-11-26] Ghi công chuẩn giấy phép **CC-BY-4.0** cho model gốc `"fps arms"` của tác giả **DJMaesen** (<http://creativecommons.org/licenses/by/4.0/>, nguồn <https://sketchfab.com/3d-models/fps-arms-08ec4403a47645d8ad80633abf13d39d>) trong `model/README.md` và `README.md`, nêu rõ đã chuyển đổi/giảm cỡ texture và chuẩn hóa `arms_root` — Lý do: Tuân thủ đầy đủ điều khoản ghi công và khai báo chỉnh sửa của `CC-BY-4.0`.
+- [2026-11-26] Giải quyết conflict khi pull `origin/main` (`cd2b57d`) + `stash@{0}` theo hướng giữ điểm mạnh của cả hai bản: dùng converter modular + fallback `model/assets/fps_arms.glb` + test hermetic từ PR #1, kết hợp với metadata `leftHandBasis`/`rightHandBasis`/`attribution`, hệ thống socket gắn tay trên `m416.py`/`pistol.py`, camera viewmodel riêng `vmCam` (`FOV 62->50`, `near=0.01`), IK chống xoắn + protraction vai trong `public/js/arm_rig.js` & `public/js/game.js` (giữ guard `!ctrl.ready`), đồng thời loại `__pycache__/*.pyc` khỏi Git qua `.gitignore` — Lý do: Giữ chất lượng kiểm thử & fallback của upstream mà không làm mất bản nâng cấp socket/vmCam và chặn conflict file `.pyc` tái diễn.
 
 ## 3. Việc cần làm (TODO)
 
@@ -58,9 +59,28 @@ _(ghi đè mỗi lần cập nhật)_
 - [x] Cài `uv` (`0.13.10`), build `model/dist/` (`m416`, `pistol`, `fps_arms`, `soldier`) và khởi động server Node.js tại `0.0.0.0:8090` trên Windows — Vai trò: DevOps Engineer — Ưu tiên: cao
 - [x] Khảo sát `fps_arms.glb` mới và lập kế hoạch tích hợp (`docs/superpowers/plans/2026-11-25-skinned-fps-arms-integration.md`) — Vai trò: Tech Lead & Solution Architect — Ưu tiên: cao
 - [x] Thực thi tích hợp `fps_arms.glb` (chuyển đổi PBR glTF 2.0 + IK 2 xương `public/js/arm_rig.js` + `public/js/game.js` + tài liệu & ghi công `CC-BY-4.0`) — Vai trò: Python Model Dev, Frontend Dev, QA, Security, Reviewer, Technical Writer — Ưu tiên: cao
-- [ ] Sửa keyword argument `outer=`/`inner=` thành `outer_pts=`/`inner_pts=` trong `model/tests/test_pistol_model.py:56,63` nếu người dùng yêu cầu sửa test — Vai trò: QA / Tester — Ưu tiên: thấp
+- [x] Sửa keyword argument `outer=`/`inner=` thành `outer_pts=`/`inner_pts=` trong `model/tests/test_pistol_model.py:56,63` — Vai trò: QA / Tester — Ưu tiên: thấp
+- [x] Giải quyết toàn bộ 22 merge conflict sau `git pull` (`cd2b57d` vs `stash@{0}`), gỡ tracking `__pycache__/*.pyc`, cập nhật `.gitignore`, rebuild `model/dist/` và xác minh 23/23 Python + 11/11 Node tests PASS — Vai trò: Tech Lead, Developer, QA, Security — Ưu tiên: cao
+- [ ] Xác nhận & lập kế hoạch "các bước sau" với người dùng (tích hợp `toon_m416.glb`, `pistol.glb`, `awm.glb`/`m200.glb` & `sound/*/*.wav`, hoặc kiểm thử trình duyệt & commit bản hiện tại) — Vai trò: Tech Lead, BA, Solution Architect — Ưu tiên: cao
 
 ## 4. Nhật ký bàn giao (mới nhất ở trên cùng)
+
+### [2026-11-26 01:56] Giải quyết Merge Conflict sau `git pull` & Xác minh toàn bộ test — Vai trò: Tech Lead, Developer, QA & Security Engineer
+
+- **Đã làm:**
+  - Phân tích nguyên nhân conflict: `main` fast-forward lên PR #1 (`cd2b57d`), sau đó pop `stash@{0}` (`7f2909e` tạo từ `206558d`) chứa bản nâng cấp socket gắn tay + camera `vmCam` + bộ asset súng `.glb` & âm thanh `.wav` mới, gây 22 đường dẫn unmerged (7 file nguồn/test + 15 file `__pycache__/*.pyc`).
+  - Hợp nhất sạch mã nguồn Python (`model/build.py`, `model/characters/__init__.py`, `model/characters/fps_arms.py`, `model/tests/test_arms_model.py`): giữ bộ chuyển đổi PBR modular + fallback `model/assets/fps_arms.glb` + test hermetic từ PR #1, bổ sung metadata `attribution`/`leftHandBasis`/`rightHandBasis` và assert tương ứng, xóa hàm trùng lặp do merge dở.
+  - Hợp nhất sạch mã nguồn JS & test (`public/js/arm_rig.js`, `public/js/game.js`, `server/tests/test_arm_rig.mjs`, `server/tests/test_lan_v2.js`): dùng kiến trúc socket 0mm-drift + camera `vmCam` + IK chống xoắn + trigger discipline từ stash, giữ guard `!ctrl || !ctrl.ready` & nhận diện vật liệu `material`/`Arms_SkinnedGlove`/`armmesh` từ upstream, và cập nhật assert hermetic trong `test_lan_v2.js`.
+  - Gỡ tracking toàn bộ `model/**/__pycache__/*.pyc` khỏi Git index và thêm `__pycache__/`, `*.py[cod]`, `*$py.class` vào `.gitignore`.
+  - Build lại `model/dist/` (`m416`, `pistol`, `fps_arms`, `soldier`) và chạy kiểm thử đầy đủ:
+    - `git diff --check` / `git diff --cached --check`: **0 lỗi, 0 unmerged paths**.
+    - Python (`unittest discover -s model/tests -v`): **23/23 PASS** (`2.995s`, bao gồm `test_pistol_model.py` đã xanh).
+    - Node.js (`node --test server/tests/test_lan_v2.js server/tests/test_arm_rig.mjs`): **11/11 PASS** (`3.30s`).
+    - Security grep (`innerHTML|dangerouslySetInnerHTML|eval\(|document\.write`): **0 match**.
+- **File ảnh hưởng:** `.gitignore`, `model/build.py`, `model/characters/__init__.py`, `model/characters/fps_arms.py`, `model/tests/test_arms_model.py`, `public/js/arm_rig.js`, `public/js/game.js`, `server/tests/test_arm_rig.mjs`, `server/tests/test_lan_v2.js`, `agents/context.md`, và gỡ index `model/**/__pycache__/*.pyc`.
+- **Đang dở / vướng:** Chưa rõ cụ thể "các bước sau" người dùng muốn ưu tiên trước (tích hợp các file `toon_m416.glb`, `pistol.glb`, `awm.glb`/`m200.glb` & `sound/*/*.wav` đang staged, hay kiểm thử trình duyệt & commit/drop `stash@{0}` trước).
+- **Bước tiếp theo:** Chờ người dùng xác nhận mục tiêu tiếp theo trước khi lập kế hoạch/triển khai theo Mục 3 `GEMINI.md` (vai trò tiếp nhận: Tech Lead / BA / Solution Architect).
+- **Câu hỏi còn mở:** Người dùng muốn tiếp tục tích hợp các model súng `.glb` và âm thanh `.wav` mới, hay muốn kiểm thử trình duyệt và commit bản fix conflict hiện tại trước?
 
 ### [2026-11-26 01:02] Hoàn tất tích hợp tay `fps_arms.glb` (SkinnedMesh 47 xương, IK 2 xương) & Tài liệu — Vai trò: Toàn đội (Python Model Dev, Frontend Dev, QA, Security, Technical Writer, Tech Lead)
 

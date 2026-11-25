@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import math
+from typing import Sequence
+
+import numpy as np
 
 from model.core import (
     GLBMaterial,
@@ -31,7 +34,40 @@ PISTOL_METADATA: dict[str, object] = {
     "triggerPivot": [0.0, 0.017, -0.036],
     "muzzlePos": [0.0, 0.0495, -0.172],
     "magDropAxis": [0.0, -1.0, 0.32],
+    "sockets": {
+        "handguard": "socket_handguard",
+        "grip": "socket_grip",
+        "mag": "socket_mag",
+        "slide": "socket_slide",
+    },
 }
+
+
+def _socket_euler_xyz(
+    distal: Sequence[float],
+    palm_normal: Sequence[float],
+    is_right_hand: bool = False,
+) -> tuple[float, float, float]:
+    """Compute socket XYZ Euler rotation where -Z=distal, +Y=radial, and +/-X=palm_normal."""
+    z_axis = -np.asarray(distal, dtype=np.float64)
+    z_axis /= np.linalg.norm(z_axis)
+    sign = -1.0 if is_right_hand else 1.0
+    x_axis = np.asarray(palm_normal, dtype=np.float64) * sign
+    x_axis = x_axis - z_axis * float(np.dot(x_axis, z_axis))
+    x_axis /= np.linalg.norm(x_axis)
+    y_axis = np.cross(z_axis, x_axis)
+    y_axis /= np.linalg.norm(y_axis)
+    mat = np.column_stack((x_axis, y_axis, z_axis))
+
+    sy = max(-1.0, min(1.0, float(mat[0, 2])))
+    ry = math.asin(sy)
+    if abs(mat[0, 2]) < 0.99999:
+        rx = math.atan2(-mat[1, 2], mat[2, 2])
+        rz = math.atan2(-mat[0, 1], mat[0, 0])
+    else:
+        rx = math.atan2(mat[2, 1], mat[1, 1])
+        rz = 0.0
+    return (round(rx, 6), round(ry, 6), round(rz, 6))
 
 # 45-degree top-chamfered Glock slide cross-section (XY plane -> extruded along +Z)
 _SLIDE_CROSS_SECTION: list[tuple[float, float]] = [
@@ -274,6 +310,15 @@ def _build_slide_node(mats: dict[str, GLBMaterial]) -> GLBNode:
             GLBNode(name="pistol_slide_extractor", mesh=extractor_mesh, material=mats["steel"]),
             GLBNode(name="pistol_sight_rings", mesh=merge_meshes(ring_meshes), material=mats["sight_ring"]),
             GLBNode(name="pistol_tritium_dots", mesh=merge_meshes(dot_meshes), material=mats["tritium"]),
+            GLBNode(
+                name="socket_slide",
+                translation=(-0.015, 0.048, 0.022),
+                rotation_xyz=_socket_euler_xyz(
+                    distal=(0.66, 0.06, -0.75),
+                    palm_normal=(0.35, -0.90, 0.26),
+                    is_right_hand=False,
+                ),
+            ),
         ],
     )
 
@@ -425,8 +470,18 @@ def _build_magazine_node(mats: dict[str, GLBMaterial]) -> GLBNode:
     ]
     return GLBNode(
         name="pistol_mag",
-        mesh=merge_meshes(mag_meshes),
-        material=mats["polymer"],
+        children=[
+            GLBNode(name="pistol_mag_body", mesh=merge_meshes(mag_meshes), material=mats["polymer"]),
+            GLBNode(
+                name="socket_mag",
+                translation=(-0.014, -0.072, 0.040),
+                rotation_xyz=_socket_euler_xyz(
+                    distal=(0.54, -0.18, -0.82),
+                    palm_normal=(0.78, 0.32, 0.54),
+                    is_right_hand=False,
+                ),
+            ),
+        ],
     )
 
 
@@ -443,6 +498,26 @@ def build_pistol_nodes(texture_size: int = 512, seed: int = 42) -> list[GLBNode]
             _build_trigger_node(mats),
             _build_magazine_node(mats),
             GLBNode(name="pistol_muzzle", translation=tuple(PISTOL_METADATA["muzzlePos"])),  # type: ignore[arg-type]
+            # Two-handed thumbs-forward support socket wrapping left side of grip & undercut trigger guard
+            GLBNode(
+                name="socket_handguard",
+                translation=(-0.024, -0.038, 0.024),
+                rotation_xyz=_socket_euler_xyz(
+                    distal=(-0.16, -0.12, -0.980),
+                    palm_normal=(0.90, 0.34, 0.27),
+                    is_right_hand=False,
+                ),
+            ),
+            # Firing-hand socket aligned with the 17.5-deg stippled Glock grip
+            GLBNode(
+                name="socket_grip",
+                translation=(0.020, -0.036, 0.056),
+                rotation_xyz=_socket_euler_xyz(
+                    distal=(0.16, -0.04, -0.986),
+                    palm_normal=(-0.96, 0.08, 0.26),
+                    is_right_hand=True,
+                ),
+            ),
         ],
     )
     return [root]

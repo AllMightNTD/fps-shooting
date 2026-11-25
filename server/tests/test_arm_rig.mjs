@@ -1,22 +1,30 @@
 /**
- * AAA unit tests for public/js/arm_rig.js:
- * - Analytical 2-bone arm IK geometry, reachability & twist stability
- * - Edge/unhappy cases (overextended, collapsed, zero/collinear pole)
- * - Scaled/rotated glTF arms_root coordinate conversion (Pre-flight Ruling)
- * - SkinnedMesh frustumCulled = false, triggerPull finger curl, null-safety
+ * AAA unit tests (Happy & Unhappy paths) for public/js/arm_rig.js:
+ * - Weapon socket -> wrist conversion with palmOffset compensation (0mm palm drift)
+ * - Twist-stabilized analytical 2-bone IK (shoulder -> elbow -> wrist)
+ * - Clavicle protraction & NaN guards on extreme overextension / zero-distance collapse
+ * - Trigger discipline (index finger outside guard at idle -> curled onto trigger when firing)
  */
 
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
-  SKINNED_ARM_POSES,
+  HAND_INTRINSIC_BASIS,
+  computeWristFromSocket,
   createSkinnedArmsController,
   solveTwoBoneArmIK,
+  viewmodelPointToWorld,
 } from "../../public/js/arm_rig.js";
 
-// Lightweight Three.js r128-compatible math shim (zero external dependencies)
-class Vector3 {
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DIST_DIR = path.resolve(__dirname, "../../model/dist");
+
+// Minimal Three.js-compatible math classes for pure Node.js testing (zero npm deps)
+class Vec3 {
   constructor(x = 0, y = 0, z = 0) {
     this.x = x;
     this.y = y;
@@ -35,7 +43,7 @@ class Vector3 {
     return this;
   }
   clone() {
-    return new Vector3(this.x, this.y, this.z);
+    return new Vec3(this.x, this.y, this.z);
   }
   add(v) {
     this.x += v.x;
@@ -67,12 +75,6 @@ class Vector3 {
     this.z *= s;
     return this;
   }
-  lerpVectors(a, b, t) {
-    this.x = a.x + (b.x - a.x) * t;
-    this.y = a.y + (b.y - a.y) * t;
-    this.z = a.z + (b.z - a.z) * t;
-    return this;
-  }
   dot(v) {
     return this.x * v.x + this.y * v.y + this.z * v.z;
   }
@@ -91,14 +93,17 @@ class Vector3 {
     return Math.sqrt(this.lengthSq());
   }
   distanceTo(v) {
-    const dx = this.x - v.x;
-    const dy = this.y - v.y;
-    const dz = this.z - v.z;
-    return Math.sqrt(dx * dx + dy * dy + dz * dz);
+    return Math.hypot(this.x - v.x, this.y - v.y, this.z - v.z);
+  }
+  lerpVectors(a, b, t) {
+    this.x = a.x + (b.x - a.x) * t;
+    this.y = a.y + (b.y - a.y) * t;
+    this.z = a.z + (b.z - a.z) * t;
+    return this;
   }
   normalize() {
-    const len = this.length();
-    return len > 0 ? this.multiplyScalar(1 / len) : this.set(0, 0, 0);
+    const l = this.length();
+    return l > 0 ? this.multiplyScalar(1 / l) : this.set(0, 0, 0);
   }
   applyQuaternion(q) {
     const x = this.x, y = this.y, z = this.z;
@@ -110,22 +115,6 @@ class Vector3 {
     this.x = ix * qw + iw * -qx + iy * -qz - iz * -qy;
     this.y = iy * qw + iw * -qy + iz * -qx - ix * -qz;
     this.z = iz * qw + iw * -qz + ix * -qy - iy * -qx;
-    return this;
-  }
-  applyMatrix4(m) {
-    const e = m.elements;
-    const x = this.x, y = this.y, z = this.z;
-    const w = 1 / (e[3] * x + e[7] * y + e[11] * z + e[15]);
-    this.x = (e[0] * x + e[4] * y + e[8] * z + e[12]) * w;
-    this.y = (e[1] * x + e[5] * y + e[9] * z + e[13]) * w;
-    this.z = (e[2] * x + e[6] * y + e[10] * z + e[14]) * w;
-    return this;
-  }
-  setFromMatrixPosition(m) {
-    const e = m.elements;
-    this.x = e[12];
-    this.y = e[13];
-    this.z = e[14];
     return this;
   }
 }
@@ -146,7 +135,7 @@ class Euler {
   }
 }
 
-class Quaternion {
+class Quat {
   constructor(x = 0, y = 0, z = 0, w = 1) {
     this.x = x;
     this.y = y;
@@ -168,36 +157,27 @@ class Quaternion {
     return this;
   }
   clone() {
-    return new Quaternion(this.x, this.y, this.z, this.w);
+    return new Quat(this.x, this.y, this.z, this.w);
   }
-  length() {
-    return Math.hypot(this.x, this.y, this.z, this.w);
-  }
-  normalize() {
-    const len = this.length();
-    if (len === 0) return this.set(0, 0, 0, 1);
-    const inv = 1 / len;
-    this.x *= inv;
-    this.y *= inv;
-    this.z *= inv;
-    this.w *= inv;
-    return this;
-  }
-  conjugate() {
+  invert() {
     this.x = -this.x;
     this.y = -this.y;
     this.z = -this.z;
+    return this.normalize();
+  }
+  normalize() {
+    let l = Math.hypot(this.x, this.y, this.z, this.w);
+    if (l === 0) {
+      this.x = this.y = this.z = 0;
+      this.w = 1;
+    } else {
+      l = 1 / l;
+      this.x *= l;
+      this.y *= l;
+      this.z *= l;
+      this.w *= l;
+    }
     return this;
-  }
-  invert() {
-    return this.conjugate().normalize();
-  }
-  dot(q) {
-    return this.x * q.x + this.y * q.y + this.z * q.z + this.w * q.w;
-  }
-  angleTo(q) {
-    const d = Math.min(1, Math.max(-1, Math.abs(this.dot(q))));
-    return 2 * Math.acos(d);
   }
   multiply(q) {
     return this.multiplyQuaternions(this, q);
@@ -214,61 +194,37 @@ class Quaternion {
     this.w = qaw * qbw - qax * qbx - qay * qby - qaz * qbz;
     return this;
   }
-  slerp(qb, t) {
-    if (t === 0) return this;
-    if (t === 1) return this.copy(qb);
-    const x = this.x, y = this.y, z = this.z, w = this.w;
-    let cosHalfTheta = w * qb.w + x * qb.x + y * qb.y + z * qb.z;
-    let qbx = qb.x, qby = qb.y, qbz = qb.z, qbw = qb.w;
-    if (cosHalfTheta < 0) {
-      qbw = -qbw;
-      qbx = -qbx;
-      qby = -qby;
-      qbz = -qbz;
-      cosHalfTheta = -cosHalfTheta;
-    }
-    if (cosHalfTheta >= 1.0) return this;
-    const sqrSinHalfTheta = 1.0 - cosHalfTheta * cosHalfTheta;
-    if (sqrSinHalfTheta <= Number.EPSILON) {
-      const s = 1 - t;
-      this.w = s * w + t * qbw;
-      this.x = s * x + t * qbx;
-      this.y = s * y + t * qby;
-      this.z = s * z + t * qbz;
-      return this.normalize();
-    }
-    const sinHalfTheta = Math.sqrt(sqrSinHalfTheta);
-    const halfTheta = Math.atan2(sinHalfTheta, cosHalfTheta);
-    const ratioA = Math.sin((1 - t) * halfTheta) / sinHalfTheta;
-    const ratioB = Math.sin(t * halfTheta) / sinHalfTheta;
-    this.w = w * ratioA + qbw * ratioB;
-    this.x = x * ratioA + qbx * ratioB;
-    this.y = y * ratioA + qby * ratioB;
-    this.z = z * ratioA + qbz * ratioB;
-    return this;
-  }
-  setFromEuler(euler) {
-    const c1 = Math.cos(euler.x / 2);
-    const c2 = Math.cos(euler.y / 2);
-    const c3 = Math.cos(euler.z / 2);
-    const s1 = Math.sin(euler.x / 2);
-    const s2 = Math.sin(euler.y / 2);
-    const s3 = Math.sin(euler.z / 2);
-    // Intrinsic XYZ (Three.js default)
+  setFromEuler(e) {
+    const c1 = Math.cos(e.x / 2), c2 = Math.cos(e.y / 2), c3 = Math.cos(e.z / 2);
+    const s1 = Math.sin(e.x / 2), s2 = Math.sin(e.y / 2), s3 = Math.sin(e.z / 2);
     this.x = s1 * c2 * c3 + c1 * s2 * s3;
     this.y = c1 * s2 * c3 - s1 * c2 * s3;
     this.z = c1 * c2 * s3 + s1 * s2 * c3;
     this.w = c1 * c2 * c3 - s1 * s2 * s3;
     return this;
   }
-  setFromAxisAngle(axis, angle) {
-    const halfAngle = angle * 0.5;
-    const s = Math.sin(halfAngle);
-    this.x = axis.x * s;
-    this.y = axis.y * s;
-    this.z = axis.z * s;
-    this.w = Math.cos(halfAngle);
-    return this;
+  setFromUnitVectors(vFrom, vTo) {
+    let r = vFrom.dot(vTo) + 1;
+    if (r < 1e-6) {
+      r = 0;
+      if (Math.abs(vFrom.x) > Math.abs(vFrom.z)) {
+        this.x = -vFrom.y;
+        this.y = vFrom.x;
+        this.z = 0;
+        this.w = r;
+      } else {
+        this.x = 0;
+        this.y = -vFrom.z;
+        this.z = vFrom.y;
+        this.w = r;
+      }
+    } else {
+      this.x = vFrom.y * vTo.z - vFrom.z * vTo.y;
+      this.y = vFrom.z * vTo.x - vFrom.x * vTo.z;
+      this.z = vFrom.x * vTo.y - vFrom.y * vTo.x;
+      this.w = r;
+    }
+    return this.normalize();
   }
   setFromRotationMatrix(m) {
     const te = m.elements;
@@ -301,537 +257,376 @@ class Quaternion {
       this.y = (m23 + m32) / s;
       this.z = 0.25 * s;
     }
+    return this.normalize();
+  }
+  slerp(qb, t) {
+    if (t === 0) return this;
+    if (t === 1) return this.copy(qb);
+    const x = this.x, y = this.y, z = this.z, w = this.w;
+    let cosHalfTheta = w * qb.w + x * qb.x + y * qb.y + z * qb.z;
+    if (cosHalfTheta < 0) {
+      this.w = -qb.w; this.x = -qb.x; this.y = -qb.y; this.z = -qb.z;
+      cosHalfTheta = -cosHalfTheta;
+    } else {
+      this.copy(qb);
+    }
+    if (cosHalfTheta >= 1.0) {
+      this.w = w; this.x = x; this.y = y; this.z = z;
+      return this;
+    }
+    const sqrSinHalfTheta = 1.0 - cosHalfTheta * cosHalfTheta;
+    if (sqrSinHalfTheta <= Number.EPSILON) {
+      const s = 1 - t;
+      this.w = s * w + t * this.w;
+      this.x = s * x + t * this.x;
+      this.y = s * y + t * this.y;
+      this.z = s * z + t * this.z;
+      return this.normalize();
+    }
+    const sinHalfTheta = Math.sqrt(sqrSinHalfTheta);
+    const halfTheta = Math.atan2(sinHalfTheta, cosHalfTheta);
+    const ratioA = Math.sin((1 - t) * halfTheta) / sinHalfTheta;
+    const ratioB = Math.sin(t * halfTheta) / sinHalfTheta;
+    this.w = w * ratioA + this.w * ratioB;
+    this.x = x * ratioA + this.x * ratioB;
+    this.y = y * ratioA + this.y * ratioB;
+    this.z = z * ratioA + this.z * ratioB;
     return this;
   }
 }
 
-class Matrix4 {
+class Mat4 {
   constructor() {
-    this.elements = [
-      1, 0, 0, 0,
-      0, 1, 0, 0,
-      0, 0, 1, 0,
-      0, 0, 0, 1,
-    ];
-  }
-  identity() {
-    const e = this.elements;
-    e[0] = 1; e[4] = 0; e[8] = 0; e[12] = 0;
-    e[1] = 0; e[5] = 1; e[9] = 0; e[13] = 0;
-    e[2] = 0; e[6] = 0; e[10] = 1; e[14] = 0;
-    e[3] = 0; e[7] = 0; e[11] = 0; e[15] = 1;
-    return this;
-  }
-  copy(m) {
-    const src = m.elements;
-    for (let i = 0; i < 16; i++) this.elements[i] = src[i];
-    return this;
-  }
-  clone() {
-    return new Matrix4().copy(this);
+    this.elements = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
   }
   makeBasis(xAxis, yAxis, zAxis) {
-    const e = this.elements;
-    e[0] = xAxis.x; e[4] = yAxis.x; e[8] = zAxis.x; e[12] = 0;
-    e[1] = xAxis.y; e[5] = yAxis.y; e[9] = zAxis.y; e[13] = 0;
-    e[2] = xAxis.z; e[6] = yAxis.z; e[10] = zAxis.z; e[14] = 0;
-    e[3] = 0; e[7] = 0; e[11] = 0; e[15] = 1;
+    this.elements = [
+      xAxis.x, xAxis.y, xAxis.z, 0,
+      yAxis.x, yAxis.y, yAxis.z, 0,
+      zAxis.x, zAxis.y, zAxis.z, 0,
+      0, 0, 0, 1,
+    ];
     return this;
   }
-  compose(position, quaternion, scale) {
-    const te = this.elements;
-    const x = quaternion.x, y = quaternion.y, z = quaternion.z, w = quaternion.w;
-    const x2 = x + x, y2 = y + y, z2 = z + z;
-    const xx = x * x2, xy = x * y2, xz = x * z2;
-    const yy = y * y2, yz = y * z2, zz = z * z2;
-    const wx = w * x2, wy = w * y2, wz = w * z2;
-    const sx = scale.x, sy = scale.y, sz = scale.z;
+}
 
-    te[0] = (1 - (yy + zz)) * sx;
-    te[1] = (xy + wz) * sx;
-    te[2] = (xz - wy) * sx;
-    te[3] = 0;
-    te[4] = (xy - wz) * sy;
-    te[5] = (1 - (xx + zz)) * sy;
-    te[6] = (yz + wx) * sy;
-    te[7] = 0;
-    te[8] = (xz + wy) * sz;
-    te[9] = (yz - wx) * sz;
-    te[10] = (1 - (xx + yy)) * sz;
-    te[11] = 0;
-    te[12] = position.x;
-    te[13] = position.y;
-    te[14] = position.z;
-    te[15] = 1;
-    return this;
-  }
-  decompose(position, quaternion, scale) {
-    const te = this.elements;
-    let sx = Math.hypot(te[0], te[1], te[2]);
-    const sy = Math.hypot(te[4], te[5], te[6]);
-    const sz = Math.hypot(te[8], te[9], te[10]);
-    const det = this.determinant();
-    if (det < 0) sx = -sx;
-    position.x = te[12];
-    position.y = te[13];
-    position.z = te[14];
-    const m = this.clone();
-    const invSX = sx !== 0 ? 1 / sx : 0;
-    const invSY = sy !== 0 ? 1 / sy : 0;
-    const invSZ = sz !== 0 ? 1 / sz : 0;
-    m.elements[0] *= invSX; m.elements[1] *= invSX; m.elements[2] *= invSX;
-    m.elements[4] *= invSY; m.elements[5] *= invSY; m.elements[6] *= invSY;
-    m.elements[8] *= invSZ; m.elements[9] *= invSZ; m.elements[10] *= invSZ;
-    quaternion.setFromRotationMatrix(m);
-    scale.x = sx;
-    scale.y = sy;
-    scale.z = sz;
-    return this;
-  }
-  multiplyMatrices(a, b) {
-    const ae = a.elements, be = b.elements, te = this.elements;
-    const a11 = ae[0], a12 = ae[4], a13 = ae[8], a14 = ae[12];
-    const a21 = ae[1], a22 = ae[5], a23 = ae[9], a24 = ae[13];
-    const a31 = ae[2], a32 = ae[6], a33 = ae[10], a34 = ae[14];
-    const a41 = ae[3], a42 = ae[7], a43 = ae[11], a44 = ae[15];
-    const b11 = be[0], b12 = be[4], b13 = be[8], b14 = be[12];
-    const b21 = be[1], b22 = be[5], b23 = be[9], b24 = be[13];
-    const b31 = be[2], b32 = be[6], b33 = be[10], b34 = be[14];
-    const b41 = be[3], b42 = be[7], b43 = be[11], b44 = be[15];
-    te[0] = a11 * b11 + a12 * b21 + a13 * b31 + a14 * b41;
-    te[4] = a11 * b12 + a12 * b22 + a13 * b32 + a14 * b42;
-    te[8] = a11 * b13 + a12 * b23 + a13 * b33 + a14 * b43;
-    te[12] = a11 * b14 + a12 * b24 + a13 * b34 + a14 * b44;
-    te[1] = a21 * b11 + a22 * b21 + a23 * b31 + a24 * b41;
-    te[5] = a21 * b12 + a22 * b22 + a23 * b32 + a24 * b42;
-    te[9] = a21 * b13 + a22 * b23 + a23 * b33 + a24 * b43;
-    te[13] = a21 * b14 + a22 * b24 + a23 * b34 + a24 * b44;
-    te[2] = a31 * b11 + a32 * b21 + a33 * b31 + a34 * b41;
-    te[6] = a31 * b12 + a32 * b22 + a33 * b32 + a34 * b42;
-    te[10] = a31 * b13 + a32 * b23 + a33 * b33 + a34 * b43;
-    te[14] = a31 * b14 + a32 * b24 + a33 * b34 + a34 * b44;
-    te[3] = a41 * b11 + a42 * b21 + a43 * b31 + a44 * b41;
-    te[7] = a41 * b12 + a42 * b22 + a43 * b32 + a44 * b42;
-    te[11] = a41 * b13 + a42 * b23 + a43 * b33 + a44 * b43;
-    te[15] = a41 * b14 + a42 * b24 + a43 * b34 + a44 * b44;
-    return this;
-  }
-  determinant() {
-    const te = this.elements;
-    const n11 = te[0], n12 = te[4], n13 = te[8], n14 = te[12];
-    const n21 = te[1], n22 = te[5], n23 = te[9], n24 = te[13];
-    const n31 = te[2], n32 = te[6], n33 = te[10], n34 = te[14];
-    const n41 = te[3], n42 = te[7], n43 = te[11], n44 = te[15];
-    return (
-      n41 * (+n14 * n23 * n32 - n13 * n24 * n32 - n14 * n22 * n33 + n12 * n24 * n33 + n13 * n22 * n34 - n12 * n23 * n34) +
-      n42 * (+n11 * n23 * n34 - n11 * n24 * n33 + n14 * n21 * n33 - n13 * n21 * n34 + n13 * n24 * n31 - n14 * n23 * n31) +
-      n43 * (+n11 * n24 * n32 - n11 * n22 * n34 - n14 * n21 * n32 + n12 * n21 * n34 + n14 * n22 * n31 - n12 * n24 * n31) +
-      n44 * (-n13 * n22 * n31 - n11 * n23 * n32 + n11 * n22 * n33 + n13 * n21 * n32 - n12 * n21 * n33 + n12 * n23 * n31)
+const MathApi = { Vector3: Vec3, Quaternion: Quat, Matrix4: Mat4, Euler };
+
+function assertFiniteUnitQuat(q, label) {
+  const n = Math.hypot(q.x, q.y, q.z, q.w);
+  assert.ok(Number.isFinite(n), `${label}: quaternion contains NaN/Infinity`);
+  assert.ok(Math.abs(n - 1) < 1e-4, `${label}: expected unit quaternion, got |q|=${n}`);
+}
+
+function createMockNode(name, pos = [0, 0, 0], quat = [0, 0, 0, 1], extra = {}) {
+  const node = {
+    name,
+    position: new Vec3(...pos),
+    quaternion: new Quat(...quat),
+    scale: new Vec3(1, 1, 1),
+    visible: true,
+    children: [],
+    userData: {},
+    ...extra,
+    add(...kids) {
+      this.children.push(...kids);
+    },
+    traverse(fn) {
+      fn(this);
+      for (const c of this.children) c.traverse(fn);
+    },
+    getObjectByName(target) {
+      if (this.name === target) return this;
+      for (const c of this.children) {
+        const hit = c.getObjectByName(target);
+        if (hit) return hit;
+      }
+      return null;
+    },
+  };
+  return node;
+}
+
+test("computeWristFromSocket locks palm grip center onto socket position with zero drift", () => {
+  // Arrange
+  const socketPos = new Vec3(0.151, -0.159, -0.683);
+  const socketQuat = new Quat().setFromEuler(new Euler(-0.25, 0.48, -0.32));
+  const outWristPos = new Vec3();
+  const outWristQuat = new Quat();
+
+  // Act
+  computeWristFromSocket(socketPos, socketQuat, false, outWristPos, outWristQuat, MathApi);
+
+  // Assert: wristPos + wristQuat * leftPalmOffset === socketPos
+  const palmOffset = new Vec3(...HAND_INTRINSIC_BASIS.left.palmOffset).applyQuaternion(outWristQuat);
+  const reconstructedPalm = outWristPos.clone().add(palmOffset);
+  assert.ok(reconstructedPalm.distanceTo(socketPos) < 1e-6);
+
+  // Assert: wristQuat * distal === socketQuat * [0, 0, -1]
+  const worldDistal = new Vec3(...HAND_INTRINSIC_BASIS.left.distal).applyQuaternion(outWristQuat);
+  const socketNegZ = new Vec3(0, 0, -1).applyQuaternion(socketQuat);
+  assert.ok(worldDistal.distanceTo(socketNegZ) < 1e-4);
+});
+
+test("solveTwoBoneArmIK reaches target within 0.1mm and guards extreme/degenerate inputs", () => {
+  // Arrange
+  const shoulder = new Vec3(-0.20, -0.25, -0.06);
+  const target = new Vec3(0.10, -0.18, -0.44);
+  const pole = new Vec3(-0.35, -0.75, -0.10);
+  const wristQ = new Quat().setFromEuler(new Euler(0.15, -0.35, 0.22));
+  const restElbowQ = new Quat(0.202, -0.559, 0.292, 0.749).normalize();
+  const restWristQ = new Quat(-0.18, -0.004, -0.111, 0.977).normalize();
+  const outShoulderWorldQ = new Quat();
+  const outElbowWorldQ = new Quat();
+
+  // Act (Happy Path)
+  solveTwoBoneArmIK(
+    {
+      shoulderPos: shoulder,
+      targetPos: target,
+      upperLen: 0.2587,
+      forearmLen: 0.25432,
+      poleHint: pole,
+      wristWorldQuat: wristQ,
+      restElbowLocalQuat: restElbowQ,
+      restWristLocalQuat: restWristQ,
+      outShoulderWorldQuat: outShoulderWorldQ,
+      outElbowWorldQuat: outElbowWorldQ,
+    },
+    MathApi,
+  );
+
+  // Assert exact bone chain lengths & target reach
+  assertFiniteUnitQuat(outShoulderWorldQ, "shoulder happy");
+  assertFiniteUnitQuat(outElbowWorldQ, "elbow happy");
+  const elbowPos = shoulder.clone().add(new Vec3(0, 0, -0.2587).applyQuaternion(outShoulderWorldQ));
+  const wristPos = elbowPos.clone().add(new Vec3(0, 0, -0.25432).applyQuaternion(outElbowWorldQ));
+  assert.ok(wristPos.distanceTo(target) < 1e-4, `Expected exact reach, err=${wristPos.distanceTo(target)}`);
+
+  // Act / Assert (Unhappy Paths: extreme overextension 2.0m & collapsed 0.0001m)
+  for (const extremeTarget of [new Vec3(0, 0, -2.0), shoulder.clone().add(new Vec3(0, 1e-5, -1e-5))]) {
+    solveTwoBoneArmIK(
+      {
+        shoulderPos: shoulder,
+        targetPos: extremeTarget,
+        upperLen: 0.2587,
+        forearmLen: 0.25432,
+        poleHint: pole,
+        wristWorldQuat: wristQ,
+        restElbowLocalQuat: restElbowQ,
+        restWristLocalQuat: restWristQ,
+        outShoulderWorldQuat: outShoulderWorldQ,
+        outElbowWorldQuat: outElbowWorldQ,
+      },
+      MathApi,
     );
+    assertFiniteUnitQuat(outShoulderWorldQ, "shoulder extreme");
+    assertFiniteUnitQuat(outElbowWorldQ, "elbow extreme");
   }
-  invert() {
-    const te = this.elements;
-    const n11 = te[0], n21 = te[1], n31 = te[2], n41 = te[3];
-    const n12 = te[4], n22 = te[5], n32 = te[6], n42 = te[7];
-    const n13 = te[8], n23 = te[9], n33 = te[10], n43 = te[11];
-    const n14 = te[12], n24 = te[13], n34 = te[14], n44 = te[15];
-    const t11 = n23 * n34 * n42 - n24 * n33 * n42 + n24 * n32 * n43 - n22 * n34 * n43 - n23 * n32 * n44 + n22 * n33 * n44;
-    const t12 = n14 * n33 * n42 - n13 * n34 * n42 - n14 * n32 * n43 + n12 * n34 * n43 + n13 * n32 * n44 - n12 * n33 * n44;
-    const t13 = n13 * n24 * n42 - n14 * n23 * n42 + n14 * n22 * n43 - n12 * n24 * n43 - n13 * n22 * n44 + n12 * n23 * n44;
-    const t14 = n14 * n23 * n32 - n13 * n24 * n32 - n14 * n22 * n33 + n12 * n24 * n33 + n13 * n22 * n34 - n12 * n23 * n34;
-    const det = n11 * t11 + n21 * t12 + n31 * t13 + n41 * t14;
-    if (det === 0) return this.identity();
-    const detInv = 1 / det;
-    te[0] = t11 * detInv;
-    te[1] = (n24 * n33 * n41 - n23 * n34 * n41 - n24 * n31 * n43 + n21 * n34 * n43 + n23 * n31 * n44 - n21 * n33 * n44) * detInv;
-    te[2] = (n22 * n34 * n41 - n24 * n32 * n41 + n24 * n31 * n42 - n21 * n34 * n42 - n22 * n31 * n44 + n21 * n32 * n44) * detInv;
-    te[3] = (n23 * n32 * n41 - n22 * n33 * n41 - n23 * n31 * n42 + n21 * n33 * n42 + n22 * n31 * n43 - n21 * n32 * n43) * detInv;
-    te[4] = t12 * detInv;
-    te[5] = (n13 * n34 * n41 - n14 * n33 * n41 + n14 * n31 * n43 - n11 * n34 * n43 - n13 * n31 * n44 + n11 * n33 * n44) * detInv;
-    te[6] = (n14 * n32 * n41 - n12 * n34 * n41 - n14 * n31 * n42 + n11 * n34 * n42 + n12 * n31 * n44 - n11 * n32 * n44) * detInv;
-    te[7] = (n12 * n33 * n41 - n13 * n32 * n41 + n13 * n31 * n42 - n11 * n33 * n42 - n12 * n31 * n43 + n11 * n32 * n43) * detInv;
-    te[8] = t13 * detInv;
-    te[9] = (n14 * n23 * n41 - n13 * n24 * n41 - n14 * n21 * n43 + n11 * n24 * n43 + n13 * n21 * n44 - n11 * n23 * n44) * detInv;
-    te[10] = (n12 * n24 * n41 - n14 * n22 * n41 + n14 * n21 * n42 - n11 * n24 * n42 - n12 * n21 * n44 + n11 * n22 * n44) * detInv;
-    te[11] = (n13 * n22 * n41 - n12 * n23 * n41 - n13 * n21 * n42 + n11 * n23 * n42 + n12 * n21 * n43 - n11 * n22 * n43) * detInv;
-    te[12] = t14 * detInv;
-    te[13] = (n13 * n24 * n31 - n14 * n23 * n31 + n14 * n21 * n33 - n11 * n24 * n33 - n13 * n21 * n34 + n11 * n23 * n34) * detInv;
-    te[14] = (n14 * n22 * n31 - n12 * n24 * n31 - n14 * n21 * n32 + n11 * n24 * n32 + n12 * n21 * n34 - n11 * n22 * n34) * detInv;
-    te[15] = (n12 * n23 * n31 - n13 * n22 * n31 + n13 * n21 * n32 - n11 * n23 * n32 - n12 * n21 * n33 + n11 * n22 * n33) * detInv;
-    return this;
-  }
-}
+});
 
-const MathApi = { Vector3, Quaternion, Matrix4, Euler };
+test("createSkinnedArmsController disables frustum culling, enforces trigger discipline, and handles missing bones", () => {
+  // Arrange: Unhappy path first (null or incomplete skeleton)
+  const emptyCtrl = createSkinnedArmsController(null, MathApi);
+  assert.equal(emptyCtrl.ready, false);
+  assert.doesNotThrow(() => emptyCtrl.update({}));
 
-class MockNode {
-  constructor(name, opts = {}) {
-    this.name = name;
-    this.type = opts.type || "Object3D";
-    this.isSkinnedMesh = Boolean(opts.isSkinnedMesh);
-    this.frustumCulled = opts.frustumCulled !== undefined ? opts.frustumCulled : true;
-    this.visible = true;
-    this.position = new Vector3(...(opts.position || [0, 0, 0]));
-    this.quaternion = new Quaternion(...(opts.quaternion || [0, 0, 0, 1]));
-    this.scale = new Vector3(...(opts.scale || [1, 1, 1]));
-    this.matrix = new Matrix4();
-    this.matrixWorld = new Matrix4();
-    this.matrixAutoUpdate = true;
-    this.parent = null;
-    this.children = [];
-  }
-  add(...nodes) {
-    for (const n of nodes) {
-      n.parent = this;
-      this.children.push(n);
-    }
-    return this;
-  }
-  getObjectByName(name) {
-    if (this.name === name) return this;
-    for (const c of this.children) {
-      const found = c.getObjectByName(name);
-      if (found) return found;
-    }
-    return null;
-  }
-  traverse(fn) {
-    fn(this);
-    for (const c of this.children) c.traverse(fn);
-  }
-  updateMatrix() {
-    this.matrix.compose(this.position, this.quaternion, this.scale);
-  }
-  updateMatrixWorld(force = false) {
-    if (this.matrixAutoUpdate || force) this.updateMatrix();
-    if (this.parent) {
-      this.matrixWorld.multiplyMatrices(this.parent.matrixWorld, this.matrix);
-    } else {
-      this.matrixWorld.copy(this.matrix);
-    }
-    for (const c of this.children) c.updateMatrixWorld(force);
-  }
-  getWorldPosition(target) {
-    return target.setFromMatrixPosition(this.matrixWorld);
-  }
-  getWorldQuaternion(target) {
-    const p = new Vector3();
-    const s = new Vector3();
-    this.matrixWorld.decompose(p, target, s);
-    return target;
-  }
-}
-
-function assertFiniteUnitQuaternion(q, label) {
-  assert.ok(Number.isFinite(q.x) && Number.isFinite(q.y) && Number.isFinite(q.z) && Number.isFinite(q.w), `${label} has non-finite components`);
-  assert.ok(Math.abs(q.length() - 1) < 1e-4, `${label} is not unit length: ${q.length()}`);
-}
-
-function buildMockSkinnedArmsRig() {
-  const gun = new MockNode("gun", { position: [0.155, -0.14, -0.395], quaternion: [0.05, -0.02, 0.01, 0.9985] });
-  const armsRoot = new MockNode("arms_root", {
-    position: [0, 0, 0],
-    quaternion: [0, 1, 0, 0], // rotY = pi
-    scale: [0.01, 0.01, 0.01], // centimeters -> meters
+  // Arrange: Mock full 6-arm-bone + right index chain + SkinnedMesh
+  const root = createMockNode("arms_root");
+  root.scale.set(0.01, 0.01, 0.01);
+  root.quaternion.set(0, 1, 0, 0);
+  const rootJoint = createMockNode("_rootJoint");
+  const skinnedMesh = createMockNode("armmesh_Mat_0", [0, 0, 0], [0, 0, 0, 1], {
+    isSkinnedMesh: true,
+    frustumCulled: true,
   });
-  const rootJoint = new MockNode("_rootJoint");
-  const skinnedMesh = new MockNode("armmesh_Mat_0", { type: "SkinnedMesh", isSkinnedMesh: true, frustumCulled: true });
-
-  const lArm = new MockNode("L_arm_01", { position: [10.03, 12.44, -18.11] });
-  const lElbow = new MockNode("L_elbow_02", { position: [0, 0, -25.8697] });
-  const lWrist = new MockNode("L_wrist_03", { position: [0, 0, -25.4316] });
-
-  const rArm = new MockNode("R_arm_023", { position: [-13.72, 14.86, -18.71] });
-  const rElbow = new MockNode("R_elbow_024", { position: [0, 0, -25.8697] });
-  const rWrist = new MockNode("R_wrist_025", { position: [0, 0, -25.4316] });
-
-  const lThumb1 = new MockNode("L_thumb1_04", { position: [2.5, 0.75, -3.69], quaternion: [0.19, -0.24, -0.53, 0.79] });
-  const lPoint1 = new MockNode("L_point1_08", { position: [2.39, 6.08, -9.08], quaternion: [0.02, -0.06, -0.17, 0.98] });
-  const lMid1 = new MockNode("L_middle1_012", { position: [-0.31, 5.82, -9.12], quaternion: [0.0, 0.0, 0.22, 0.975] });
-  const lMid2 = new MockNode("L_middle2_00", { position: [0, 0, -3.495], quaternion: [-0.32, 0.04, 0.03, 0.946] });
-  const lRing1 = new MockNode("L_ring1_015", { position: [-2.19, 4.23, -8.97], quaternion: [-0.07, -0.02, 0.27, 0.96] });
-  const lPink1 = new MockNode("L_pink1_019", { position: [-3.17, 1.60, -8.69], quaternion: [-0.16, -0.04, 0.43, 0.89] });
-
-  const rThumb1 = new MockNode("R_thumb1_026", { position: [-2.5, 0.75, -3.69], quaternion: [0.28, 0.30, 0.42, 0.81] });
-  const rPoint1 = new MockNode("R_point1_030", { position: [-2.39, 6.08, -9.08], quaternion: [0.0476, 0.0326, -0.0127, 0.9983] });
-  const rPoint2 = new MockNode("R_point2_031", { position: [0, 0, -3.2098], quaternion: [-0.0769, 0.0656, -0.0029, 0.9949] });
-  const rPoint3 = new MockNode("R_point3_032", { position: [0, 0, -2.3491], quaternion: [-0.0884, -0.0629, -0.0056, 0.9941] });
-  const rPoint4 = new MockNode("R_point4_033", { position: [0, 0, -2.0011] });
-  const rMid1 = new MockNode("R_middle1_034", { position: [0.31, 5.82, -9.12], quaternion: [-0.015, 0.02, -0.264, 0.964] });
-  const rRing1 = new MockNode("R_ring1_038", { position: [2.19, 4.23, -8.97], quaternion: [-0.05, 0.046, -0.248, 0.966] });
-  const rPink1 = new MockNode("R_pink1_042", { position: [3.17, 1.60, -8.69], quaternion: [0.008, -0.026, -0.425, 0.905] });
+  const lArm = createMockNode("L_arm_01", [10.03, 12.44, -18.11], [-0.097, 0.868, 0.404, -0.272]);
+  const lElbow = createMockNode("L_elbow_02", [0, 0, -25.87], [0.202, -0.559, 0.292, 0.749]);
+  const lWrist = createMockNode("L_wrist_03", [0, 0, -25.432], [-0.18, -0.004, -0.111, 0.977]);
+  const rArm = createMockNode("R_arm_023", [-13.72, 14.86, -18.71], [-0.008, 0.847, 0.46, 0.267]);
+  const rElbow = createMockNode("R_elbow_024", [0, 0, -25.87], [0.306, 0.543, -0.159, 0.765]);
+  const rWrist = createMockNode("R_wrist_025", [0, 0, -25.432], [-0.078, -0.197, 0.028, 0.977]);
+  const rPoint1 = createMockNode("R_point1_030", [-2.39, 6.08, -9.08], [0.048, 0.033, -0.013, 0.998]);
+  const rPoint2 = createMockNode("R_point2_031", [0, 0, -3.21], [-0.077, 0.066, -0.003, 0.995]);
+  const rPoint3 = createMockNode("R_point3_032", [0, 0, -2.35], [-0.088, -0.063, -0.006, 0.994]);
 
   lArm.add(lElbow);
   lElbow.add(lWrist);
-  lMid1.add(lMid2);
-  lWrist.add(lThumb1, lPoint1, lMid1, lRing1, lPink1);
-
   rArm.add(rElbow);
   rElbow.add(rWrist);
+  rWrist.add(rPoint1);
   rPoint1.add(rPoint2);
   rPoint2.add(rPoint3);
-  rPoint3.add(rPoint4);
-  rWrist.add(rThumb1, rPoint1, rMid1, rRing1, rPink1);
-
   rootJoint.add(lArm, rArm);
-  armsRoot.add(rootJoint, skinnedMesh);
-  gun.add(armsRoot);
-  gun.updateMatrixWorld(true);
+  root.add(rootJoint, skinnedMesh);
 
-  return { gun, armsRoot, rootJoint, skinnedMesh, lArm, lElbow, lWrist, rArm, rElbow, rWrist, rPoint1, rPoint2, rPoint3, rPoint4 };
-}
-
-test("solveTwoBoneArmIK places elbow at L1 and wrist at L2 within < 1e-3m across M416, Pistol, and Sniper poses", () => {
-  // Arrange
-  const L1 = 0.2587;
-  const L2 = 0.2543;
-  const parentWorldQuat = new Quaternion(0, 1, 0, 0); // rotY = pi (_rootJoint under arms_root)
-  const cases = [
-    ["m416.grip", SKINNED_ARM_POSES.m416.leftShoulder, SKINNED_ARM_POSES.m416.grip, SKINNED_ARM_POSES.m416.leftPole],
-    ["m416.mag", SKINNED_ARM_POSES.m416.leftShoulder, SKINNED_ARM_POSES.m416.mag, SKINNED_ARM_POSES.m416.leftPole],
-    ["m416.out", SKINNED_ARM_POSES.m416.leftShoulder, SKINNED_ARM_POSES.m416.out, SKINNED_ARM_POSES.m416.leftPole],
-    ["m416.ch", SKINNED_ARM_POSES.m416.leftShoulder, SKINNED_ARM_POSES.m416.ch, SKINNED_ARM_POSES.m416.leftPole],
-    ["m416.chPulled", SKINNED_ARM_POSES.m416.leftShoulder, SKINNED_ARM_POSES.m416.chPulled, SKINNED_ARM_POSES.m416.leftPole],
-    ["m416.rightGrip", SKINNED_ARM_POSES.m416.rightShoulder, SKINNED_ARM_POSES.m416.rightGrip, SKINNED_ARM_POSES.m416.rightPole],
-    ["pistol.grip", SKINNED_ARM_POSES.pistol.leftShoulder, SKINNED_ARM_POSES.pistol.grip, SKINNED_ARM_POSES.pistol.leftPole],
-    ["pistol.mag", SKINNED_ARM_POSES.pistol.leftShoulder, SKINNED_ARM_POSES.pistol.mag, SKINNED_ARM_POSES.pistol.leftPole],
-    ["pistol.out", SKINNED_ARM_POSES.pistol.leftShoulder, SKINNED_ARM_POSES.pistol.out, SKINNED_ARM_POSES.pistol.leftPole],
-    ["pistol.ch", SKINNED_ARM_POSES.pistol.leftShoulder, SKINNED_ARM_POSES.pistol.ch, SKINNED_ARM_POSES.pistol.leftPole],
-    ["pistol.chPulled", SKINNED_ARM_POSES.pistol.leftShoulder, SKINNED_ARM_POSES.pistol.chPulled, SKINNED_ARM_POSES.pistol.leftPole],
-    ["pistol.rightGrip", SKINNED_ARM_POSES.pistol.rightShoulder, SKINNED_ARM_POSES.pistol.rightGrip, SKINNED_ARM_POSES.pistol.rightPole],
-    ["sniper.grip", SKINNED_ARM_POSES.sniper.leftShoulder, SKINNED_ARM_POSES.sniper.grip, SKINNED_ARM_POSES.sniper.leftPole],
-    ["sniper.mag", SKINNED_ARM_POSES.sniper.leftShoulder, SKINNED_ARM_POSES.sniper.mag, SKINNED_ARM_POSES.sniper.leftPole],
-    ["sniper.out", SKINNED_ARM_POSES.sniper.leftShoulder, SKINNED_ARM_POSES.sniper.out, SKINNED_ARM_POSES.sniper.leftPole],
-    ["sniper.ch", SKINNED_ARM_POSES.sniper.leftShoulder, SKINNED_ARM_POSES.sniper.ch, SKINNED_ARM_POSES.sniper.leftPole],
-    ["sniper.chPulled", SKINNED_ARM_POSES.sniper.leftShoulder, SKINNED_ARM_POSES.sniper.chPulled, SKINNED_ARM_POSES.sniper.leftPole],
-    ["sniper.rightGrip", SKINNED_ARM_POSES.sniper.rightShoulder, SKINNED_ARM_POSES.sniper.rightGrip, SKINNED_ARM_POSES.sniper.rightPole],
-  ];
-
-  for (const [label, shArr, pose, poleArr] of cases) {
-    const shoulderPos = new Vector3(...shArr);
-    const targetPos = new Vector3(...pose.p);
-    const poleHint = new Vector3(...poleArr);
-    const wristWorldQuat = new Quaternion(...pose.q);
-    const outShoulderQuat = new Quaternion();
-    const outElbowQuat = new Quaternion();
-    const outWristQuat = new Quaternion();
-
-    // Act
-    solveTwoBoneArmIK(
-      {
-        shoulderPos,
-        targetPos,
-        upperLen: L1,
-        forearmLen: L2,
-        poleHint,
-        wristWorldQuat,
-        parentWorldQuat,
-        upperWorldMatInv: null,
-        outShoulderQuat,
-        outElbowQuat,
-        outWristQuat,
-      },
-      MathApi,
-    );
-
-    // Assert forward kinematics along local -Z
-    assertFiniteUnitQuaternion(outShoulderQuat, `${label}.outShoulderQuat`);
-    assertFiniteUnitQuaternion(outElbowQuat, `${label}.outElbowQuat`);
-    assertFiniteUnitQuaternion(outWristQuat, `${label}.outWristQuat`);
-
-    const shoulderWorldQ = parentWorldQuat.clone().multiply(outShoulderQuat);
-    const elbowPos = shoulderPos.clone().add(new Vector3(0, 0, -L1).applyQuaternion(shoulderWorldQ));
-    const elbowWorldQ = shoulderWorldQ.clone().multiply(outElbowQuat);
-    const wristPos = elbowPos.clone().add(new Vector3(0, 0, -L2).applyQuaternion(elbowWorldQ));
-    const finalWristQ = elbowWorldQ.clone().multiply(outWristQuat);
-
-    assert.ok(Math.abs(elbowPos.distanceTo(shoulderPos) - L1) < 1e-5, `${label} shoulder-elbow distance mismatch`);
-    assert.ok(Math.abs(wristPos.distanceTo(elbowPos) - L2) < 1e-5, `${label} elbow-wrist distance mismatch`);
-    assert.ok(wristPos.distanceTo(targetPos) < 1e-3, `${label} wrist target miss: ${wristPos.distanceTo(targetPos)}`);
-    assert.ok(finalWristQ.angleTo(wristWorldQuat) < 1e-4, `${label} wrist orientation mismatch`);
-  }
-});
-
-test("solveTwoBoneArmIK handles overextended, collapsed, and collinear pole targets without NaN", () => {
-  // Arrange
-  const L1 = 0.2587;
-  const L2 = 0.2543;
-  const shoulderPos = new Vector3(-0.22, -0.14, 0.34);
-  const parentWorldQuat = new Quaternion(0, 0, 0, 1);
-  const wristWorldQuat = new Quaternion(0, 0, 0, 1);
-
-  const edgeTargets = [
-    { name: "overextended", targetPos: shoulderPos.clone().add(new Vector3(0, 0, -1.2)), poleHint: new Vector3(-0.48, -0.78, 0.12) },
-    { name: "collapsed_1mm", targetPos: shoulderPos.clone().add(new Vector3(0, 0, -0.001)), poleHint: new Vector3(0, -1, 0) },
-    { name: "zero_delta", targetPos: shoulderPos.clone(), poleHint: new Vector3(0, 0, 0) },
-    { name: "collinear_pole", targetPos: shoulderPos.clone().add(new Vector3(0, 0, -0.35)), poleHint: new Vector3(0, 0, -1) },
-  ];
-
-  for (const tc of edgeTargets) {
-    const outShoulderQuat = new Quaternion();
-    const outElbowQuat = new Quaternion();
-    const outWristQuat = new Quaternion();
-
-    // Act
-    solveTwoBoneArmIK(
-      {
-        shoulderPos,
-        targetPos: tc.targetPos,
-        upperLen: L1,
-        forearmLen: L2,
-        poleHint: tc.poleHint,
-        wristWorldQuat,
-        parentWorldQuat,
-        upperWorldMatInv: null,
-        outShoulderQuat,
-        outElbowQuat,
-        outWristQuat,
-      },
-      MathApi,
-    );
-
-    // Assert
-    assertFiniteUnitQuaternion(outShoulderQuat, `${tc.name}.outShoulderQuat`);
-    assertFiniteUnitQuaternion(outElbowQuat, `${tc.name}.outElbowQuat`);
-    assertFiniteUnitQuaternion(outWristQuat, `${tc.name}.outWristQuat`);
-  }
-});
-
-test("createSkinnedArmsController converts arms_root cm/rotY space, disables frustumCulled, curls trigger finger, and handles invalid roots safely", () => {
-  // Arrange (Happy Path)
-  const rig = buildMockSkinnedArmsRig();
-  const ctrl = createSkinnedArmsController(rig.armsRoot, MathApi);
-
+  // Act
+  const ctrl = createSkinnedArmsController(root, MathApi);
   assert.equal(ctrl.ready, true);
-  assert.equal(rig.skinnedMesh.frustumCulled, false);
-  const summary = ctrl.getBoneSummary();
-  assert.ok(summary && summary.coreBones.length === 6);
+  assert.equal(skinnedMesh.frustumCulled, false);
 
-  const gunLeftTarget = new Vector3(...SKINNED_ARM_POSES.m416.grip.p);
-  const gunLeftQuat = new Quaternion(...SKINNED_ARM_POSES.m416.grip.q);
-  const gunRightTarget = new Vector3(...SKINNED_ARM_POSES.m416.rightGrip.p);
-  const gunRightQuat = new Quaternion(...SKINNED_ARM_POSES.m416.rightGrip.q);
+  const leftSocket = { p: new Vec3(0.15, -0.16, -0.66), q: new Quat() };
+  const rightSocket = { p: new Vec3(0.18, -0.21, -0.36), q: new Quat() };
 
-  // Act & Assert across triggerPull 0 -> 0.5 -> 1.0
-  const tipLocalY = [];
-  const p1Angles = [];
-  const p2Angles = [];
-  const restP1 = rig.rPoint1.quaternion.clone();
-  const restP2 = rig.rPoint2.quaternion.clone();
+  ctrl.update({
+    weaponId: "m416",
+    leftSocketPos: leftSocket.p,
+    leftSocketQuat: leftSocket.q,
+    rightSocketPos: rightSocket.p,
+    rightSocketQuat: rightSocket.q,
+    triggerPull: 0,
+    ads: 0,
+    hideArms: false,
+  });
+  const idlePoint1Q = rPoint1.quaternion.clone();
+  const idlePoint2Q = rPoint2.quaternion.clone();
 
-  for (const pull of [0, 0.5, 1.0]) {
-    ctrl.update({
-      weaponId: "m416",
-      leftWristPos: gunLeftTarget,
-      leftWristQuat: gunLeftQuat,
-      rightWristPos: gunRightTarget,
-      rightWristQuat: gunRightQuat,
-      triggerPull: pull,
-      reloadProgress: 0,
-      isTactical: false,
-      isSprinting: false,
-      ads: 0,
-      hideArms: false,
+  ctrl.update({
+    weaponId: "m416",
+    leftSocketPos: leftSocket.p,
+    leftSocketQuat: leftSocket.q,
+    rightSocketPos: rightSocket.p,
+    rightSocketQuat: rightSocket.q,
+    triggerPull: 1,
+    ads: 0,
+    hideArms: false,
+  });
+
+  // Assert: firing pulls index finger onto trigger (distinct inward curl from idle trigger-discipline pose)
+  const dot1 = Math.abs(
+    idlePoint1Q.x * rPoint1.quaternion.x +
+      idlePoint1Q.y * rPoint1.quaternion.y +
+      idlePoint1Q.z * rPoint1.quaternion.z +
+      idlePoint1Q.w * rPoint1.quaternion.w,
+  );
+  const dot2 = Math.abs(
+    idlePoint2Q.x * rPoint2.quaternion.x +
+      idlePoint2Q.y * rPoint2.quaternion.y +
+      idlePoint2Q.z * rPoint2.quaternion.z +
+      idlePoint2Q.w * rPoint2.quaternion.w,
+  );
+  assert.ok(dot1 < 0.992, `Expected R_point1_030 to swing onto trigger, dot=${dot1}`);
+  assert.ok(dot2 < 0.985, `Expected R_point2_031 to flex onto trigger, dot=${dot2}`);
+
+  // Assert: clavicle protraction keeps palm locked onto socket even at 0.66m forward reach!
+  assertFiniteUnitQuat(lArm.quaternion, "lArm");
+  assertFiniteUnitQuat(lElbow.quaternion, "lElbow");
+  assertFiniteUnitQuat(lWrist.quaternion, "lWrist");
+});
+
+test("viewmodelPointToWorld maps viewmodel NDC coordinates cleanly into world camera rays", () => {
+  // Arrange
+  const vmLocalPt = new Vec3(0.16, -0.12, -0.80);
+  const worldCamPos = new Vec3(2, 1.7, -5);
+  const worldCamQuat = new Quat();
+  const outWorld = new Vec3();
+
+  // Act: wider world FOV (80 deg) vs narrower viewmodel FOV (60 deg) scales X/Y proportionally
+  viewmodelPointToWorld(vmLocalPt, 60, 80, worldCamPos, worldCamQuat, outWorld, MathApi);
+
+  // Assert
+  const expectedScale = Math.tan((80 * Math.PI) / 360) / Math.tan((60 * Math.PI) / 360);
+  assert.ok(Math.abs(outWorld.x - (2 + 0.16 * expectedScale)) < 1e-6);
+  assert.ok(Math.abs(outWorld.y - (1.7 - 0.12 * expectedScale)) < 1e-6);
+  assert.ok(Math.abs(outWorld.z - (-5 - 0.80)) < 1e-6);
+});
+
+test("Real built m416.glb + fps_arms.glb sockets enforce thumb-forward support & trigger discipline", () => {
+  // Arrange: parse built GLB scene graphs directly from model/dist/
+  function loadGlbRoot(glbPath) {
+    const raw = fs.readFileSync(glbPath);
+    const jsonLen = raw.readUInt32LE(12);
+    const gltf = JSON.parse(raw.subarray(20, 20 + jsonLen).toString("utf8"));
+    const objs = gltf.nodes.map((n, i) => {
+      const node = createMockNode(n.name || `node_${i}`, n.translation || [0, 0, 0], n.rotation || [0, 0, 0, 1]);
+      if (n.scale) node.scale.set(...n.scale);
+      if (n.matrix) {
+        node.position.set(n.matrix[12], n.matrix[13], n.matrix[14]);
+        const sx = Math.hypot(n.matrix[0], n.matrix[1], n.matrix[2]) || 1;
+        node.scale.set(sx, sx, sx);
+        node.quaternion.setFromRotationMatrix({
+          elements: [
+            n.matrix[0] / sx, n.matrix[1] / sx, n.matrix[2] / sx, 0,
+            n.matrix[4] / sx, n.matrix[5] / sx, n.matrix[6] / sx, 0,
+            n.matrix[8] / sx, n.matrix[9] / sx, n.matrix[10] / sx, 0,
+            0, 0, 0, 1,
+          ],
+        });
+      }
+      node.parent = null;
+      return node;
     });
-
-    // Convert gun-space wrist target to world space via rig.gun.matrixWorld and compare against solved bone world pos/quat
-    const expectedLWorld = gunLeftTarget.clone().applyMatrix4(rig.gun.matrixWorld);
-    const expectedRWorld = gunRightTarget.clone().applyMatrix4(rig.gun.matrixWorld);
-    const gunWorldQuat = rig.gun.getWorldQuaternion(new Quaternion());
-    const expectedLWorldQ = gunWorldQuat.clone().multiply(gunLeftQuat).normalize();
-    const expectedRWorldQ = gunWorldQuat.clone().multiply(gunRightQuat).normalize();
-    const actualLWorld = rig.lWrist.getWorldPosition(new Vector3());
-    const actualRWorld = rig.rWrist.getWorldPosition(new Vector3());
-    const actualLWorldQ = rig.lWrist.getWorldQuaternion(new Quaternion());
-    const actualRWorldQ = rig.rWrist.getWorldQuaternion(new Quaternion());
-
-    assert.ok(actualLWorld.distanceTo(expectedLWorld) < 1e-3, `L_wrist world mismatch: ${actualLWorld.distanceTo(expectedLWorld)}`);
-    assert.ok(actualRWorld.distanceTo(expectedRWorld) < 1e-3, `R_wrist world mismatch: ${actualRWorld.distanceTo(expectedRWorld)}`);
-    assert.ok(actualLWorldQ.angleTo(expectedLWorldQ) < 1e-4, `L_wrist world quat mismatch: ${actualLWorldQ.angleTo(expectedLWorldQ)}`);
-    assert.ok(actualRWorldQ.angleTo(expectedRWorldQ) < 1e-4, `R_wrist world quat mismatch: ${actualRWorldQ.angleTo(expectedRWorldQ)}`);
-
-    p1Angles.push(restP1.angleTo(rig.rPoint1.quaternion));
-    p2Angles.push(restP2.angleTo(rig.rPoint2.quaternion));
-
-    // Fingertip position in R_wrist local frame moves inward toward palm (-Y) on curl
-    const invWristWorld = rig.rWrist.matrixWorld.clone().invert();
-    const tipInWrist = rig.rPoint4.getWorldPosition(new Vector3()).applyMatrix4(invWristWorld);
-    tipLocalY.push(tipInWrist.y);
+    gltf.nodes.forEach((n, i) =>
+      (n.children || []).forEach((c) => {
+        objs[i].children.push(objs[c]);
+        objs[c].parent = objs[i];
+      }),
+    );
+    return objs[gltf.scenes[0].nodes[0]];
   }
 
-  assert.ok(p1Angles[1] > p1Angles[0] && p1Angles[2] > p1Angles[1], `R_point1_030 curl not strictly increasing: ${p1Angles}`);
-  assert.ok(p2Angles[1] > p2Angles[0] && p2Angles[2] > p2Angles[1], `R_point2_031 curl not strictly increasing: ${p2Angles}`);
-  assert.ok(tipLocalY[1] < tipLocalY[0] && tipLocalY[2] < tipLocalY[1], `Index fingertip did not flex toward palm (-Y): ${tipLocalY}`);
-
-  // Visibility toggle
-  ctrl.update({ hideArms: true });
-  assert.equal(rig.armsRoot.visible, false);
-  ctrl.update({ hideArms: false });
-  assert.equal(rig.armsRoot.visible, true);
-
-  // Moved camera parent + preset reload fallback without explicit wrist targets
-  const cam = new MockNode("cam", { position: [12, 1.72, -18], quaternion: [0.05, 0.35, -0.02, 0.935] });
-  cam.quaternion.normalize();
-  cam.add(rig.gun);
-  ctrl.update({ weaponId: "pistol", reloadProgress: 0.48, triggerPull: 0.25, hideArms: false });
-  const camGunWorldQuat = rig.gun.getWorldQuaternion(new Quaternion());
-  const expectedPistolOutWorld = new Vector3(...SKINNED_ARM_POSES.pistol.out.p).applyMatrix4(rig.gun.matrixWorld);
-  const expectedPistolOutWorldQ = camGunWorldQuat.clone().multiply(new Quaternion(...SKINNED_ARM_POSES.pistol.out.q)).normalize();
-  const expectedPistolRWorldQ = camGunWorldQuat.clone().multiply(new Quaternion(...SKINNED_ARM_POSES.pistol.rightGrip.q)).normalize();
-  const actualPistolOutWorld = rig.lWrist.getWorldPosition(new Vector3());
-  const actualPistolOutWorldQ = rig.lWrist.getWorldQuaternion(new Quaternion());
-  const actualPistolRWorldQ = rig.rWrist.getWorldQuaternion(new Quaternion());
-  assert.ok(actualPistolOutWorld.distanceTo(expectedPistolOutWorld) < 1e-3, `Cam-parented pistol.out mismatch: ${actualPistolOutWorld.distanceTo(expectedPistolOutWorld)}`);
-  assert.ok(actualPistolOutWorldQ.angleTo(expectedPistolOutWorldQ) < 1e-4, `Cam-parented pistol.out quat mismatch: ${actualPistolOutWorldQ.angleTo(expectedPistolOutWorldQ)}`);
-  assert.ok(actualPistolRWorldQ.angleTo(expectedPistolRWorldQ) < 1e-4, `Cam-parented pistol rightGrip quat mismatch: ${actualPistolRWorldQ.angleTo(expectedPistolRWorldQ)}`);
-
-  // Tactical reload continuity across 0.72 -> 0.735 -> 0.75 -> 0.86 -> 0.98 (must return smoothly mag -> grip without jumping toward ch)
-  const magWorld = new Vector3(...SKINNED_ARM_POSES.m416.mag.p).applyMatrix4(rig.gun.matrixWorld);
-  const gripWorld = new Vector3(...SKINNED_ARM_POSES.m416.grip.p).applyMatrix4(rig.gun.matrixWorld);
-  const chWorld = new Vector3(...SKINNED_ARM_POSES.m416.ch.p).applyMatrix4(rig.gun.matrixWorld);
-  const magToGripDist = magWorld.distanceTo(gripWorld);
-  const tacSteps = [0.72, 0.735, 0.75, 0.86, 0.98];
-  const tacPositions = [];
-  for (const rl of tacSteps) {
-    ctrl.update({ weaponId: "m416", reloadProgress: rl, isTactical: true, hideArms: false });
-    tacPositions.push(rig.lWrist.getWorldPosition(new Vector3()));
-  }
-  assert.ok(tacPositions[0].distanceTo(magWorld) < 1e-3, `tactical rl=0.72 should sit at mag`);
-  assert.ok(tacPositions[4].distanceTo(gripWorld) < 1e-3, `tactical rl=0.98 should finish at grip`);
-  for (let i = 1; i < tacPositions.length; i++) {
-    const prevDistToGrip = tacPositions[i - 1].distanceTo(gripWorld);
-    const currDistToGrip = tacPositions[i].distanceTo(gripWorld);
-    assert.ok(currDistToGrip < prevDistToGrip, `tactical reload did not advance monotonically toward grip between ${tacSteps[i - 1]} and ${tacSteps[i]} (${prevDistToGrip} -> ${currDistToGrip})`);
-    // Must lie cleanly along the mag->grip segment rather than straying toward ch
-    const segSum = tacPositions[i].distanceTo(magWorld) + currDistToGrip;
-    assert.ok(Math.abs(segSum - magToGripDist) < 1e-4, `tactical rl=${tacSteps[i]} strayed off mag->grip line (toward ch=${tacPositions[i].distanceTo(chWorld)})`);
+  function evalWorldTRS(node) {
+    const chain = [];
+    for (let cur = node; cur; cur = cur.parent) chain.push(cur);
+    chain.reverse();
+    const p = new Vec3(0, 0, 0);
+    const q = new Quat(0, 0, 0, 1);
+    let s = 1;
+    for (const n of chain) {
+      p.add(n.position.clone().multiplyScalar(s).applyQuaternion(q));
+      q.multiplyQuaternions(q.clone(), n.quaternion);
+      s *= n.scale.x;
+    }
+    return { p, q };
   }
 
-  // Stale ancestor matrixWorld at construction time must still measure true meter lengths via updateTopMatrixWorld
-  const staleRig = buildMockSkinnedArmsRig();
-  const staleCam = new MockNode("stale_cam", { scale: [5, 5, 5] });
-  staleCam.add(staleRig.gun);
-  staleCam.updateMatrixWorld(true);
-  staleCam.scale.set(1, 1, 1); // Mutate scale without refreshing matrixWorld before controller init
-  const staleCtrl = createSkinnedArmsController(staleRig.armsRoot, MathApi);
-  assert.equal(staleCtrl.ready, true);
-  const staleSummary = staleCtrl.getBoneSummary();
-  assert.ok(Math.abs(staleSummary.upperLen - 0.2587) < 1e-4, `stale ancestor upperLen mismatch: ${staleSummary.upperLen}`);
-  assert.ok(Math.abs(staleSummary.forearmLen - 0.2543) < 1e-4, `stale ancestor forearmLen mismatch: ${staleSummary.forearmLen}`);
-  staleCtrl.update({ weaponId: "m416" });
-  const staleExpectedLW = new Vector3(...SKINNED_ARM_POSES.m416.grip.p).applyMatrix4(staleRig.gun.matrixWorld);
-  assert.ok(staleRig.lWrist.getWorldPosition(new Vector3()).distanceTo(staleExpectedLW) < 1e-3, "staleCtrl.update failed to reach grip");
+  const m416Root = loadGlbRoot(path.join(DIST_DIR, "m416.glb"));
+  const armsRoot = loadGlbRoot(path.join(DIST_DIR, "fps_arms.glb"));
+  const ctrl = createSkinnedArmsController(armsRoot, MathApi);
+  assert.equal(ctrl.ready, true);
 
-  // Arrange / Act / Assert (Unhappy Paths: null root and missing core arm bone)
-  const nullCtrl = createSkinnedArmsController(null, MathApi);
-  assert.equal(nullCtrl.ready, false);
-  assert.equal(nullCtrl.getBoneSummary(), null);
-  assert.doesNotThrow(() => nullCtrl.update({ weaponId: "m416", triggerPull: 1 }));
+  const sockHg = evalWorldTRS(m416Root.getObjectByName("socket_handguard"));
+  const sockGrip = evalWorldTRS(m416Root.getObjectByName("socket_grip"));
 
-  const incompleteRoot = new MockNode("arms_root");
-  incompleteRoot.add(new MockNode("L_arm_01"));
-  const badCtrl = createSkinnedArmsController(incompleteRoot, MathApi);
-  assert.equal(badCtrl.ready, false);
-  assert.equal(badCtrl.getBoneSummary(), null);
-  assert.doesNotThrow(() => badCtrl.update({ weaponId: "pistol" }));
+  // Act 1: Idle pose (triggerPull = 0)
+  ctrl.update({
+    weaponId: "m416",
+    leftSocketPos: sockHg.p,
+    leftSocketQuat: sockHg.q,
+    rightSocketPos: sockGrip.p,
+    rightSocketQuat: sockGrip.q,
+    triggerPull: 0,
+    ads: 0,
+  });
+
+  const lThumb1 = evalWorldTRS(armsRoot.getObjectByName("L_thumb1_04")).p;
+  const lThumb4 = evalWorldTRS(armsRoot.getObjectByName("L_thumb4_07")).p;
+  const lMid4 = evalWorldTRS(armsRoot.getObjectByName("L_middle4_014")).p;
+  const rMid1 = evalWorldTRS(armsRoot.getObjectByName("R_middle1_034")).p;
+  const rIdx4Idle = evalWorldTRS(armsRoot.getObjectByName("R_point4_033")).p;
+
+  // Assert 1: Left thumb points toward muzzle (-Z) & stays strictly below top Picatinny rail (y < 0.045)
+  assert.ok(lThumb4.z < lThumb1.z - 0.06, `Left thumb must point forward (-Z), dz=${lThumb4.z - lThumb1.z}`);
+  assert.ok(lThumb4.y < 0.042, `Left thumb must stay below top rail (0.056m), got y=${lThumb4.y}`);
+  assert.ok(lMid4.y < 0.02, `Left fingers must cradle underneath handguard, got y=${lMid4.y}`);
+
+  // Assert 2: Right hand wraps pistol grip (z > 0.02, NOT magwell z=-0.064) & idle index stays outside trigger guard
+  assert.ok(rMid1.z > 0.025, `Right hand must sit on pistol grip, not magwell, got z=${rMid1.z}`);
+  assert.ok(rIdx4Idle.x > 0.015, `Idle right index tip must stay outside right side of trigger guard, got x=${rIdx4Idle.x}`);
+
+  // Act 2: Firing pose (triggerPull = 1)
+  ctrl.update({
+    weaponId: "m416",
+    leftSocketPos: sockHg.p,
+    leftSocketQuat: sockHg.q,
+    rightSocketPos: sockGrip.p,
+    rightSocketQuat: sockGrip.q,
+    triggerPull: 1,
+    ads: 0,
+  });
+  const rIdx2Fire = evalWorldTRS(armsRoot.getObjectByName("R_point2_031")).p;
+  const rIdx4Fire = evalWorldTRS(armsRoot.getObjectByName("R_point4_033")).p;
+
+  // Assert 3: Firing swings index finger inward across trigger blade (x=0)
+  assert.ok(rIdx4Fire.x < 0.002 && rIdx2Fire.x > -0.005, "Index finger must cross trigger blade at x≈0 when firing");
 });

@@ -6,8 +6,12 @@
  * - TeamColor shared PBR materials (A=#2F80FF ▲, B=#FF4D2E ●, FFA=#8A8F98), teammate nameplates & Radar
  */
 
-import { createSkinnedArmsController, SKINNED_ARM_POSES } from "/js/arm_rig.js";
 import { MSG, sanitizeText } from "/js/protocol.js";
+import {
+  buildSocketPose,
+  createSkinnedArmsController,
+  viewmodelPointToWorld,
+} from "/js/arm_rig.js";
 import {
   BASE_MOVE_SPEED,
   FLAG,
@@ -75,10 +79,21 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
   const cam = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.03, 200);
   cam.rotation.order = "YXZ";
   S.add(cam);
+
+  // Dedicated Viewmodel Camera (FOV 62 -> 50, near = 0.01) eliminates wide-FOV forearm stretching & near-plane clipping
+  const VM_HIP_FOV = 62;
+  const VM_ADS_FOV = 50;
+  const vmCam = new THREE.PerspectiveCamera(VM_HIP_FOV, innerWidth / innerHeight, 0.01, 6.0);
+  vmCam.rotation.order = "YXZ";
+  vmCam.layers.set(VIEW_LAYER);
+  S.add(vmCam);
+
   addEventListener("resize", () => {
     R.setSize(innerWidth, innerHeight);
     cam.aspect = innerWidth / innerHeight;
     cam.updateProjectionMatrix();
+    vmCam.aspect = innerWidth / innerHeight;
+    vmCam.updateProjectionMatrix();
   });
 
   // ---------- Lights & Lamp halos ----------
@@ -551,7 +566,15 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
   vmKey.position.set(-0.35, 0.55, 0.25);
   const vmFill = new THREE.PointLight(0xffa658, 0.34, 2.0, 1.2);
   vmFill.position.set(0.45, -0.2, -0.1);
-  cam.add(vmKey, vmFill, gun);
+  vmCam.add(vmKey, vmFill, gun);
+
+  const _vmScratchPt = new Vec();
+  function getViewmodelWorldPoint(node, outVec) {
+    vmCam.updateMatrixWorld(true);
+    node.getWorldPosition(_vmScratchPt);
+    vmCam.worldToLocal(_vmScratchPt);
+    return viewmodelPointToWorld(_vmScratchPt, vmCam.fov, cam.fov, cam.position, cam.quaternion, outVec, THREE);
+  }
 
   function decodeBase64ToArrayBuffer(b64) {
     const bin = atob(b64), bytes = new Uint8Array(bin.length);
@@ -559,7 +582,7 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     return bytes.buffer;
   }
 
-  function hydratePbrMaterial(src, objName = "", envScale = 1.45) {
+  function hydratePbrMaterial(src, objName = "", envScale = 1.45, isSkinned = false) {
     const phys = (src.userData && src.userData.pbrPhysical) || {};
     if (phys.unlit) {
       const col = src.emissive && src.emissive.getHex() ? src.emissive : src.color;
@@ -570,32 +593,37 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
         fog: false,
         toneMapped: false,
         depthWrite: !isOverlayReticle,
+        skinning: Boolean(src.skinning || isSkinned),
       });
     }
     const isGlass = phys.transmission > 0 || src.transparent;
     const isSkin = src.name === "Arms_WetSkin" || src.name === "Soldier_Skin";
-    const isGlove = src.name === "Arms_TacticalGlove" || src.name === "Soldier_Glove";
-    const isArmsSkinGlove = src.name === "material" || objName.toLowerCase().includes("armmesh");
+    const isGlove =
+      src.name === "Arms_TacticalGlove" ||
+      src.name === "Arms_SkinnedGlove" ||
+      src.name === "material" ||
+      src.name === "Soldier_Glove" ||
+      objName.toLowerCase().includes("armmesh");
     const mat = new THREE.MeshPhysicalMaterial({
       color: src.color,
       map: src.map || null,
+      aoMap: src.aoMap || null,
+      aoMapIntensity: src.aoMapIntensity ?? 0.42,
       metalness: src.metalness,
       roughness: src.roughness,
       roughnessMap: src.roughnessMap || null,
       metalnessMap: src.metalnessMap || null,
       normalMap: src.normalMap || null,
       normalScale: src.normalScale ? src.normalScale.clone() : new THREE.Vector2(1, 1),
-      aoMap: src.aoMap || null,
-      aoMapIntensity: src.aoMapIntensity ?? 0.45,
       envMap,
-      envMapIntensity: isGlass ? 1.8 : isArmsSkinGlove ? 0.62 : isSkin ? 0.45 : isGlove ? 0.55 : envScale,
+      envMapIntensity: isGlass ? 1.8 : isSkin ? 0.45 : isGlove ? 0.58 : envScale,
       clearcoat: phys.clearcoat || 0,
       clearcoatRoughness: phys.clearcoatRoughness || 0,
-      skinning: Boolean(src.skinning),
       transparent: isGlass,
       opacity: isGlass ? 0.26 : 1,
       depthWrite: !isGlass,
       side: src.side,
+      skinning: Boolean(src.skinning || isSkinned),
     });
     if (phys.sheenColor !== undefined) mat.sheen = new THREE.Color(phys.sheenColor);
     if (objName === "watch_dial" && src.map) {
@@ -663,9 +691,71 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     new THREE.MeshStandardMaterial({ color: 0x20252a, metalness: 0.65, roughness: 0.35 }),
   );
   sniperMagMesh.position.set(0, -0.045, -0.18);
-  sniperViewGroup.add(sniperChassis, sniperBarrel, sniperScopeTube, sniperMagMesh);
+  function makeSocketNode(name, pos, distal, palmNormal, isRightHand) {
+    const pose = buildSocketPose(pos, distal, palmNormal, isRightHand, THREE);
+    const node = new THREE.Object3D();
+    node.name = name;
+    node.position.copy(pose.p);
+    node.quaternion.copy(pose.q);
+    return node;
+  }
+
+  const sniperSockHandguard = makeSocketNode(
+    "socket_handguard",
+    [-0.026, -0.028, -0.34],
+    [-0.20, -0.12, -0.972],
+    [0.50, 0.86, -0.04],
+    false,
+  );
+  const sniperSockGrip = makeSocketNode(
+    "socket_grip",
+    [0.024, -0.048, 0.058],
+    [0.18, -0.04, -0.983],
+    [-0.96, 0.08, 0.26],
+    true,
+  );
+  const sniperSockMag = makeSocketNode(
+    "socket_mag",
+    [-0.016, -0.036, 0.0],
+    [0.54, -0.18, -0.82],
+    [0.80, 0.24, 0.55],
+    false,
+  );
+  const sniperSockBolt = makeSocketNode(
+    "socket_charging",
+    [-0.024, 0.036, 0.04],
+    [0.66, 0.08, -0.74],
+    [0.24, -0.94, 0.23],
+    false,
+  );
+  sniperMagMesh.add(sniperSockMag);
+  sniperViewGroup.add(sniperChassis, sniperBarrel, sniperScopeTube, sniperMagMesh, sniperSockHandguard, sniperSockGrip, sniperSockBolt);
   sniperViewGroup.traverse((o) => o.layers.set(VIEW_LAYER));
   sniperViewGroup.visible = false;
+
+  // Fallback attachment sockets before async GLB models finish parsing
+  const weaponSockets = {
+    m416: {
+      handguard: makeSocketNode("socket_handguard", [-0.030, -0.026, -0.252], [-0.22, -0.14, -0.965], [0.52, 0.85, -0.05], false),
+      grip: makeSocketNode("socket_grip", [0.024, -0.058, 0.082], [0.18, -0.04, -0.983], [-0.96, 0.08, 0.26], true),
+      mag: makeSocketNode("socket_mag", [-0.016, -0.106, -0.072], [0.56, -0.18, -0.81], [0.82, 0.22, 0.53], false),
+      bolt: makeSocketNode("socket_charging", [-0.026, 0.035, 0.130], [0.68, 0.08, -0.73], [0.24, -0.94, 0.23], false),
+    },
+    pistol: {
+      handguard: makeSocketNode("socket_handguard", [-0.024, -0.038, 0.024], [-0.16, -0.12, -0.980], [0.90, 0.34, 0.27], false),
+      grip: makeSocketNode("socket_grip", [0.020, -0.036, 0.056], [0.16, -0.04, -0.986], [-0.96, 0.08, 0.26], true),
+      mag: makeSocketNode("socket_mag", [-0.014, -0.072, 0.040], [0.54, -0.18, -0.82], [0.78, 0.32, 0.54], false),
+      bolt: makeSocketNode("socket_slide", [-0.015, 0.048, 0.022], [0.66, 0.06, -0.75], [0.35, -0.90, 0.26], false),
+    },
+    sniper: {
+      handguard: sniperSockHandguard,
+      grip: sniperSockGrip,
+      mag: sniperSockMag,
+      bolt: sniperSockBolt,
+    },
+  };
+  m416ViewGroup.add(weaponSockets.m416.handguard, weaponSockets.m416.grip, weaponSockets.m416.mag, weaponSockets.m416.bolt);
+  pistolPivot.add(weaponSockets.pistol.handguard, weaponSockets.pistol.grip, weaponSockets.pistol.mag, weaponSockets.pistol.bolt);
 
   gun.add(m416ViewGroup, pistolViewGroup, sniperViewGroup);
 
@@ -718,6 +808,7 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
 
   const CH_REST_Z = 0.118, MAG_REST = new Vec(0, -0.042, -0.064);
   let armsCtrl = null;
+  let armsRoot = null;
 
   loadModelAsset("m416", "/model/dist/m416.glb", (gltf) => {
     const root = gltf.scene, matCache = new Map();
@@ -737,12 +828,17 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     reticle = root.getObjectByName("reticle_group") || reticle;
     laserLens = root.getObjectByName("laser_lens") || laserLens;
     mag = root.getObjectByName("mag_group") || mag;
+    weaponSockets.m416.handguard = root.getObjectByName("socket_handguard") || weaponSockets.m416.handguard;
+    weaponSockets.m416.grip = root.getObjectByName("socket_grip") || weaponSockets.m416.grip;
+    weaponSockets.m416.mag = root.getObjectByName("socket_mag") || weaponSockets.m416.mag;
+    weaponSockets.m416.bolt = root.getObjectByName("socket_charging") || weaponSockets.m416.bolt;
     const muzNode = root.getObjectByName("muzzle_anchor"), lasNode = root.getObjectByName("laser_origin");
     if (muzNode && SLOT_TO_WEAPON_ID[activeSlot] === "m416") muz.position.copy(muzNode.position);
     if (lasNode) laserOrigin.position.copy(lasNode.position);
     m416ViewGroup.add(root);
     applyViewmodelWeapon(SLOT_TO_WEAPON_ID[activeSlot] || "m416");
     upgradeRemoteWeapons();
+    gunAnim(0, 0);
     window.__m416Loaded = true;
   });
 
@@ -760,6 +856,10 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     pistolSlideNode = root.getObjectByName("pistol_slide") || pistolSlideNode;
     pistolTriggerNode = root.getObjectByName("pistol_trigger") || pistolTriggerNode;
     pistolMagNode = root.getObjectByName("pistol_mag") || pistolMagNode;
+    weaponSockets.pistol.handguard = root.getObjectByName("socket_handguard") || weaponSockets.pistol.handguard;
+    weaponSockets.pistol.grip = root.getObjectByName("socket_grip") || weaponSockets.pistol.grip;
+    weaponSockets.pistol.mag = root.getObjectByName("socket_mag") || weaponSockets.pistol.mag;
+    weaponSockets.pistol.bolt = root.getObjectByName("socket_slide") || weaponSockets.pistol.bolt;
     const pMuz = root.getObjectByName("pistol_muzzle");
     if (pMuz) {
       pistolMuzAnchorPos.copy(pMuz.position);
@@ -779,20 +879,26 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       if (!obj.isMesh) return;
       obj.castShadow = obj.receiveShadow = true;
       if (obj.isSkinnedMesh) obj.frustumCulled = false;
-      const ck = obj.material.uuid;
-      if (!matCache.has(ck)) matCache.set(ck, hydratePbrMaterial(obj.material, obj.name, 1.15));
+      if (obj.geometry && !obj.geometry.attributes.uv2 && obj.geometry.attributes.uv) {
+        obj.geometry.setAttribute("uv2", obj.geometry.attributes.uv);
+      }
+      const ck = `${obj.material.uuid}:${obj.isSkinnedMesh ? 1 : 0}`;
+      if (!matCache.has(ck)) {
+        matCache.set(ck, hydratePbrMaterial(obj.material, obj.name, 0.85, Boolean(obj.isSkinnedMesh)));
+      }
       obj.material = matCache.get(ck);
-      if (obj.isSkinnedMesh) obj.material.skinning = true;
     });
     const ctrl = createSkinnedArmsController(root, THREE);
     if (!ctrl || !ctrl.ready) {
       armsCtrl = null;
+      armsRoot = null;
       window.__armsLoaded = false;
       console.warn("fps_arms asset missing required skinned rig bones; rebuild with python -m model.build");
       return;
     }
+    armsRoot = root;
     armsCtrl = ctrl;
-    gun.add(root);
+    vmCam.add(root);
     gunAnim(0, 0);
     window.__armsLoaded = true;
   });
@@ -1129,16 +1235,71 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     }
   }
 
-  // ---------- Viewmodel & Animation ----------
-  const HIP_POS = new Vec(0.155, -0.14, -0.395), ADS_POS = new Vec(0, -OPTIC_Y, -0.165);
-  const PISTOL_HIP_POS = new Vec(0.098, -0.098, -0.255), PISTOL_ADS_POS = new Vec(0, -0.0671, -0.205);
+  // ---------- Viewmodel Positions, Socket Sampling & Animation ----------
+  // Lower bottom-right placement with upright roll (0) & gentle inward cant toward center crosshair
+  const HIP_POS = new Vec(0.172, -0.156, -0.435), ADS_POS = new Vec(0, -OPTIC_Y, -0.215);
+  const PISTOL_HIP_POS = new Vec(0.125, -0.128, -0.315), PISTOL_ADS_POS = new Vec(0, -0.0671, -0.245);
+  const SNIPER_HIP_POS = new Vec(0.178, -0.162, -0.445);
   const lerp = THREE.MathUtils.lerp;
   const smooth01 = (t) => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
-  function getM416MagPullWeight(rl) {
-    if (rl <= 0.29 || rl >= 0.66) return 0;
-    if (rl < 0.44) return smooth01((rl - 0.29) / 0.15);
-    if (rl <= 0.52) return 1;
-    return 1 - smooth01((rl - 0.52) / 0.14);
+
+  const _vmInvQ = new THREE.Quaternion();
+  const _sockHgP = new Vec(), _sockHgQ = new THREE.Quaternion();
+  const _sockMagP = new Vec(), _sockMagQ = new THREE.Quaternion();
+  const _sockBoltP = new Vec(), _sockBoltQ = new THREE.Quaternion();
+  const _leftTargetP = new Vec(), _leftTargetQ = new THREE.Quaternion();
+  const _rightTargetP = new Vec(), _rightTargetQ = new THREE.Quaternion();
+
+  function readSocketInVmCam(node, outPos, outQuat) {
+    node.getWorldPosition(outPos);
+    vmCam.worldToLocal(outPos);
+    node.getWorldQuaternion(outQuat);
+    outQuat.premultiply(_vmInvQ).normalize();
+  }
+
+  function sampleLeftSocket(rl, isTactical, socks) {
+    readSocketInVmCam(socks.handguard, _sockHgP, _sockHgQ);
+    if (rl <= 0.03) {
+      _leftTargetP.copy(_sockHgP);
+      _leftTargetQ.copy(_sockHgQ);
+      return "support";
+    }
+
+    readSocketInVmCam(socks.mag, _sockMagP, _sockMagQ);
+    if (rl <= 0.22) {
+      const k = smooth01((rl - 0.03) / 0.19);
+      _leftTargetP.lerpVectors(_sockHgP, _sockMagP, k);
+      _leftTargetQ.copy(_sockHgQ).slerp(_sockMagQ, k);
+      return k > 0.5 ? "mag" : "support";
+    }
+    if (rl <= 0.72) {
+      _leftTargetP.copy(_sockMagP);
+      _leftTargetQ.copy(_sockMagQ);
+      return "mag";
+    }
+    if (isTactical) {
+      const k = smooth01((rl - 0.72) / 0.26);
+      _leftTargetP.lerpVectors(_sockMagP, _sockHgP, k);
+      _leftTargetQ.copy(_sockMagQ).slerp(_sockHgQ, k);
+      return k < 0.6 ? "mag" : "support";
+    }
+
+    readSocketInVmCam(socks.bolt, _sockBoltP, _sockBoltQ);
+    if (rl <= 0.81) {
+      const k = smooth01((rl - 0.72) / 0.09);
+      _leftTargetP.lerpVectors(_sockMagP, _sockBoltP, k);
+      _leftTargetQ.copy(_sockMagQ).slerp(_sockBoltQ, k);
+      return k > 0.5 ? "bolt" : "mag";
+    }
+    if (rl <= 0.92) {
+      _leftTargetP.copy(_sockBoltP);
+      _leftTargetQ.copy(_sockBoltQ);
+      return "bolt";
+    }
+    const kBack = smooth01((rl - 0.92) / 0.08);
+    _leftTargetP.lerpVectors(_sockBoltP, _sockHgP, kBack);
+    _leftTargetQ.copy(_sockBoltQ).slerp(_sockHgQ, kBack);
+    return kBack < 0.4 ? "bolt" : "support";
   }
 
   // ---------- Gameplay State ----------
@@ -1214,6 +1375,8 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     if (Math.abs(ads - prevAds) > 1e-4 || dt === 0) {
       cam.fov = lerp(baseFov, targetAdsFov, ads);
       cam.updateProjectionMatrix();
+      vmCam.fov = lerp(VM_HIP_FOV, VM_ADS_FOV, ads);
+      vmCam.updateProjectionMatrix();
     }
 
     const aliveSelf = engineMode === "solo" || meAlive;
@@ -1237,22 +1400,17 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     lpit = pitch;
 
     const isPistol = cfg.id === "pistol";
+    const isSniper = cfg.id === "sniper";
     const tl = rl > 0 ? Math.min(1, rl / 0.1, (1 - rl) / 0.1) : 0;
 
     mag.position.copy(MAG_REST);
     sniperMagMesh.position.set(0, -0.045, -0.18);
-    if (rl > 0.28 && rl < 0.72) {
+    if (rl > 0.24 && rl < 0.72) {
+      const magArc = Math.sin(((rl - 0.24) / 0.48) * Math.PI);
       if (cfg.id === "m416") {
-        const pullW = getM416MagPullWeight(rl);
-        const magP = SKINNED_ARM_POSES.m416.mag.p;
-        const outP = SKINNED_ARM_POSES.m416.out.p;
-        mag.position.set(
-          MAG_REST.x + (outP[0] - magP[0]) * pullW,
-          MAG_REST.y + (outP[1] - magP[1]) * pullW,
-          MAG_REST.z + (outP[2] - magP[2]) * pullW,
-        );
-      } else if (cfg.id === "sniper") {
-        sniperMagMesh.position.y -= Math.sin(((rl - 0.28) / 0.44) * Math.PI) * 0.16;
+        mag.position.set(-0.042 * magArc, MAG_REST.y - 0.088 * magArc, MAG_REST.z + 0.028 * magArc);
+      } else if (isSniper) {
+        sniperMagMesh.position.y -= magArc * 0.14;
       }
     }
 
@@ -1269,11 +1427,11 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       if (rl >= 0.16 && rl < 0.46) {
         const kDrop = smooth01((rl - 0.16) / 0.30);
         pistolMagDrop = kDrop * 0.14;
-        pistolReloadTiltZ = kDrop * 0.30;
+        pistolReloadTiltZ = kDrop * 0.26;
       } else if (rl >= 0.46 && rl < 0.74) {
         const kIns = smooth01((rl - 0.46) / 0.28);
         pistolMagDrop = (1 - kIns) * 0.14;
-        pistolReloadTiltZ = (1 - kIns) * 0.30;
+        pistolReloadTiltZ = (1 - kIns) * 0.26;
       }
     }
     pistolMagNode.position.set(0, -pistolMagDrop, pistolMagDrop * 0.32);
@@ -1310,30 +1468,50 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
 
     const hip = 1 - ads, calm = 1 - 0.78 * ads, bobK = mv * (1 - 0.88 * ads);
     const chW = !st.isTactical && rl > 0.74 && rl < 0.98 ? smooth01(Math.min((rl - 0.74) / 0.09, (0.98 - rl) / 0.08)) : 0;
-    const baseHip = isPistol ? PISTOL_HIP_POS : HIP_POS;
+    const baseHip = isPistol ? PISTOL_HIP_POS : isSniper ? SNIPER_HIP_POS : HIP_POS;
     const targetAdsX = isPistol ? PISTOL_ADS_POS.x : ADS_POS.x;
-    const adsPosY = isPistol ? PISTOL_ADS_POS.y : cfg.id === "sniper" ? ADS_POS.y : ADS_POS.y;
-    const adsPosZ = isPistol ? PISTOL_ADS_POS.z : cfg.id === "sniper" ? -0.14 : ADS_POS.z;
+    const adsPosY = isPistol ? PISTOL_ADS_POS.y : ADS_POS.y;
+    const adsPosZ = isPistol ? PISTOL_ADS_POS.z : isSniper ? -0.18 : ADS_POS.z;
+
     gun.position.set(
-      lerp(baseHip.x, targetAdsX, ads) + (swx + Math.sin(bob) * 0.006 * bobK) * calm - (isPistol ? 0.028 : 0.05) * tl,
-      lerp(baseHip.y, adsPosY, ads) + (swy + Math.sin(bob * 2) * 0.008 * bobK) * calm - 0.06 * spr + 0.02 * tl + Math.sin(gt * 1.6) * 0.0018 * hip,
-      lerp(baseHip.z, adsPosZ, ads) + recoil * (isPistol ? 0.35 : 1.15 - 0.8 * ads) + 0.03 * tl - (isPistol ? 0.024 : 0.048) * chW,
+      lerp(baseHip.x, targetAdsX, ads) + (swx + Math.sin(bob) * 0.0055 * bobK) * calm - (isPistol ? 0.024 : 0.044) * tl,
+      lerp(baseHip.y, adsPosY, ads) + (swy + Math.sin(bob * 2) * 0.007 * bobK) * calm - 0.055 * spr + 0.018 * tl + Math.sin(gt * 1.6) * 0.0016 * hip,
+      lerp(baseHip.z, adsPosZ, ads) + recoil * (isPistol ? 0.35 : 0.95 - 0.65 * ads) + 0.028 * tl - (isPistol ? 0.022 : 0.042) * chW,
     );
+
+    // Upright roll = 0 at rest (no rightward tilt), barrel angled gently inward toward center crosshair
+    const hipPitch = (isPistol ? 0.028 : isSniper ? 0.034 : 0.036) * hip;
+    const hipYaw = (isPistol ? 0.038 : isSniper ? 0.050 : 0.052) * hip;
     gun.rotation.set(
-      (recoil * (isPistol ? 0.9 : 2.1) + swy * 2) * calm - 0.22 * spr + (isPistol ? 0.10 : 0.18) * tl + (isPistol ? 0.025 * hip : 0),
-      (0.52 * spr + swx * 2) * calm + (isPistol ? -0.045 : 0.04) * hip + (isPistol ? 0.14 : 0.24) * tl,
-      (swx * 1.5 + (isPistol ? 0.02 : -0.03)) * calm - (isPistol ? 0.12 : 0.32) * tl,
+      hipPitch + (recoil * (isPistol ? 0.85 : 1.85) + swy * 1.8) * calm - 0.20 * spr + (isPistol ? 0.09 : 0.16) * tl,
+      hipYaw + (0.48 * spr + swx * 1.8) * calm + (isPistol ? 0.12 : 0.20) * tl,
+      swx * 1.2 * calm - (isPistol ? 0.10 : 0.24) * tl,
     );
+
+    // Sync viewmodel hierarchy and lock skinned hands onto active weapon sockets via 2-bone IK
+    vmCam.position.copy(cam.position);
+    vmCam.quaternion.copy(cam.quaternion);
+    vmCam.updateMatrixWorld(true);
+    _vmInvQ.copy(vmCam.quaternion).invert();
+
+    const activeSocks = weaponSockets[cfg.id] || weaponSockets.m416;
+    const leftAction = sampleLeftSocket(rl, Boolean(st.isTactical), activeSocks);
+    readSocketInVmCam(activeSocks.grip, _rightTargetP, _rightTargetQ);
+
     if (armsCtrl) {
+      const canShowArms = (engineMode === "solo" || meAlive) && engineMode !== "idle" && !scopedSniper;
       armsCtrl.update({
         weaponId: cfg.id,
-        triggerPull: isPistol ? pistolTrigPull / 0.42 : trigPull,
-        reloadProgress: rl,
-        isTactical: Boolean(st.isTactical),
-        isSprinting,
+        leftSocketPos: _leftTargetP,
+        leftSocketQuat: _leftTargetQ,
+        rightSocketPos: _rightTargetP,
+        rightSocketQuat: _rightTargetQ,
+        triggerPull: isPistol ? Math.min(1, pistolTrigPull / 0.42) : trigPull,
         ads,
-        hideArms: scopedSniper,
+        leftAction,
+        hideArms: !canShowArms,
       });
+      if (armsRoot) armsRoot.updateMatrixWorld(true);
     }
   }
 
@@ -1631,7 +1809,7 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     }
     const candidates = engineMode === "solo" ? [ground, ...solid, ...drones.map((d) => d.body)] : [ground, ...solid, ...enemyMeshes];
     const hit = ray.intersectObjects(candidates, false)[0];
-    const from = muz.getWorldPosition(new Vec());
+    const from = getViewmodelWorldPoint(muz, new Vec());
     const end = hit ? hit.point : ray.ray.at(75, new Vec());
     tracer(from, end, cfg.id === "sniper" ? 0xfff5cc : 0xffe2a0);
 
@@ -2213,7 +2391,7 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     const mvRatio = Math.hypot(velX, velZ) > 0.25 ? 1 : 0;
     const scopedSniper = activeWeapon().cfg.scopeOverlay && ads > 0.72;
     gun.visible = canAct && !scopedSniper;
-    gunAnim(dt, canAct ? mvRatio : 0);
+    if (armsRoot) armsRoot.visible = canAct && !scopedSniper;
 
     shake = Math.max(0, shake - dt);
     const sk = shake * 0.05;
@@ -2223,6 +2401,7 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       P.z,
     );
     cam.rotation.set(pitch + kick + rnd(-sk, sk), yaw, 0);
+    gunAnim(dt, canAct ? mvRatio : 0);
 
     if (engineMode === "lan" && canAct && activeState === "play") {
       if (nowMs - lastInputSentAt >= 50) {
@@ -2266,11 +2445,10 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       const bg = S.background;
       S.background = null;
       R.clearDepth();
-      cam.layers.set(VIEW_LAYER);
-      R.render(S, cam);
+      vmCam.layers.set(VIEW_LAYER);
+      R.render(S, vmCam);
       S.background = bg;
     }
-    cam.layers.set(0);
   }
 
   (function loop() {
@@ -2281,10 +2459,13 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     tr.forEach((l) => { l.userData.t -= dt; l.material.opacity = Math.max(0, l.userData.t / 0.09); });
     updateWeatherAndRain(dt);
     cam.updateMatrixWorld(true);
+    vmCam.position.copy(cam.position);
+    vmCam.quaternion.copy(cam.quaternion);
+    vmCam.updateMatrixWorld(true);
     laserBeam.visible = laserLens.visible =
       laserOn && engineMode !== "idle" && meAlive && SLOT_TO_WEAPON_ID[activeSlot] === "m416";
     if (laserBeam.visible) {
-      laserOrigin.getWorldPosition(_lp);
+      getViewmodelWorldPoint(laserOrigin, _lp);
       _ld.set(0, 0, -1).transformDirection(gun.matrixWorld);
       _ls.copy(_lp).addScaledVector(_ld, -0.9);
       laserRay.set(_ls, _ld);
@@ -2419,6 +2600,27 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
         cam.position.set(nx, ny + eyeHeight, nz);
         cam.rotation.set(npitch, nyaw, 0);
         cam.updateMatrixWorld(true);
+        vmCam.position.copy(cam.position);
+        vmCam.quaternion.copy(cam.quaternion);
+        vmCam.updateMatrixWorld(true);
+      },
+      getViewmodelState: () => {
+        let skinningEnabled = false;
+        if (armsRoot) {
+          armsRoot.traverse((o) => {
+            if (o.isSkinnedMesh && o.material && o.material.skinning) skinningEnabled = true;
+          });
+        }
+        return {
+          vmFov: vmCam.fov,
+          vmNear: vmCam.near,
+          worldFov: cam.fov,
+          armsReady: Boolean(armsCtrl && armsCtrl.ready),
+          armsVisible: Boolean(armsRoot && armsRoot.visible),
+          skinningEnabled,
+          gunPos: { x: gun.position.x, y: gun.position.y, z: gun.position.z },
+          gunRot: { x: gun.rotation.x, y: gun.rotation.y, z: gun.rotation.z },
+        };
       },
       setTestCombat: (opts = {}) => {
         if (typeof opts.locked === "boolean") {

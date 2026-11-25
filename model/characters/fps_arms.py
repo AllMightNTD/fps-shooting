@@ -19,10 +19,27 @@ _ROOT_SOURCE_GLB = Path(__file__).resolve().parents[2] / "fps_arms.glb"
 _ASSET_SOURCE_GLB = Path(__file__).resolve().parents[1] / "assets" / "fps_arms.glb"
 
 FPS_ARMS_METADATA: dict[str, object] = {
-    "character": "FPS_Arms_Tactical",
+    "character": "FPS_Arms_Skinned",
     "rigType": "skinned",
     "upperLen": 0.2587,
     "forearmLen": 0.2543,
+    "attribution": {
+        "author": "DJMaesen",
+        "license": "CC-BY-4.0",
+        "source": "https://sketchfab.com/3d-models/fps-arms-08ec4403a47645d8ad80633abf13d39d",
+    },
+    "leftHandBasis": {
+        "distal": [-0.0289, 0.5375, -0.8428],
+        "radial": [0.8447, 0.4639, 0.2669],
+        "palmNormal": [0.5344, -0.7042, -0.4674],
+        "palmOffset": [0.0067, 0.0225, -0.0604],
+    },
+    "rightHandBasis": {
+        "distal": [0.0289, 0.5375, -0.8428],
+        "radial": [-0.8447, 0.4639, 0.2669],
+        "palmNormal": [-0.5344, -0.7042, -0.4674],
+        "palmOffset": [-0.0067, 0.0225, -0.0604],
+    },
     "bones": {
         "leftArm": "L_arm_01",
         "leftElbow": "L_elbow_02",

@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import math
+from typing import Sequence
+
+import numpy as np
 
 from model.core import (
     GLBMaterial,
@@ -31,7 +34,40 @@ M416_METADATA: dict[str, object] = {
     "chRestZ": 0.118,
     "muzzlePos": [0.0, 0.020, -0.615],
     "laserOriginPos": [0.046, 0.025, -0.350],
+    "sockets": {
+        "handguard": "socket_handguard",
+        "grip": "socket_grip",
+        "mag": "socket_mag",
+        "charging": "socket_charging",
+    },
 }
+
+
+def _socket_euler_xyz(
+    distal: Sequence[float],
+    palm_normal: Sequence[float],
+    is_right_hand: bool = False,
+) -> tuple[float, float, float]:
+    """Compute socket XYZ Euler rotation where -Z=distal, +Y=radial, and +/-X=palm_normal."""
+    z_axis = -np.asarray(distal, dtype=np.float64)
+    z_axis /= np.linalg.norm(z_axis)
+    sign = -1.0 if is_right_hand else 1.0
+    x_axis = np.asarray(palm_normal, dtype=np.float64) * sign
+    x_axis = x_axis - z_axis * float(np.dot(x_axis, z_axis))
+    x_axis /= np.linalg.norm(x_axis)
+    y_axis = np.cross(z_axis, x_axis)
+    y_axis /= np.linalg.norm(y_axis)
+    mat = np.column_stack((x_axis, y_axis, z_axis))
+
+    sy = max(-1.0, min(1.0, float(mat[0, 2])))
+    ry = math.asin(sy)
+    if abs(mat[0, 2]) < 0.99999:
+        rx = math.atan2(-mat[1, 2], mat[2, 2])
+        rz = math.atan2(-mat[0, 1], mat[0, 0])
+    else:
+        rx = math.atan2(mat[2, 1], mat[1, 1])
+        rz = 0.0
+    return (round(rx, 6), round(ry, 6), round(rz, 6))
 
 # SOPMOD / HK416 angled lower stock profile (XY plane before rotating -90° around Y)
 _STOCK_SHAPE: list[tuple[float, float]] = [
@@ -387,6 +423,15 @@ def _build_magazine_node(mats: dict[str, GLBMaterial]) -> GLBNode:
         children=[
             GLBNode(name="mag_body", mesh=mag_metal, material=mats["gunmetal"]),
             GLBNode(name="mag_base", mesh=mag_base, material=mats["steel"]),
+            GLBNode(
+                name="socket_mag",
+                translation=(-0.016, -0.064, -0.008),
+                rotation_xyz=_socket_euler_xyz(
+                    distal=(0.56, -0.18, -0.81),
+                    palm_normal=(0.82, 0.22, 0.53),
+                    is_right_hand=False,
+                ),
+            ),
         ],
     )
 
@@ -398,9 +443,19 @@ def _build_charging_handle_node(mats: dict[str, GLBMaterial]) -> GLBNode:
     ch_mesh = merge_meshes([shaft, latch_bar, latch_tab])
     return GLBNode(
         name="charging_handle",
-        mesh=ch_mesh,
-        material=mats["gunmetal"],
         translation=(0.0, 0.039, 0.118),
+        children=[
+            GLBNode(name="charging_handle_body", mesh=ch_mesh, material=mats["gunmetal"]),
+            GLBNode(
+                name="socket_charging",
+                translation=(-0.026, -0.004, 0.012),
+                rotation_xyz=_socket_euler_xyz(
+                    distal=(0.68, 0.08, -0.73),
+                    palm_normal=(0.24, -0.94, 0.23),
+                    is_right_hand=False,
+                ),
+            ),
+        ],
     )
 
 
@@ -476,6 +531,30 @@ def build_m416_nodes(texture_size: int = 512, seed: int = 42) -> list[GLBNode]:
     )
     children.append(GLBNode(name="laser_origin", translation=(0.046, 0.025, -0.350)))
     children.append(GLBNode(name="muzzle_anchor", translation=(0.0, 0.020, -0.615)))
+    # Support-hand socket cradling underneath/lower-left of handguard (thumb forward toward muzzle)
+    children.append(
+        GLBNode(
+            name="socket_handguard",
+            translation=(-0.030, -0.026, -0.252),
+            rotation_xyz=_socket_euler_xyz(
+                distal=(-0.22, -0.14, -0.965),
+                palm_normal=(0.52, 0.85, -0.05),
+                is_right_hand=False,
+            ),
+        )
+    )
+    # Firing-hand socket wrapping the 19.5-deg pistol grip (index aligned outside trigger guard)
+    children.append(
+        GLBNode(
+            name="socket_grip",
+            translation=(0.024, -0.058, 0.082),
+            rotation_xyz=_socket_euler_xyz(
+                distal=(0.18, -0.04, -0.983),
+                palm_normal=(-0.96, 0.08, 0.26),
+                is_right_hand=True,
+            ),
+        )
+    )
 
     return [
         GLBNode(

@@ -152,6 +152,10 @@ class TestM416BuildPipeline(unittest.TestCase):
             "laser_lens",
             "laser_origin",
             "muzzle_anchor",
+            "socket_handguard",
+            "socket_grip",
+            "socket_mag",
+            "socket_charging",
         }
 
         with tempfile.TemporaryDirectory() as tmpdir:

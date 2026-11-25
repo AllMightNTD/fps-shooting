@@ -357,7 +357,8 @@ test("HTTP static server serves public/FPS.html, arm_rig.js & fps_arms.bundle.js
     const gameJsText = await gameJsRes.text();
     assert.match(gameJsText, /from\s+["']\/js\/arm_rig\.js["']/);
     assert.ok(gameJsText.includes("createSkinnedArmsController"));
-    assert.ok(gameJsText.includes("SKINNED_ARM_POSES"));
+    assert.ok(gameJsText.includes("buildSocketPose"));
+    assert.ok(gameJsText.includes("viewmodelPointToWorld"));
     const blockedServer = await fetch(`http://127.0.0.1:${port}/server/Room.js`);
     assert.equal(blockedServer.status, 404);
     const blockedEnv = await fetch(`http://127.0.0.1:${port}/.env`);
