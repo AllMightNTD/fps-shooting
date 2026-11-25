@@ -297,8 +297,8 @@ export function solveTwoBoneArmIK(
 
 function samplePresetLeftTrack(poseSet, reloadProgress, isTactical, outPos, outQuat, tmpA, tmpB, tmpQ) {
   const rl = clamp(Number(reloadProgress) || 0, 0, 1);
-  if (isTactical && rl > 0.74) {
-    const kBack = smooth01((rl - 0.74) / 0.24);
+  if (isTactical && rl > 0.72) {
+    const kBack = smooth01((rl - 0.72) / 0.26);
     tmpA.set(...poseSet.mag.p);
     tmpB.set(...poseSet.grip.p);
     outPos.lerpVectors(tmpA, tmpB, kBack);
@@ -387,6 +387,14 @@ function measureArmLengths(core, vA, vB, vC) {
   };
 }
 
+function updateTopMatrixWorld(root) {
+  let top = root;
+  while (top.parent) top = top.parent;
+  if (typeof top.updateMatrixWorld === "function") {
+    top.updateMatrixWorld(true);
+  }
+}
+
 /**
  * Create a runtime skinned-arm & finger controller for the converted fps_arms.glb scene.
  */
@@ -401,7 +409,7 @@ export function createSkinnedArmsController(root, MathApi) {
     return { ready: false, update() {}, getBoneSummary: () => null };
   }
 
-  root.updateMatrixWorld(true);
+  updateTopMatrixWorld(root);
   const { Vector3, Quaternion, Matrix4, Euler } = api;
   const ikScratch = createIKScratch(api);
   const vA = new Vector3();
@@ -519,11 +527,7 @@ export function createSkinnedArmsController(root, MathApi) {
     root.visible = !hideArms;
     if (hideArms) return;
 
-    let top = root;
-    while (top.parent) top = top.parent;
-    if (typeof top.updateMatrixWorld === "function") {
-      top.updateMatrixWorld(true);
-    }
+    updateTopMatrixWorld(root);
 
     if (root.parent) {
       gunToWorldMat.copy(root.parent.matrixWorld);

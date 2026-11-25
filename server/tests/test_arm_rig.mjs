@@ -600,6 +600,10 @@ test("solveTwoBoneArmIK places elbow at L1 and wrist at L2 within < 1e-3m across
     ["pistol.chPulled", SKINNED_ARM_POSES.pistol.leftShoulder, SKINNED_ARM_POSES.pistol.chPulled, SKINNED_ARM_POSES.pistol.leftPole],
     ["pistol.rightGrip", SKINNED_ARM_POSES.pistol.rightShoulder, SKINNED_ARM_POSES.pistol.rightGrip, SKINNED_ARM_POSES.pistol.rightPole],
     ["sniper.grip", SKINNED_ARM_POSES.sniper.leftShoulder, SKINNED_ARM_POSES.sniper.grip, SKINNED_ARM_POSES.sniper.leftPole],
+    ["sniper.mag", SKINNED_ARM_POSES.sniper.leftShoulder, SKINNED_ARM_POSES.sniper.mag, SKINNED_ARM_POSES.sniper.leftPole],
+    ["sniper.out", SKINNED_ARM_POSES.sniper.leftShoulder, SKINNED_ARM_POSES.sniper.out, SKINNED_ARM_POSES.sniper.leftPole],
+    ["sniper.ch", SKINNED_ARM_POSES.sniper.leftShoulder, SKINNED_ARM_POSES.sniper.ch, SKINNED_ARM_POSES.sniper.leftPole],
+    ["sniper.chPulled", SKINNED_ARM_POSES.sniper.leftShoulder, SKINNED_ARM_POSES.sniper.chPulled, SKINNED_ARM_POSES.sniper.leftPole],
     ["sniper.rightGrip", SKINNED_ARM_POSES.sniper.rightShoulder, SKINNED_ARM_POSES.sniper.rightGrip, SKINNED_ARM_POSES.sniper.rightPole],
   ];
 
@@ -730,14 +734,21 @@ test("createSkinnedArmsController converts arms_root cm/rotY space, disables fru
       hideArms: false,
     });
 
-    // Convert gun-space wrist target to world space via rig.gun.matrixWorld and compare against solved bone world pos
+    // Convert gun-space wrist target to world space via rig.gun.matrixWorld and compare against solved bone world pos/quat
     const expectedLWorld = gunLeftTarget.clone().applyMatrix4(rig.gun.matrixWorld);
     const expectedRWorld = gunRightTarget.clone().applyMatrix4(rig.gun.matrixWorld);
+    const gunWorldQuat = rig.gun.getWorldQuaternion(new Quaternion());
+    const expectedLWorldQ = gunWorldQuat.clone().multiply(gunLeftQuat).normalize();
+    const expectedRWorldQ = gunWorldQuat.clone().multiply(gunRightQuat).normalize();
     const actualLWorld = rig.lWrist.getWorldPosition(new Vector3());
     const actualRWorld = rig.rWrist.getWorldPosition(new Vector3());
+    const actualLWorldQ = rig.lWrist.getWorldQuaternion(new Quaternion());
+    const actualRWorldQ = rig.rWrist.getWorldQuaternion(new Quaternion());
 
     assert.ok(actualLWorld.distanceTo(expectedLWorld) < 1e-3, `L_wrist world mismatch: ${actualLWorld.distanceTo(expectedLWorld)}`);
     assert.ok(actualRWorld.distanceTo(expectedRWorld) < 1e-3, `R_wrist world mismatch: ${actualRWorld.distanceTo(expectedRWorld)}`);
+    assert.ok(actualLWorldQ.angleTo(expectedLWorldQ) < 1e-4, `L_wrist world quat mismatch: ${actualLWorldQ.angleTo(expectedLWorldQ)}`);
+    assert.ok(actualRWorldQ.angleTo(expectedRWorldQ) < 1e-4, `R_wrist world quat mismatch: ${actualRWorldQ.angleTo(expectedRWorldQ)}`);
 
     p1Angles.push(restP1.angleTo(rig.rPoint1.quaternion));
     p2Angles.push(restP2.angleTo(rig.rPoint2.quaternion));
@@ -760,11 +771,56 @@ test("createSkinnedArmsController converts arms_root cm/rotY space, disables fru
 
   // Moved camera parent + preset reload fallback without explicit wrist targets
   const cam = new MockNode("cam", { position: [12, 1.72, -18], quaternion: [0.05, 0.35, -0.02, 0.935] });
+  cam.quaternion.normalize();
   cam.add(rig.gun);
   ctrl.update({ weaponId: "pistol", reloadProgress: 0.48, triggerPull: 0.25, hideArms: false });
+  const camGunWorldQuat = rig.gun.getWorldQuaternion(new Quaternion());
   const expectedPistolOutWorld = new Vector3(...SKINNED_ARM_POSES.pistol.out.p).applyMatrix4(rig.gun.matrixWorld);
+  const expectedPistolOutWorldQ = camGunWorldQuat.clone().multiply(new Quaternion(...SKINNED_ARM_POSES.pistol.out.q)).normalize();
+  const expectedPistolRWorldQ = camGunWorldQuat.clone().multiply(new Quaternion(...SKINNED_ARM_POSES.pistol.rightGrip.q)).normalize();
   const actualPistolOutWorld = rig.lWrist.getWorldPosition(new Vector3());
+  const actualPistolOutWorldQ = rig.lWrist.getWorldQuaternion(new Quaternion());
+  const actualPistolRWorldQ = rig.rWrist.getWorldQuaternion(new Quaternion());
   assert.ok(actualPistolOutWorld.distanceTo(expectedPistolOutWorld) < 1e-3, `Cam-parented pistol.out mismatch: ${actualPistolOutWorld.distanceTo(expectedPistolOutWorld)}`);
+  assert.ok(actualPistolOutWorldQ.angleTo(expectedPistolOutWorldQ) < 1e-4, `Cam-parented pistol.out quat mismatch: ${actualPistolOutWorldQ.angleTo(expectedPistolOutWorldQ)}`);
+  assert.ok(actualPistolRWorldQ.angleTo(expectedPistolRWorldQ) < 1e-4, `Cam-parented pistol rightGrip quat mismatch: ${actualPistolRWorldQ.angleTo(expectedPistolRWorldQ)}`);
+
+  // Tactical reload continuity across 0.72 -> 0.735 -> 0.75 -> 0.86 -> 0.98 (must return smoothly mag -> grip without jumping toward ch)
+  const magWorld = new Vector3(...SKINNED_ARM_POSES.m416.mag.p).applyMatrix4(rig.gun.matrixWorld);
+  const gripWorld = new Vector3(...SKINNED_ARM_POSES.m416.grip.p).applyMatrix4(rig.gun.matrixWorld);
+  const chWorld = new Vector3(...SKINNED_ARM_POSES.m416.ch.p).applyMatrix4(rig.gun.matrixWorld);
+  const magToGripDist = magWorld.distanceTo(gripWorld);
+  const tacSteps = [0.72, 0.735, 0.75, 0.86, 0.98];
+  const tacPositions = [];
+  for (const rl of tacSteps) {
+    ctrl.update({ weaponId: "m416", reloadProgress: rl, isTactical: true, hideArms: false });
+    tacPositions.push(rig.lWrist.getWorldPosition(new Vector3()));
+  }
+  assert.ok(tacPositions[0].distanceTo(magWorld) < 1e-3, `tactical rl=0.72 should sit at mag`);
+  assert.ok(tacPositions[4].distanceTo(gripWorld) < 1e-3, `tactical rl=0.98 should finish at grip`);
+  for (let i = 1; i < tacPositions.length; i++) {
+    const prevDistToGrip = tacPositions[i - 1].distanceTo(gripWorld);
+    const currDistToGrip = tacPositions[i].distanceTo(gripWorld);
+    assert.ok(currDistToGrip < prevDistToGrip, `tactical reload did not advance monotonically toward grip between ${tacSteps[i - 1]} and ${tacSteps[i]} (${prevDistToGrip} -> ${currDistToGrip})`);
+    // Must lie cleanly along the mag->grip segment rather than straying toward ch
+    const segSum = tacPositions[i].distanceTo(magWorld) + currDistToGrip;
+    assert.ok(Math.abs(segSum - magToGripDist) < 1e-4, `tactical rl=${tacSteps[i]} strayed off mag->grip line (toward ch=${tacPositions[i].distanceTo(chWorld)})`);
+  }
+
+  // Stale ancestor matrixWorld at construction time must still measure true meter lengths via updateTopMatrixWorld
+  const staleRig = buildMockSkinnedArmsRig();
+  const staleCam = new MockNode("stale_cam", { scale: [5, 5, 5] });
+  staleCam.add(staleRig.gun);
+  staleCam.updateMatrixWorld(true);
+  staleCam.scale.set(1, 1, 1); // Mutate scale without refreshing matrixWorld before controller init
+  const staleCtrl = createSkinnedArmsController(staleRig.armsRoot, MathApi);
+  assert.equal(staleCtrl.ready, true);
+  const staleSummary = staleCtrl.getBoneSummary();
+  assert.ok(Math.abs(staleSummary.upperLen - 0.2587) < 1e-4, `stale ancestor upperLen mismatch: ${staleSummary.upperLen}`);
+  assert.ok(Math.abs(staleSummary.forearmLen - 0.2543) < 1e-4, `stale ancestor forearmLen mismatch: ${staleSummary.forearmLen}`);
+  staleCtrl.update({ weaponId: "m416" });
+  const staleExpectedLW = new Vector3(...SKINNED_ARM_POSES.m416.grip.p).applyMatrix4(staleRig.gun.matrixWorld);
+  assert.ok(staleRig.lWrist.getWorldPosition(new Vector3()).distanceTo(staleExpectedLW) < 1e-3, "staleCtrl.update failed to reach grip");
 
   // Arrange / Act / Assert (Unhappy Paths: null root and missing core arm bone)
   const nullCtrl = createSkinnedArmsController(null, MathApi);
