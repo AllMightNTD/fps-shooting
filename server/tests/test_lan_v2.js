@@ -327,7 +327,7 @@ test("Edge cases Mục 10: last slot race, host leave in STARTING, mutual fire, 
   assert.equal(r1.hostId, s3.id);
 });
 
-test("HTTP static server serves public/FPS.html & protocol.js, blocks traversal, and runs quickJoin E2E", async () => {
+test("HTTP static server serves public/FPS.html, arm_rig.js & fps_arms.bundle.js, blocks traversal, and runs quickJoin E2E", async () => {
   const srv = createLanServer({ tickMs: 40 });
   const port = await srv.start(0, "127.0.0.1");
 
@@ -336,6 +336,22 @@ test("HTTP static server serves public/FPS.html & protocol.js, blocks traversal,
     assert.equal(protoRes.status, 200);
     const weaponsRes = await fetch(`http://127.0.0.1:${port}/js/weapons.js`);
     assert.equal(weaponsRes.status, 200);
+    const armRigRes = await fetch(`http://127.0.0.1:${port}/js/arm_rig.js`);
+    assert.equal(armRigRes.status, 200);
+    assert.match(armRigRes.headers.get("content-type") || "", /application\/javascript/);
+    assert.ok((await armRigRes.text()).includes("createSkinnedArmsController"));
+    const armsBundleRes = await fetch(`http://127.0.0.1:${port}/model/dist/fps_arms.bundle.js`);
+    assert.equal(armsBundleRes.status, 200);
+    assert.match(armsBundleRes.headers.get("content-type") || "", /application\/javascript/);
+    const armsBundleText = await armsBundleRes.text();
+    assert.ok(armsBundleText.length > 0 && armsBundleText.includes('FPS_MODELS["fps_arms"]'));
+    const gameJsRes = await fetch(`http://127.0.0.1:${port}/js/game.js`);
+    assert.equal(gameJsRes.status, 200);
+    assert.match(gameJsRes.headers.get("content-type") || "", /application\/javascript/);
+    const gameJsText = await gameJsRes.text();
+    assert.match(gameJsText, /from\s+["']\/js\/arm_rig\.js["']/);
+    assert.ok(gameJsText.includes("createSkinnedArmsController"));
+    assert.ok(gameJsText.includes("SKINNED_ARM_POSES"));
     const blockedServer = await fetch(`http://127.0.0.1:${port}/server/Room.js`);
     assert.equal(blockedServer.status, 404);
     const blockedEnv = await fetch(`http://127.0.0.1:${port}/.env`);
