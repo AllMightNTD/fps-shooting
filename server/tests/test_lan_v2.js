@@ -7,12 +7,15 @@
 
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import fs from "node:fs";
 import net from "node:net";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import { ENDING_DURATION_MS } from "../Room.js";
 import { RECONNECT_GRACE_MS, RoomManager } from "../RoomManager.js";
-import { createLanServer } from "../index.js";
+import { DEFAULT_ROOT, createLanServer } from "../index.js";
 import { ERR, GAME_MODE, MSG, ROOM_STATE } from "../protocol.js";
 import { buildHarborMap, generateSpawnPoints, hasLineOfSight, pickFfaSpawn } from "../spawn.js";
 import { FLAG, WEAPONS } from "../weapons.js";
@@ -327,7 +330,7 @@ test("Edge cases Mục 10: last slot race, host leave in STARTING, mutual fire, 
   assert.equal(r1.hostId, s3.id);
 });
 
-test("HTTP static server serves public/FPS.html & protocol.js, blocks traversal, and runs quickJoin E2E", async () => {
+test("HTTP static server serves public/FPS.html, arm_rig.js & fps_arms.bundle.js, blocks traversal, and runs quickJoin E2E", async () => {
   const srv = createLanServer({ tickMs: 40 });
   const port = await srv.start(0, "127.0.0.1");
 
@@ -336,6 +339,25 @@ test("HTTP static server serves public/FPS.html & protocol.js, blocks traversal,
     assert.equal(protoRes.status, 200);
     const weaponsRes = await fetch(`http://127.0.0.1:${port}/js/weapons.js`);
     assert.equal(weaponsRes.status, 200);
+    const armRigRes = await fetch(`http://127.0.0.1:${port}/js/arm_rig.js`);
+    assert.equal(armRigRes.status, 200);
+    assert.match(armRigRes.headers.get("content-type") || "", /application\/javascript/);
+    assert.ok((await armRigRes.text()).includes("createSkinnedArmsController"));
+    const armsBundlePath = path.join(DEFAULT_ROOT, "model", "dist", "fps_arms.bundle.js");
+    if (fs.existsSync(armsBundlePath)) {
+      const armsBundleRes = await fetch(`http://127.0.0.1:${port}/model/dist/fps_arms.bundle.js`);
+      assert.equal(armsBundleRes.status, 200);
+      assert.match(armsBundleRes.headers.get("content-type") || "", /application\/javascript/);
+      const armsBundleText = await armsBundleRes.text();
+      assert.ok(armsBundleText.length > 0 && armsBundleText.includes('FPS_MODELS["fps_arms"]'));
+    }
+    const gameJsRes = await fetch(`http://127.0.0.1:${port}/js/game.js`);
+    assert.equal(gameJsRes.status, 200);
+    assert.match(gameJsRes.headers.get("content-type") || "", /application\/javascript/);
+    const gameJsText = await gameJsRes.text();
+    assert.match(gameJsText, /from\s+["']\/js\/arm_rig\.js["']/);
+    assert.ok(gameJsText.includes("createSkinnedArmsController"));
+    assert.ok(gameJsText.includes("SKINNED_ARM_POSES"));
     const blockedServer = await fetch(`http://127.0.0.1:${port}/server/Room.js`);
     assert.equal(blockedServer.status, 404);
     const blockedEnv = await fetch(`http://127.0.0.1:${port}/.env`);
@@ -361,6 +383,31 @@ test("HTTP static server serves public/FPS.html & protocol.js, blocks traversal,
     ws2.close();
   } finally {
     await srv.stop();
+  }
+});
+
+test("HTTP static server serves model/dist/fps_arms.bundle.js hermetically from rootDir", async () => {
+  // Arrange
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fps-lan-v2-"));
+  const distDir = path.join(tmpDir, "model", "dist");
+  const fixturePayload = 'window.FPS_MODELS = window.FPS_MODELS || {}; FPS_MODELS["fps_arms"] = "hermetic";\n';
+  fs.mkdirSync(distDir, { recursive: true });
+  fs.writeFileSync(path.join(distDir, "fps_arms.bundle.js"), fixturePayload, "utf8");
+  const srv = createLanServer({ rootDir: tmpDir, tickMs: 40 });
+  const port = await srv.start(0, "127.0.0.1");
+
+  try {
+    // Act
+    const res = await fetch(`http://127.0.0.1:${port}/model/dist/fps_arms.bundle.js`);
+    const body = await res.text();
+
+    // Assert
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get("content-type"), "application/javascript; charset=utf-8");
+    assert.equal(body, fixturePayload);
+  } finally {
+    await srv.stop();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
 

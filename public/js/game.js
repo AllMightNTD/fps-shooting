@@ -6,6 +6,7 @@
  * - TeamColor shared PBR materials (A=#2F80FF ▲, B=#FF4D2E ●, FFA=#8A8F98), teammate nameplates & Radar
  */
 
+import { createSkinnedArmsController, SKINNED_ARM_POSES } from "/js/arm_rig.js";
 import { MSG, sanitizeText } from "/js/protocol.js";
 import {
   BASE_MOVE_SPEED,
@@ -574,6 +575,7 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     const isGlass = phys.transmission > 0 || src.transparent;
     const isSkin = src.name === "Arms_WetSkin" || src.name === "Soldier_Skin";
     const isGlove = src.name === "Arms_TacticalGlove" || src.name === "Soldier_Glove";
+    const isArmsSkinGlove = src.name === "material" || objName.toLowerCase().includes("armmesh");
     const mat = new THREE.MeshPhysicalMaterial({
       color: src.color,
       map: src.map || null,
@@ -583,10 +585,13 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       metalnessMap: src.metalnessMap || null,
       normalMap: src.normalMap || null,
       normalScale: src.normalScale ? src.normalScale.clone() : new THREE.Vector2(1, 1),
+      aoMap: src.aoMap || null,
+      aoMapIntensity: src.aoMapIntensity ?? 0.45,
       envMap,
-      envMapIntensity: isGlass ? 1.8 : isSkin ? 0.45 : isGlove ? 0.55 : envScale,
+      envMapIntensity: isGlass ? 1.8 : isArmsSkinGlove ? 0.62 : isSkin ? 0.45 : isGlove ? 0.55 : envScale,
       clearcoat: phys.clearcoat || 0,
       clearcoatRoughness: phys.clearcoatRoughness || 0,
+      skinning: Boolean(src.skinning),
       transparent: isGlass,
       opacity: isGlass ? 0.26 : 1,
       depthWrite: !isGlass,
@@ -711,39 +716,8 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     loader.load(glbPath, onLoaded, undefined, (e) => console.error(key, e));
   }
 
-  const _euPose = new THREE.Euler(0, 0, 0, "XYZ");
-  const makePose = (p, r) => ({ p: new Vec(...p), q: new THREE.Quaternion().setFromEuler(_euPose.set(r[0], r[1], r[2])) });
-  const makeBasisPose = (p, yDir, zDir) => {
-    const yV = new Vec(...yDir).normalize();
-    const zV = new Vec(...zDir);
-    zV.addScaledVector(yV, -zV.dot(yV)).normalize();
-    const xV = new Vec().crossVectors(yV, zV).normalize();
-    const m4 = new THREE.Matrix4().makeBasis(xV, yV, zV);
-    return { p: new Vec(...p), q: new THREE.Quaternion().setFromRotationMatrix(m4) };
-  };
   const CH_REST_Z = 0.118, MAG_REST = new Vec(0, -0.042, -0.064);
-  const LEFT_ELBOW = new Vec(-0.3, -0.3, 0.22), RIGHT_ELBOW = new Vec(0.17, -0.28, 0.48);
-  const leftWristLocal = new Vec(0, 0.042, 0), rightWristLocal = new Vec(0.008, -0.036, 0.024);
-  let INDEX_BASE_ROT_X = -Math.PI * 0.5 + 0.1;
-  const POSE = {
-    grip: makePose([-0.042, -0.022, -0.236], [-0.4, 0.9, -2.0]),
-    mag: makePose([-0.044, -0.118, -0.078], [-0.4, 0.8, -1.6]),
-    out: makePose([-0.088, -0.182, -0.042], [-0.4, 0.8, -1.6]),
-    ch: makePose([-0.064, 0.032, 0.122], [-0.3, 0.6, -1.5]),
-    chPulled: makePose([-0.064, 0.032, 0.177], [-0.3, 0.6, -1.5]),
-    rightGrip: makePose([0.012, -0.07, 0.068], [0.34, 0.1, 0.14]),
-  };
-  // Two-handed thumbs-forward Tactical Pistol poses tailored to the 18-deg Glock Gen4/Gen5 frame
-  const PISTOL_POSE = {
-    grip: makeBasisPose([-0.024, -0.048, 0.018], [-0.56, -0.28, 0.78], [-0.78, 0.36, -0.51]),
-    mag: makeBasisPose([-0.026, -0.068, 0.036], [-0.76, -0.22, 0.61], [-0.56, 0.35, -0.75]),
-    out: makeBasisPose([-0.052, -0.198, 0.078], [-0.76, -0.22, 0.61], [-0.56, 0.35, -0.75]),
-    ch: makeBasisPose([-0.024, 0.052, 0.014], [-0.80, -0.44, 0.40], [-0.28, 0.76, 0.58]),
-    chPulled: makeBasisPose([-0.024, 0.052, 0.057], [-0.80, -0.44, 0.40], [-0.28, 0.76, 0.58]),
-    rightGrip: makePose([0.008, -0.036, 0.038], [0.31, 0.05, 0.10]),
-  };
-  let leftHand = new THREE.Group(), rightHand = new THREE.Group(), leftArmRig = new THREE.Group(), rightArmRig = new THREE.Group();
-  let leftForearmMesh = new THREE.Object3D(), rightForearmMesh = new THREE.Object3D(), leftWatch = null, indexJoint = new THREE.Group();
+  let armsCtrl = null;
 
   loadModelAsset("m416", "/model/dist/m416.glb", (gltf) => {
     const root = gltf.scene, matCache = new Map();
@@ -804,29 +778,20 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       obj.layers.set(VIEW_LAYER);
       if (!obj.isMesh) return;
       obj.castShadow = obj.receiveShadow = true;
-      const ck = `${obj.material.uuid}:${obj.name === "watch_dial" ? 1 : 0}`;
+      if (obj.isSkinnedMesh) obj.frustumCulled = false;
+      const ck = obj.material.uuid;
       if (!matCache.has(ck)) matCache.set(ck, hydratePbrMaterial(obj.material, obj.name, 1.15));
       obj.material = matCache.get(ck);
+      if (obj.isSkinnedMesh) obj.material.skinning = true;
     });
-    const meta = (root.getObjectByName("arms_root") || root).userData || {};
-    if (Array.isArray(meta.leftElbow)) LEFT_ELBOW.set(...meta.leftElbow);
-    if (Array.isArray(meta.rightElbow)) RIGHT_ELBOW.set(...meta.rightElbow);
-    if (Array.isArray(meta.leftWristLocal)) leftWristLocal.set(...meta.leftWristLocal);
-    if (Array.isArray(meta.rightWristLocal)) rightWristLocal.set(...meta.rightWristLocal);
-    if (typeof meta.indexBaseRotX === "number") INDEX_BASE_ROT_X = meta.indexBaseRotX;
-    if (meta.poses) {
-      for (const [k, v] of Object.entries(meta.poses)) {
-        if (v && Array.isArray(v.p) && Array.isArray(v.r)) POSE[k] = makePose(v.p, v.r);
-      }
+    const ctrl = createSkinnedArmsController(root, THREE);
+    if (!ctrl || !ctrl.ready) {
+      armsCtrl = null;
+      window.__armsLoaded = false;
+      console.warn("fps_arms asset missing required skinned rig bones; rebuild with python -m model.build");
+      return;
     }
-    leftHand = root.getObjectByName("left_hand_group") || leftHand;
-    rightHand = root.getObjectByName("right_hand_group") || rightHand;
-    leftArmRig = root.getObjectByName("left_arm_rig") || leftArmRig;
-    rightArmRig = root.getObjectByName("right_arm_rig") || rightArmRig;
-    leftForearmMesh = root.getObjectByName("left_arm_rig_forearm") || leftForearmMesh;
-    rightForearmMesh = root.getObjectByName("right_arm_rig_forearm") || rightForearmMesh;
-    leftWatch = root.getObjectByName("left_watch") || leftWatch;
-    indexJoint = root.getObjectByName("right_index_joint_0") || indexJoint;
+    armsCtrl = ctrl;
     gun.add(root);
     gunAnim(0, 0);
     window.__armsLoaded = true;
@@ -1165,40 +1130,15 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
   }
 
   // ---------- Viewmodel & Animation ----------
-  const _armDir = new Vec(), _wristPos = new Vec();
-  function aimForearm(armRig, forearmMesh, handGroup, wristLocal, watchNode) {
-    _wristPos.copy(wristLocal).applyQuaternion(handGroup.quaternion).add(handGroup.position);
-    _armDir.subVectors(_wristPos, armRig.position);
-    const len = Math.max(0.05, _armDir.length());
-    armRig.quaternion.setFromUnitVectors(UP, _armDir.multiplyScalar(1 / len));
-    forearmMesh.scale.set(1, len, 1);
-    if (watchNode) watchNode.position.y = Math.max(0.14, len - 0.032);
-  }
-
   const HIP_POS = new Vec(0.155, -0.14, -0.395), ADS_POS = new Vec(0, -OPTIC_Y, -0.165);
   const PISTOL_HIP_POS = new Vec(0.098, -0.098, -0.255), PISTOL_ADS_POS = new Vec(0, -0.0671, -0.205);
   const lerp = THREE.MathUtils.lerp;
   const smooth01 = (t) => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
-  const LEFT_TRACK = [
-    [0, "grip"], [0.05, "grip"], [0.22, "mag"], [0.29, "mag"], [0.44, "out"],
-    [0.52, "out"], [0.66, "mag"], [0.72, "mag"], [0.8, "ch"], [0.83, "ch"],
-    [0.9, "chPulled"], [0.93, "chPulled"], [1, "grip"],
-  ];
-  const leftPose = { p: new Vec(), q: new THREE.Quaternion() };
-  function sampleLeftTrack(t, poseSet = POSE, isTacticalReload = false) {
-    const effT = isTacticalReload && t > 0.74 ? 1.0 - (1.0 - t) * (0.28 / 0.26) : t;
-    if (isTacticalReload && t > 0.74) {
-      const kBack = smooth01((t - 0.74) / 0.24);
-      leftPose.p.lerpVectors(poseSet.mag.p, poseSet.grip.p, kBack);
-      leftPose.q.copy(poseSet.mag.q).slerp(poseSet.grip.q, kBack);
-      return leftPose;
-    }
-    let i = 0;
-    while (i < LEFT_TRACK.length - 2 && effT > LEFT_TRACK[i + 1][0]) i++;
-    const [t0, a] = LEFT_TRACK[i], [t1, b] = LEFT_TRACK[i + 1], k = smooth01((effT - t0) / (t1 - t0 || 1));
-    leftPose.p.lerpVectors(poseSet[a].p, poseSet[b].p, k);
-    leftPose.q.copy(poseSet[a].q).slerp(poseSet[b].q, k);
-    return leftPose;
+  function getM416MagPullWeight(rl) {
+    if (rl <= 0.29 || rl >= 0.66) return 0;
+    if (rl < 0.44) return smooth01((rl - 0.29) / 0.15);
+    if (rl <= 0.52) return 1;
+    return 1 - smooth01((rl - 0.52) / 0.14);
   }
 
   // ---------- Gameplay State ----------
@@ -1297,19 +1237,23 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     lpit = pitch;
 
     const isPistol = cfg.id === "pistol";
-    const activePoseSet = isPistol ? PISTOL_POSE : POSE;
     const tl = rl > 0 ? Math.min(1, rl / 0.1, (1 - rl) / 0.1) : 0;
-    const pose = sampleLeftTrack(rl, activePoseSet, Boolean(st.isTactical));
-    leftHand.position.copy(pose.p);
-    leftHand.quaternion.copy(pose.q);
-    rightHand.position.copy(activePoseSet.rightGrip.p);
-    rightHand.quaternion.copy(activePoseSet.rightGrip.q);
 
     mag.position.copy(MAG_REST);
     sniperMagMesh.position.set(0, -0.045, -0.18);
     if (rl > 0.28 && rl < 0.72) {
-      if (cfg.id === "m416") mag.position.add(pose.p).sub(POSE.mag.p);
-      else if (cfg.id === "sniper") sniperMagMesh.position.y -= Math.sin(((rl - 0.28) / 0.44) * Math.PI) * 0.16;
+      if (cfg.id === "m416") {
+        const pullW = getM416MagPullWeight(rl);
+        const magP = SKINNED_ARM_POSES.m416.mag.p;
+        const outP = SKINNED_ARM_POSES.m416.out.p;
+        mag.position.set(
+          MAG_REST.x + (outP[0] - magP[0]) * pullW,
+          MAG_REST.y + (outP[1] - magP[1]) * pullW,
+          MAG_REST.z + (outP[2] - magP[2]) * pullW,
+        );
+      } else if (cfg.id === "sniper") {
+        sniperMagMesh.position.y -= Math.sin(((rl - 0.28) / 0.44) * Math.PI) * 0.16;
+      }
     }
 
     // Tactical Pistol blowback, empty slide-lock (0.042m), slide-release & angled 17.5° mag drop
@@ -1363,10 +1307,8 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     pistolTrigPull = lerp(pistolTrigPull, firingVisual && isPistol ? 0.42 : 0, dt > 0 ? 1 - Math.exp(-18 * dt) : 1);
     trig.rotation.x = trigPull * 0.3;
     pistolTriggerNode.rotation.x = pistolTrigPull;
-    indexJoint.rotation.x = INDEX_BASE_ROT_X + (isPistol ? pistolTrigPull * 0.82 : trigPull * 0.34);
 
     const hip = 1 - ads, calm = 1 - 0.78 * ads, bobK = mv * (1 - 0.88 * ads);
-    const dropW = rl > 0.22 && rl < 0.72 ? smooth01(Math.min((rl - 0.22) / 0.15, (0.72 - rl) / 0.15)) : 0;
     const chW = !st.isTactical && rl > 0.74 && rl < 0.98 ? smooth01(Math.min((rl - 0.74) / 0.09, (0.98 - rl) / 0.08)) : 0;
     const baseHip = isPistol ? PISTOL_HIP_POS : HIP_POS;
     const targetAdsX = isPistol ? PISTOL_ADS_POS.x : ADS_POS.x;
@@ -1382,10 +1324,17 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       (0.52 * spr + swx * 2) * calm + (isPistol ? -0.045 : 0.04) * hip + (isPistol ? 0.14 : 0.24) * tl,
       (swx * 1.5 + (isPistol ? 0.02 : -0.03)) * calm - (isPistol ? 0.12 : 0.32) * tl,
     );
-    leftArmRig.position.set(LEFT_ELBOW.x - 0.07 * chW, LEFT_ELBOW.y - 0.16 * dropW - 0.03 * chW, LEFT_ELBOW.z + 0.06 * chW);
-    rightArmRig.position.copy(RIGHT_ELBOW);
-    aimForearm(rightArmRig, rightForearmMesh, rightHand, rightWristLocal, null);
-    aimForearm(leftArmRig, leftForearmMesh, leftHand, leftWristLocal, leftWatch);
+    if (armsCtrl) {
+      armsCtrl.update({
+        weaponId: cfg.id,
+        triggerPull: isPistol ? pistolTrigPull / 0.42 : trigPull,
+        reloadProgress: rl,
+        isTactical: Boolean(st.isTactical),
+        isSprinting,
+        ads,
+        hideArms: scopedSniper,
+      });
+    }
   }
 
   function hud() {

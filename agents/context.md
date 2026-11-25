@@ -6,11 +6,11 @@
 
 _(ghi đè mỗi lần cập nhật)_
 
-- **Cập nhật lần cuối:** 2026-11-25 17:35 — Toàn đội IT (Tech Lead, BA, Solution Architect, Backend, Frontend, Python Model Artist, QA, Security, Code Reviewer, Technical Writer)
-- **Dự án / Giai đoạn:** FPS Web Game ("Bến cảng mưa") — Hoàn tất **v2.1**: Nguồn vũ khí dùng chung `server/weapons.js` (`M416`, `Glock-17`, `AWM Sniper`), cơ chế nạp đạn băng vô hạn Server-Authoritative (`R1–R5`, nạp chiến thuật vs rỗng, `TOL=80ms`, chống cheat console), kiến trúc Input 3 lớp & vật lý `60 Hz` (`I1–I8`, `e.code`, `blur`/`Alt+Tab` safety, Jump buffer/Coyote/Anti-bhop, Ngồi + ceiling raycast + hitbox server theo `flags`, `localStorage` settings & rebind), hệ thống phân biệt đội mù màu (`T1–T4`, `soldier.glb` `TeamColor` `#2F80FF ▲` / `#FF4D2E ●` / `#8A8F98 ◆`, nameplate chỉ hiện đồng đội TDM, tâm ngắm đỏ, Radar).
-- **Nhánh Git đang làm:** Chưa xác định (workspace cục bộ `/home/dev_ntd/Documents/FPS`)
-- **Đang làm dở:** Không có.
-- **Blocker:** Không có.
+- **Cập nhật lần cuối:** 2026-11-26 01:02 — Technical Writer & Tech Lead
+- **Dự án / Giai đoạn:** FPS Web Game ("Bến cảng mưa") — Hoàn tất tích hợp tay nhân vật FPP `fps_arms.glb` (`SkinnedMesh` 47 xương, chuyển đổi `KHR_materials_pbrSpecularGlossiness` → glTF 2.0 `pbrMetallicRoughness`, bộ giải IK 2 xương giải tích `public/js/arm_rig.js` cho `M416`/`Glock-17`/`AWM Sniper`) cùng tài liệu và ghi công `CC-BY-4.0`.
+- **Nhánh Git đang làm:** `feat/skinned-fps-arms` (worktree `D:\FPS\fps-shooting\.worktrees\feat-skinned-fps-arms`)
+- **Đang làm dở:** Không có (sẵn sàng tổng hợp / merge nhánh `feat/skinned-fps-arms`).
+- **Blocker:** Ghi nhận 1 lỗi test có sẵn từ trước ở `model/tests/test_pistol_model.py:56` (`extrude_hollow_profile()` nhận `outer=` thay vì `outer_pts=`).
 
 ## 2. Quyết định đã chốt
 
@@ -25,6 +25,10 @@ _(ghi đè mỗi lần cập nhật)_
 - [2026-11-25] Mở rộng game sang PvP mạng LAN phong cách Truy Kích và tái cấu trúc sang kiến trúc `server/` (`index.js`, `protocol.js`, `ws.js`, `RoomManager.js`, `Room.js`, `Match.js`, `spawn.js`, `modes/TDM.js`, `modes/FFA.js`) + `public/` (`FPS.html`, `js/{net,lobby,room,game}.js`), bỏ ô nhập URL/nút Kết nối, bỏ phòng mồi cứng khi khởi động, cấp session token `sessionStorage` (kèm handoff `localStorage` 28s khi đóng tab), và chọn `0.0.0.0:8090` + `autoFallback` làm cổng LAN mặc định — Lý do: Loại bỏ lỗi bạn bè LAN kết nối nhầm `localhost`, tách rõ trách nhiệm Server Authority và Client Rendering, đảm bảo 6 tình huống biên và test đa tab độc lập.
 - [2026-11-25] Hợp nhất v2.1 theo lựa chọn người dùng (`1A, 2A, 3A`) + kế hoạch Input 3 lớp: dùng chung `server/weapons.js` (`/js/weapons.js`) cho 3 súng (`M416`, `Glock-17`, `AWM Sniper`) với băng dự trữ vô hạn + nạp chiến thuật/rỗng, Input `e.code` (`InputController` + `settings.js` lưu `localStorage`, `KeyC`/`ControlLeft` tránh `Ctrl+W`, `beforeunload`, click khóa chuột không bắn nhầm), vật lý `60 Hz`, đồng bộ `flags` bitmask & hitbox ngồi phía server, và vật liệu `TeamColor` (`A: #2F80FF ▲`, `B: #FF4D2E ●`, `FFA: #8A8F98`) kèm Radar + tâm đỏ trỏ địch — Lý do: Chống gian lận đạn/vị trí hoàn toàn từ server, không kẹt phím Alt+Tab/IME, và phân biệt đội rõ ở 30m trong mưa cả khi mù màu.
 - [2026-11-25] Nâng cấp vũ khí phím `2` (`Glock-17 Tactical Pistol` Gen4/Gen5) theo lựa chọn `1A ; 2A`: dựng bằng pipeline Python glTF 2.0 (`model/weapons/pistol.py` -> `model/dist/pistol.glb` + `pistol.bundle.js`) với 5 cụm cơ khí tách rời (`pistol_slide`, `pistol_barrel`, `pistol_frame`, `pistol_trigger`, `pistol_mag`), texture PBR anodized bead-blasted + vết xước + giọt nước mưa + vân nhám kim tự tháp `stippling` + thước ngắm dạ quang 3 chấm `Tritium` (`#39ff14`), nâng sức chứa băng đạn tiêu chuẩn lên `15` viên (`15 / ∞`), tích hợp khóa trượt mở khi hết đạn (`slide lock`), tư thế cầm 2 tay chiến thuật FPP và hiển thị Glock-17 trên nhân vật góc nhìn thứ 3 trong LAN PvP — Lý do: Người dùng duyệt kế hoạch và chọn `1A ; 2A`.
+- [2026-11-25] Thay thế mô hình tay FPP procedural trước đây trong `model/characters/fps_arms.py` bằng pipeline chuyển đổi `fps_arms.glb` có xương (`1` `SkinnedMesh` `armmesh_Mat_0`, `47` joints): `build_fps_arms_glb(texture_size=512, source_path=None)` chuyển `KHR_materials_pbrSpecularGlossiness` sang glTF 2.0 `pbrMetallicRoughness` (resize 4 texture về `texture_size`, bọc `arms_root` `scale=0.01`, `rotation=[0,1,0,0]` tức `rotY=π`, `extras=FPS_ARMS_METADATA`) và xuất `model/dist/fps_arms.glb` (`1,082,400 B`) + `fps_arms.bundle.js` (`1,443,464 B`) — Lý do: Nâng chất lượng tay găng chiến thuật thật và đồng bộ chuẩn PBR/hệ tọa độ Three.js.
+- [2026-11-25] Theo dõi bản dự phòng `model/assets/fps_arms.glb` (`10,314,692 B`) trong Git làm fallback cho `build_fps_arms_glb()` khi không có `fps_arms.glb` ở thư mục gốc — Lý do: Đảm bảo `python -m model.build` và unit test luôn chạy độc lập trên mọi máy/worktree.
+- [2026-11-25] Tách module IK 2 xương giải tích `public/js/arm_rig.js` (`solveTwoBoneArmIK`, `SKINNED_ARM_POSES` cho `m416`/`pistol`/`sniper`, `createSkinnedArmsController`) vận hành trên `L_arm_01/L_elbow_02/L_wrist_03`, `R_arm_023/R_elbow_024/R_wrist_025` (chiều dài `0.2587m` / `0.2543m`) kèm gập ngón & bóp cò `R_point1_030..R_point3_032`, tích hợp vào `gunAnim()` và `hydratePbrMaterial` (`aoMap`/skinning) trong `public/js/game.js` — Lý do: Điều khiển tự nhiên bộ xương 47 joints theo từng vũ khí và hoạt ảnh nạp đạn/bắn mà không phụ thuộc animation nhúng ngoài.
+- [2026-11-26] Ghi công chuẩn giấy phép **CC-BY-4.0** cho model gốc `"fps arms"` của tác giả **DJMaesen** (<http://creativecommons.org/licenses/by/4.0/>, nguồn <https://sketchfab.com/3d-models/fps-arms-08ec4403a47645d8ad80633abf13d39d>) trong `model/README.md` và `README.md`, nêu rõ đã chuyển đổi/giảm cỡ texture và chuẩn hóa `arms_root` — Lý do: Tuân thủ đầy đủ điều khoản ghi công và khai báo chỉnh sửa của `CC-BY-4.0`.
 
 ## 3. Việc cần làm (TODO)
 
@@ -51,8 +55,51 @@ _(ghi đè mỗi lần cập nhật)_
 - [x] Tách module Frontend sang `public/` (`FPS.html`, `js/net.js`, `js/lobby.js`, `js/room.js`, `js/game.js`), bỏ ô nhập URL/nút Kết nối, thêm Phòng chờ 2 cột + Ready/Host/Kick/Password/Chat & nội suy 100ms — Vai trò: Frontend Developer — Ưu tiên: cao
 - [x] Viết & chạy kiểm thử cho 6 tình huống biên (Mục 10) + kịch bản E2E 3 tab chạy trọn vòng đời trận không reload, dọn mã nguồn `lan/` cũ, rà soát bảo mật & cập nhật tài liệu — Vai trò: QA, Security Engineer, Code Reviewer, Technical Writer, Tech Lead — Ưu tiên: cao
 - [x] Hoàn tất v2.1 (`R1–R5`, `T1–T4`, `I1–I8`): `server/weapons.js`, nạp đạn vô hạn dự trữ + `TOL=80ms` + `event.reload`/`ammo`/`switchWeapon`, `InputController` + `settings.js`, vật lý `60Hz` + ngồi/coyote/anti-bhop, `soldier.glb` `TeamColor` `#2F80FF ▲`/`#FF4D2E ●`/`#8A8F98` + Radar + tâm ngắm đỏ, và nghiệm thu toàn bộ unit + E2E Playwright (gồm `30m` mưa & mù màu) — Vai trò: Toàn đội IT — Ưu tiên: cao
+- [x] Cài `uv` (`0.13.10`), build `model/dist/` (`m416`, `pistol`, `fps_arms`, `soldier`) và khởi động server Node.js tại `0.0.0.0:8090` trên Windows — Vai trò: DevOps Engineer — Ưu tiên: cao
+- [x] Khảo sát `fps_arms.glb` mới và lập kế hoạch tích hợp (`docs/superpowers/plans/2026-11-25-skinned-fps-arms-integration.md`) — Vai trò: Tech Lead & Solution Architect — Ưu tiên: cao
+- [x] Thực thi tích hợp `fps_arms.glb` (chuyển đổi PBR glTF 2.0 + IK 2 xương `public/js/arm_rig.js` + `public/js/game.js` + tài liệu & ghi công `CC-BY-4.0`) — Vai trò: Python Model Dev, Frontend Dev, QA, Security, Reviewer, Technical Writer — Ưu tiên: cao
+- [ ] Sửa keyword argument `outer=`/`inner=` thành `outer_pts=`/`inner_pts=` trong `model/tests/test_pistol_model.py:56,63` nếu người dùng yêu cầu sửa test — Vai trò: QA / Tester — Ưu tiên: thấp
 
 ## 4. Nhật ký bàn giao (mới nhất ở trên cùng)
+
+### [2026-11-26 01:02] Hoàn tất tích hợp tay `fps_arms.glb` (SkinnedMesh 47 xương, IK 2 xương) & Tài liệu — Vai trò: Toàn đội (Python Model Dev, Frontend Dev, QA, Security, Technical Writer, Tech Lead)
+
+- **Đã làm:**
+  - **Pipeline chuyển đổi `model/characters/fps_arms.py` & Asset fallback:** Thay dựng tay procedural bằng `build_fps_arms_glb(texture_size=512, source_path=None)` chuyển `KHR_materials_pbrSpecularGlossiness` → `pbrMetallicRoughness`, resize 4 texture `2048×2048` → `512×512`, bọc `arms_root` (`scale=0.01`, `rotation=[0,1,0,0]`, `extras=FPS_ARMS_METADATA`), theo dõi bản fallback `model/assets/fps_arms.glb` và viết lại `model/tests/test_arms_model.py`.
+  - **IK 2 xương & Tích hợp Engine (`public/js/arm_rig.js`, `public/js/game.js`):** Triển khai `solveTwoBoneArmIK`, `SKINNED_ARM_POSES` (`m416`, `pistol`, `sniper`), `createSkinnedArmsController` (gập ngón & bóp cò `R_point1_030..R_point3_032`, chuyển tiếp nạp đạn chiến thuật mượt, tắt `frustumCulled`), tích hợp vào `gunAnim()`, nâng cấp `hydratePbrMaterial` hỗ trợ `aoMap`/skinning và dọn helper tay cũ; thẩm định ảnh chụp hiệu chỉnh trên Chrome headless cho M416 / Glock-17 / AWM.
+  - **Tài liệu & Ghi công (`model/README.md`, `README.md`, `agents/context.md`):** Cập nhật cây thư mục, node/bone mới của `fps_arms.glb`, hướng dẫn build/test và ghi công **DJMaesen** (`CC-BY-4.0`, nguồn Sketchfab, ghi chú đã chuyển đổi/chỉnh sửa).
+  - **Kiểm thử & Bảo mật:**
+    - Security grep (`innerHTML|dangerouslySetInnerHTML|eval\(|document\.write`) trên `public/js/arm_rig.js` và `public/js/game.js`: **0 match**.
+    - Node.js (`node --test server/tests/test_lan_v2.js server/tests/test_arm_rig.mjs`): **8/8 PASS** (`281.83ms`, gồm `5` test LAN + `3` test `arm_rig`).
+    - Python (`uv run --python 3.12 --with "numpy>=1.24.0" --with "Pillow>=9.5.0" python -m unittest discover -s model/tests -v`): **22/23 PASS**, **1 ERROR** có sẵn từ trước ở `model/tests/test_pistol_model.py:56` (`outer=` thay vì `outer_pts=`).
+- **File ảnh hưởng:** `model/characters/fps_arms.py`, `model/characters/__init__.py`, `model/build.py`, `model/assets/fps_arms.glb`, `model/tests/test_arms_model.py`, `public/js/arm_rig.js`, `public/js/game.js`, `server/tests/test_arm_rig.mjs`, `server/tests/test_lan_v2.js`, `model/README.md`, `README.md`, `agents/context.md`.
+- **Đang dở / vướng:** Không có (ngoại trừ lỗi test có sẵn ở `model/tests/test_pistol_model.py:56` nằm ngoài phạm vi task này).
+- **Bước tiếp theo:** Review / merge nhánh `feat/skinned-fps-arms` về `main` (hoặc sửa `test_pistol_model.py:56,63` nếu người dùng yêu cầu).
+- **Câu hỏi còn mở:** Không có.
+
+### [2026-11-25 20:03] Lập kế hoạch tích hợp `fps_arms.glb` (SkinnedMesh 47 xương) — Vai trò: Tech Lead & Solution Architect
+
+- **Đã làm:**
+  - Kiểm tra cấu trúc nhị phân glTF 2.0 của `fps_arms.glb` gốc (`10,314,692 B`, author `DJMaesen`, `CC-BY-4.0`): `1` `SkinnedMesh` (`armmesh_Mat_0`, `4,026` đỉnh), `47` joints (`_rootJoint` → `L_arm_01`/`L_elbow_02`/`L_wrist_03` + 5 ngón, `R_arm_023`/`R_elbow_024`/`R_wrist_025` + 5 ngón), không có animation nhúng sẵn, dùng `KHR_materials_pbrSpecularGlossiness` với 4 texture `2048×2048` PNG, đơn vị centimet (`scale=0.01`) hướng `+Z` (`rotY=π` để quay về `-Z`).
+  - Lập kế hoạch 4 task chi tiết tại `docs/superpowers/plans/2026-11-25-skinned-fps-arms-integration.md` (chuyển đổi PBR + chuẩn hóa root ở `model/characters/fps_arms.py`, module IK 2 xương `public/js/arm_rig.js` khớp `PUBLIC_JS_RE`, tích hợp `public/js/game.js`, tài liệu & ghi công `CC-BY-4.0`).
+- **File ảnh hưởng:** `docs/superpowers/plans/2026-11-25-skinned-fps-arms-integration.md`, `agents/context.md`.
+- **Đang dở / vướng:** Chờ người dùng duyệt kế hoạch và chọn phương án thực thi (`Subagent-driven` hoặc `Native`).
+- **Bước tiếp theo:** Thực thi từng task theo kế hoạch đã duyệt.
+- **Câu hỏi còn mở:** Người dùng chọn `Subagent-driven` hay `Native` (và có muốn giữ nguyên file gốc `fps_arms.glb` ở root làm nguồn build không).
+
+### [2026-11-25 19:53] Build model 3D và khởi động server game trên Windows — Vai trò: Tech Lead & DevOps Engineer
+
+- **Đã làm:**
+  - Xác minh môi trường Windows có `Node.js v24.18.0`, chưa có Python nên đã cài `astral-sh.uv` `0.13.10` qua `winget` và chạy bằng Python `3.12.16` kèm `numpy`, `Pillow`.
+  - Chạy `node --test server/tests/test_lan_v2.js`: **5/5 PASS** (`362.49ms`).
+  - Chạy `uv run --python 3.12 --with "numpy>=1.24.0" --with "Pillow>=9.5.0" python -m unittest discover -s model/tests -v`: **19/20 PASS**, **1 ERROR** có sẵn tại `model/tests/test_pistol_model.py:56` (`extrude_hollow_profile() got an unexpected keyword argument 'outer'`, do chữ ký trong `model/core/geometry.py:632` dùng `outer_pts`, `inner_pts`).
+  - Build thành công toàn bộ 4 asset vào `model/dist/` qua `python -m model.build`: `m416` (`1,589,340 B` `.glb` / `2,119,380 B` `.bundle.js`), `pistol` (`2,052,612 B` / `2,737,078 B`), `fps_arms` (`790,368 B` / `1,054,088 B`), `soldier` (`1,037,788 B` / `1,383,983 B`).
+  - Khởi động daemon `node server/index.js` lắng nghe `0.0.0.0:8090` (`http://localhost:8090/FPS.html`, `http://192.168.1.161:8090/FPS.html`, `http://172.19.112.1:8090/FPS.html`).
+  - Gọi subagent `browser` để mở `http://localhost:8090/FPS.html`, nhưng không kết nối được Chrome vì thiếu `DevToolsActivePort` (chưa bật remote debugging).
+- **File ảnh hưởng:** `model/dist/*` (gitignored), `agents/context.md`.
+- **Đang dở / vướng:** Chưa mở được tab Chrome tự động do chưa bật `chrome://inspect/#remote-debugging`.
+- **Bước tiếp theo:** Người dùng mở `http://localhost:8090/FPS.html` (hoặc chia sẻ link LAN cho máy khác) để vào game; nếu muốn AI mở và kiểm tra trực tiếp trên Chrome, bật `chrome://inspect/#remote-debugging` rồi nhắn lại.
+- **Câu hỏi còn mở:** Có muốn sửa lỗi keyword argument trong `model/tests/test_pistol_model.py` không?
 
 ### [2026-11-25 17:35] Hoàn tất v2.1: Đa vũ khí nạp đạn vô hạn, Phân biệt Đội 30m & Input 3 lớp 60Hz — Vai trò: Toàn bộ đội IT
 
