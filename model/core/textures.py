@@ -22,6 +22,7 @@ class RainMetalTextures:
     gunmetal_mr_png: bytes
     polymer_mr_png: bytes
     size: int
+    polymer_normal_png: bytes = b""
 
 
 @dataclass(frozen=True)
@@ -71,6 +72,7 @@ class PistolTextures:
     stipple_mr_png: bytes
     stipple_normal_png: bytes
     size: int
+    polymer_normal_png: bytes = b""
 
 
 def _encode_png(arr: np.ndarray, mode: str) -> bytes:
@@ -152,22 +154,41 @@ def create_rain_and_metal_textures(
     rng = random.Random(seed)
     np_rng = np.random.default_rng(seed)
 
-    # Anisotropic brushed-metal micro-streaks across X for authentic CNC receiver grain.
+    # Anisotropic brushed-metal micro-streaks across X + isotropic micro-grain for CNC anodized finish.
     row_streak = np_rng.normal(0.0, 0.018, (size, 1)).astype(np.float32)
     col_wave = (np.sin(np.linspace(0.0, 14.0 * np.pi, size, dtype=np.float32))[None, :] * 0.008)
     streak = row_streak + col_wave
+    micro_grain = np_rng.normal(0.0, 0.022, (size, size)).astype(np.float32)
 
-    rough = np.full((size, size), 0.38, dtype=np.float32) + streak * 0.6
-    bump = np.full((size, size), 0.35, dtype=np.float32)
+    rough = np.full((size, size), 0.46, dtype=np.float32) + streak * 0.65 + micro_grain * 0.70
+    bump = np.full((size, size), 0.35, dtype=np.float32) + micro_grain * 0.15
+    metal = np.full((size, size), 230.0, dtype=np.float32)
     droplet_mask = np.zeros((size, size), dtype=np.float32)
+
+    # Edge wear & subtle wrapped micro-scratches exposing bare alloy under anodized finish.
+    scratch_img = Image.new("L", (size, size), 0)
+    s_draw = ImageDraw.Draw(scratch_img)
+    for _ in range(55):
+        sx = rng.random() * size
+        sy = rng.random() * size
+        slen = (10.0 + rng.random() * 44.0) * (size / 512.0)
+        sdy = (rng.random() - 0.5) * 6.0 * (size / 512.0)
+        val = int(165 + rng.random() * 90)
+        for ox in (-size, 0, size):
+            s_draw.line([(sx + ox, sy), (sx + ox + slen, sy + sdy)], fill=val, width=1)
+    edge_wear = (np.asarray(scratch_img, dtype=np.float32) / 255.0)
+    wear_hit = edge_wear > 0.1
+    rough = np.where(wear_hit, 0.25 - 0.03 * edge_wear, rough)
+    bump = np.where(wear_hit, 0.295, bump)
+    metal = np.where(wear_hit, 255.0, metal)
 
     for i in range(droplet_count):
         cx = rng.random() * size
         cy = rng.random() * size
-        # Mix fine mist micro-droplets with larger domed raindrops & short vertical water streaks.
+        # Mix fine mist micro-droplets with sparse domed raindrops.
         is_large = (i % 7) == 0
-        rx = (2.1 + rng.random() * 2.2) if is_large else (0.85 + rng.random() * 1.45)
-        ry = rx * (1.25 + rng.random() * 0.7 if (i % 11) == 0 else (0.95 + rng.random() * 0.25))
+        rx = max(0.75, ((1.4 + rng.random() * 1.1) if is_large else (0.7 + rng.random() * 0.9)) * (size / 512.0))
+        ry = rx * (1.2 + rng.random() * 0.5 if (i % 11) == 0 else (0.95 + rng.random() * 0.22))
 
         r_ceil_x = int(np.ceil(rx)) + 1
         r_ceil_y = int(np.ceil(ry)) + 1
@@ -179,8 +200,8 @@ def create_rain_and_metal_textures(
         t2 = (dx[None, :] ** 2) + (dy[:, None] ** 2)
         inside = t2 <= 1.0
 
-        # Smooth spherical-cap height profile -> sharp normal rim catches bright specular glints!
-        dome = np.where(inside, 0.35 + 0.65 * np.sqrt(np.maximum(0.0, 1.0 - t2)), 0.0).astype(np.float32)
+        # Smooth spherical-cap height profile -> sharp normal rim catches specular glints!
+        dome = np.where(inside, 0.35 + 0.48 * np.sqrt(np.maximum(0.0, 1.0 - t2)), 0.0).astype(np.float32)
 
         patch_r = rough[np.ix_(y_idx, x_idx)]
         patch_r[inside] = 0.045
@@ -201,15 +222,37 @@ def create_rain_and_metal_textures(
     bump_u8 = (bump * 255.0).astype(np.uint8)
     normal_rgb = _height_to_normal(bump, strength=normal_strength)
 
+    # Anodized gunmetal albedo with edge wear
+    gm_base = np.array([82.0, 88.0, 96.0], dtype=np.float32)
+    gm_mod = (1.0 + streak * 0.45 + micro_grain * 0.35 - droplet_mask * 0.08)[..., None]
+    gm_albedo = gm_base[None, None, :] * gm_mod
+    wear_rgb = np.array([182.0, 188.0, 196.0], dtype=np.float32)[None, None, :]
+    gm_albedo = np.clip(gm_albedo * (1.0 - 0.65 * edge_wear[..., None]) + wear_rgb * (0.65 * edge_wear[..., None]), 0, 255).astype(np.uint8)
+
+    gm_mr_rgb = np.zeros((size, size, 3), dtype=np.uint8)
+    gm_mr_rgb[..., 1] = np.clip(rough * 255.0, 0, 255).astype(np.uint8)
+    gm_mr_rgb[..., 2] = np.clip(metal, 0, 255).astype(np.uint8)
+
+    # Matte polymer: isotropic mold micro-grain only (no brushed streaks, no glossy droplets, B=0)
+    poly_grain = np_rng.normal(0.0, 0.032, (size, size)).astype(np.float32)
+    poly_base = np.array([64.0, 68.0, 74.0], dtype=np.float32)
+    poly_albedo = np.clip(poly_base[None, None, :] * (1.0 + poly_grain[..., None] * 1.1), 0, 255).astype(np.uint8)
+
+    poly_mr_rgb = np.zeros((size, size, 3), dtype=np.uint8)
+    poly_mr_rgb[..., 1] = np.clip((0.84 + poly_grain * 1.1) * 255.0, 194, 232).astype(np.uint8)
+    poly_mr_rgb[..., 2] = 0
+    poly_normal_rgb = _height_to_normal(np.clip(0.50 + poly_grain * 1.4, 0.0, 1.0), strength=1.8)
+
     return RainMetalTextures(
         roughness_png=_encode_png(rough_u8, mode="L"),
         bump_png=_encode_png(bump_u8, mode="L"),
         normal_png=_encode_png(normal_rgb, mode="RGB"),
-        gunmetal_albedo_png=_build_brushed_albedo_png((118, 128, 138), streak, droplet_mask),
-        polymer_albedo_png=_build_brushed_albedo_png((72, 76, 82), streak * 0.5, droplet_mask),
-        gunmetal_mr_png=_build_metallic_roughness_png(rough, base_rough=0.38),
-        polymer_mr_png=_build_metallic_roughness_png(rough, base_rough=0.58),
+        gunmetal_albedo_png=_encode_png(gm_albedo, mode="RGB"),
+        polymer_albedo_png=_encode_png(poly_albedo, mode="RGB"),
+        gunmetal_mr_png=_encode_png(gm_mr_rgb, mode="RGB"),
+        polymer_mr_png=_encode_png(poly_mr_rgb, mode="RGB"),
         size=size,
+        polymer_normal_png=_encode_png(poly_normal_rgb, mode="RGB"),
     )
 
 
@@ -487,11 +530,11 @@ def create_pistol_textures(
     height = np.asarray(bump_img, dtype=np.float32) / 255.0
     slide_mod = np.asarray(albedo_img, dtype=np.float32) / 255.0
 
-    # 2. Fine wet rain droplets beading across anodized slide & polymer frame
+    # 2. Fine wet rain droplets beading across anodized slide
     for _ in range(droplet_count):
         cx = rng.random() * size
         cy = rng.random() * size
-        rad = (1.8 + rng.random() * 4.8) * (size / 512.0)
+        rad = max(0.85, (0.9 + rng.random() * 1.8) * (size / 512.0))
         r_ceil = int(np.ceil(rad)) + 1
         x_idx = np.arange(int(cx) - r_ceil, int(cx) + r_ceil + 1) % size
         y_idx = np.arange(int(cy) - r_ceil, int(cy) + r_ceil + 1) % size
@@ -514,18 +557,21 @@ def create_pistol_textures(
         patch_a[inside] *= 0.92
         slide_mod[np.ix_(y_idx, x_idx)] = patch_a
 
-    slide_normal_rgb = _height_to_normal(np.clip(height, 0.0, 1.0), strength=3.4)
+    slide_normal_rgb = _height_to_normal(np.clip(height, 0.0, 1.0), strength=3.0)
 
     slide_albedo_rgb = np.repeat(np.clip(slide_mod * 255.0, 0, 255).astype(np.uint8)[..., None], 3, axis=2)
     slide_mr_rgb = np.zeros((size, size, 3), dtype=np.uint8)
-    slide_mr_rgb[..., 1] = np.clip(rough * 1.12 * 255.0, 0, 255).astype(np.uint8)  # ~0.42 base, 0.06 droplets
+    slide_mr_rgb[..., 1] = np.clip(rough * 1.18 * 255.0, 0, 255).astype(np.uint8)  # ~0.46 base, 0.06 droplets
     slide_mr_rgb[..., 2] = 255
 
-    poly_rough = np.where(rough < 0.12, 0.10, np.clip(0.68 + (rough - 0.36) * 0.55, 0.45, 0.85))
+    # Decoupled matte polymer frame/mag (no slide holster scratches, no glossy droplets, B=0)
+    poly_grain = np_rng.normal(0.0, 0.032, (size, size)).astype(np.float32)
+    poly_rough = np.clip(0.84 + poly_grain, 0.76, 0.90)
     poly_mr_rgb = np.zeros((size, size, 3), dtype=np.uint8)
-    poly_mr_rgb[..., 1] = np.clip(poly_rough * 255.0, 0, 255).astype(np.uint8)
-    poly_mr_rgb[..., 2] = 255
-    poly_albedo_rgb = np.repeat(np.clip((0.92 + (slide_mod - 0.92) * 0.5) * 255.0, 0, 255).astype(np.uint8)[..., None], 3, axis=2)
+    poly_mr_rgb[..., 1] = np.clip(poly_rough * 255.0, 192, 232).astype(np.uint8)
+    poly_mr_rgb[..., 2] = 0
+    poly_albedo_rgb = np.repeat(np.clip(226.0 + poly_grain * 180.0, 195, 248).astype(np.uint8)[..., None], 3, axis=2)
+    polymer_normal_rgb = _height_to_normal(np.clip(0.50 + poly_grain * 1.4, 0.0, 1.0), strength=1.8)
 
     # 3. Gen4/Gen5 Glock square-pyramid grip stippling pattern (step = 8px)
     step = max(4, (8 * size) // 512)
@@ -551,7 +597,7 @@ def create_pistol_textures(
     stipple_normal_rgb = _height_to_normal(np.clip(stipple_h, 0.0, 1.0), strength=3.8)
     stipple_mr_rgb = np.zeros((size, size, 3), dtype=np.uint8)
     stipple_mr_rgb[..., 1] = np.clip(stipple_rough * 255.0, 0, 255).astype(np.uint8)
-    stipple_mr_rgb[..., 2] = 255
+    stipple_mr_rgb[..., 2] = 0
     stipple_alb_rgb = np.repeat(np.clip(stipple_alb, 0, 255).astype(np.uint8)[..., None], 3, axis=2)
 
     return PistolTextures(
@@ -564,4 +610,5 @@ def create_pistol_textures(
         stipple_mr_png=_encode_png(stipple_mr_rgb, mode="RGB"),
         stipple_normal_png=_encode_png(stipple_normal_rgb, mode="RGB"),
         size=size,
+        polymer_normal_png=_encode_png(polymer_normal_rgb, mode="RGB"),
     )

@@ -23,8 +23,12 @@ from .geometry import (
 from .glb_exporter import (
     GLBMaterial,
     GLBNode,
+    euler_xyz_to_quat,
     export_glb,
     export_js_bundle,
+    pack_glb,
+    parse_glb,
+    socket_euler_xyz,
 )
 from .textures import (
     GloveTextures,
@@ -60,8 +64,12 @@ __all__ = [
     "transform_mesh",
     "GLBMaterial",
     "GLBNode",
+    "euler_xyz_to_quat",
     "export_glb",
     "export_js_bundle",
+    "pack_glb",
+    "parse_glb",
+    "socket_euler_xyz",
     "GloveTextures",
     "PistolTextures",
     "RainMetalTextures",

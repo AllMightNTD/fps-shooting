@@ -630,3 +630,93 @@ test("Real built m416.glb + fps_arms.glb sockets enforce thumb-forward support &
   // Assert 3: Firing swings index finger inward across trigger blade (x=0)
   assert.ok(rIdx4Fire.x < 0.002 && rIdx2Fire.x > -0.005, "Index finger must cross trigger blade at x≈0 when firing");
 });
+
+test("Real built awm.glb + fps_arms.glb sockets position left forend, right grip, and right-side bolt handle cleanly", () => {
+  const awmRaw = fs.readFileSync(path.join(DIST_DIR, "awm.glb"));
+  const armsRaw = fs.readFileSync(path.join(DIST_DIR, "fps_arms.glb"));
+
+  function parseRoot(raw) {
+    const jsonLen = raw.readUInt32LE(12);
+    const gltf = JSON.parse(raw.subarray(20, 20 + jsonLen).toString("utf8"));
+    const objs = gltf.nodes.map((n, i) => {
+      const node = createMockNode(n.name || `node_${i}`, n.translation || [0, 0, 0], n.rotation || [0, 0, 0, 1]);
+      if (n.scale) node.scale.set(...n.scale);
+      if (n.matrix) {
+        node.position.set(n.matrix[12], n.matrix[13], n.matrix[14]);
+        const sx = Math.hypot(n.matrix[0], n.matrix[1], n.matrix[2]) || 1;
+        node.scale.set(sx, sx, sx);
+        node.quaternion.setFromRotationMatrix({
+          elements: [
+            n.matrix[0] / sx, n.matrix[1] / sx, n.matrix[2] / sx, 0,
+            n.matrix[4] / sx, n.matrix[5] / sx, n.matrix[6] / sx, 0,
+            n.matrix[8] / sx, n.matrix[9] / sx, n.matrix[10] / sx, 0,
+            0, 0, 0, 1,
+          ],
+        });
+      }
+      node.parent = null;
+      return node;
+    });
+    gltf.nodes.forEach((n, i) =>
+      (n.children || []).forEach((c) => {
+        objs[i].children.push(objs[c]);
+        objs[c].parent = objs[i];
+      }),
+    );
+    return objs[gltf.scenes[0].nodes[0]];
+  }
+
+  function worldTRS(node) {
+    const chain = [];
+    for (let cur = node; cur; cur = cur.parent) chain.push(cur);
+    chain.reverse();
+    const p = new Vec3(0, 0, 0);
+    const q = new Quat(0, 0, 0, 1);
+    let s = 1;
+    for (const n of chain) {
+      p.add(n.position.clone().multiplyScalar(s).applyQuaternion(q));
+      q.multiplyQuaternions(q.clone(), n.quaternion);
+      s *= n.scale.x;
+    }
+    return { p, q };
+  }
+
+  const awmRoot = parseRoot(awmRaw);
+  const armsRoot = parseRoot(armsRaw);
+  const ctrl = createSkinnedArmsController(armsRoot, MathApi);
+  assert.equal(ctrl.ready, true);
+
+  const sockHg = worldTRS(awmRoot.getObjectByName("socket_handguard"));
+  const sockGrip = worldTRS(awmRoot.getObjectByName("socket_grip"));
+  const sockBolt = worldTRS(awmRoot.getObjectByName("socket_bolt_right"));
+
+  // Act 1: Sniper hipfire grip
+  ctrl.update({
+    weaponId: "sniper",
+    leftSocketPos: sockHg.p,
+    leftSocketQuat: sockHg.q,
+    rightSocketPos: sockGrip.p,
+    rightSocketQuat: sockGrip.q,
+    triggerPull: 0,
+    ads: 0,
+    rightAction: "grip",
+  });
+  const lThumb4 = worldTRS(armsRoot.getObjectByName("L_thumb4_07")).p;
+  const rMid1 = worldTRS(armsRoot.getObjectByName("R_middle1_034")).p;
+  assert.ok(lThumb4.z < -0.22, `Expected left hand on AWM forend, got z=${lThumb4.z}`);
+  assert.ok(rMid1.z > 0.02, `Expected right hand on AWM grip, got z=${rMid1.z}`);
+
+  // Act 2: Bolt-action right hand cycling
+  ctrl.update({
+    weaponId: "sniper",
+    leftSocketPos: sockHg.p,
+    leftSocketQuat: sockHg.q,
+    rightSocketPos: sockBolt.p,
+    rightSocketQuat: sockBolt.q,
+    triggerPull: 0,
+    ads: 0,
+    rightAction: "bolt",
+  });
+  const rWristBolt = worldTRS(armsRoot.getObjectByName("R_wrist_025")).p;
+  assert.ok(rWristBolt.x > 0.04 && Number.isFinite(rWristBolt.x), `Expected right wrist on right bolt handle, got x=${rWristBolt.x}`);
+});

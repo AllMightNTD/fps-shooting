@@ -19,7 +19,6 @@ from model.core import (
     create_lathe,
     create_plane,
     create_rain_and_metal_textures,
-    create_ring,
     extrude_shape,
     merge_meshes,
     transform_mesh,
@@ -92,68 +91,68 @@ _MAG_PROFILE: list[tuple[float, float]] = [
 
 
 def _create_materials(texture_size: int = 512, seed: int = 42) -> dict[str, GLBMaterial]:
-    tex = create_rain_and_metal_textures(size=texture_size, droplet_count=620, seed=seed)
+    tex = create_rain_and_metal_textures(size=texture_size, droplet_count=260, seed=seed, normal_strength=2.6)
     return {
         "gunmetal": GLBMaterial(
             name="M416_GunMetal",
-            color=0xC2CBD4,
-            metalness=0.86,
-            roughness=0.38,
+            color=0xA4AEB8,
+            metalness=0.88,
+            roughness=0.46,
             base_color_png=tex.gunmetal_albedo_png,
             metallic_roughness_png=tex.gunmetal_mr_png,
             normal_png=tex.normal_png,
-            normal_scale=1.15,
-            clearcoat=0.85,
-            clearcoat_roughness=0.08,
+            normal_scale=0.65,
+            clearcoat=0.16,
+            clearcoat_roughness=0.30,
         ),
         "steel": GLBMaterial(
             name="M416_Steel",
-            color=0x58626E,
-            metalness=0.95,
-            roughness=0.22,
+            color=0x5E6874,
+            metalness=0.92,
+            roughness=0.30,
             normal_png=tex.normal_png,
-            normal_scale=0.55,
-            clearcoat=0.65,
-            clearcoat_roughness=0.08,
+            normal_scale=0.35,
+            clearcoat=0.18,
+            clearcoat_roughness=0.26,
         ),
         "polymer": GLBMaterial(
             name="M416_Polymer",
-            color=0xB2BAC4,
-            metalness=0.14,
-            roughness=0.58,
+            color=0x7E858E,
+            metalness=0.0,
+            roughness=0.84,
             base_color_png=tex.polymer_albedo_png,
             metallic_roughness_png=tex.polymer_mr_png,
-            normal_png=tex.normal_png,
-            normal_scale=1.25,
-            clearcoat=0.80,
-            clearcoat_roughness=0.10,
+            normal_png=tex.polymer_normal_png,
+            normal_scale=0.60,
+            clearcoat=0.0,
+            clearcoat_roughness=0.0,
         ),
         "rubber": GLBMaterial(
             name="M416_Rubber",
             color=0x16181A,
-            metalness=0.05,
-            roughness=0.82,
-            clearcoat=0.35,
-            clearcoat_roughness=0.25,
+            metalness=0.0,
+            roughness=0.88,
+            clearcoat=0.0,
+            clearcoat_roughness=0.0,
         ),
         "glass": GLBMaterial(
             name="M416_HoloGlass",
-            color=0x90CEFF,
-            metalness=0.10,
-            roughness=0.05,
-            opacity=0.30,
+            color=0xCBE4F5,
+            metalness=0.04,
+            roughness=0.04,
+            opacity=0.10,
             transparent=True,
             double_sided=True,
-            transmission=0.85,
+            transmission=0.92,
             ior=1.5,
         ),
         "reticle": GLBMaterial(
             name="M416_HoloReticle",
-            color=0xFF2A00,
+            color=0xFF2010,
             metalness=0.0,
-            roughness=0.2,
-            emissive=0xFF2A00,
-            emissive_intensity=2.3,
+            roughness=0.20,
+            emissive=0xFF2010,
+            emissive_intensity=1.4,
             double_sided=True,
             unlit=True,
         ),
@@ -166,13 +165,13 @@ def _create_materials(texture_size: int = 512, seed: int = 42) -> dict[str, GLBM
         "fde": GLBMaterial(
             name="M416_PEQ15_FDE",
             color=0x9C865E,
-            metalness=0.08,
-            roughness=0.60,
+            metalness=0.0,
+            roughness=0.78,
             metallic_roughness_png=tex.polymer_mr_png,
-            normal_png=tex.normal_png,
-            normal_scale=0.55,
-            clearcoat=0.40,
-            clearcoat_roughness=0.22,
+            normal_png=tex.polymer_normal_png,
+            normal_scale=0.40,
+            clearcoat=0.0,
+            clearcoat_roughness=0.0,
         ),
         "dark": GLBMaterial(
             name="M416_DarkAccent",
@@ -421,7 +420,7 @@ def _build_magazine_node(mats: dict[str, GLBMaterial]) -> GLBNode:
         name="mag_group",
         translation=(0.0, -0.042, -0.064),
         children=[
-            GLBNode(name="mag_body", mesh=mag_metal, material=mats["gunmetal"]),
+            GLBNode(name="mag_body", mesh=mag_metal, material=mats["polymer"]),
             GLBNode(name="mag_base", mesh=mag_base, material=mats["steel"]),
             GLBNode(
                 name="socket_mag",
@@ -483,12 +482,7 @@ def build_m416_nodes(texture_size: int = 512, seed: int = 42) -> list[GLBNode]:
             translation=(0.0, 0.097, -0.025),
         )
     )
-    reticle_mesh = merge_meshes(
-        [
-            create_ring(0.0044, 0.0056, 24),
-            create_circle(0.0012, 12),
-        ]
-    )
+    reticle_mesh = create_circle(0.00055, 16)
     children.append(
         GLBNode(
             name="reticle_group",

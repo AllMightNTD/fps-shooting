@@ -18,8 +18,10 @@ model/
 ├── weapons/
 │   ├── __init__.py
 │   ├── m416.py             # Dựng chi tiết HK416/M416 (SOPMOD stock, EOTech vát, Quad-Rail, băng đạn cong, PEQ-15)
-│   └── pistol.py           # Dựng Glock-17 Tactical Gen4/Gen5 (slide, barrel, frame stippling, trigger, mag, Tritium)
+│   ├── pistol.py           # Dựng Glock-17 Tactical Gen4/Gen5 (slide, barrel, frame stippling, trigger, mag, Tritium)
+│   └── awm.py              # Chuyển đổi awm.glb (Spec-Gloss -> Metallic-Roughness, bolt pivot, mag group & IK sockets)
 ├── assets/
+│   ├── awm.glb             # Model nguồn AWM Sniper (fallback hermetic cho awm.py)
 │   └── fps_arms.glb        # Model nguồn SkinnedMesh tay chiến thuật 47 xương (DJMaesen, CC-BY-4.0)
 ├── characters/
 │   ├── __init__.py
@@ -29,6 +31,7 @@ model/
 │   ├── __init__.py
 │   ├── test_m416_model.py     # Unit test chuẩn AAA cho geometry, PBR M416 & GLB exporter (Happy & Unhappy paths)
 │   ├── test_pistol_model.py   # Unit test chuẩn AAA cho geometry, textures PBR & GLB Glock-17
+│   ├── test_awm_model.py      # Unit test chuẩn AAA cho chuyển đổi PBR awm.glb, trục -Z/mét & bolt/mag sockets
 │   ├── test_arms_model.py     # Unit test chuẩn AAA cho chuyển đổi Spec-Gloss -> PBR, bufferView & skinned fps_arms.glb
 │   └── test_soldier_model.py  # Unit test chuẩn AAA cho texture quân phục BDU/Kevlar & rigged soldier.glb
 └── dist/
@@ -36,6 +39,8 @@ model/
     ├── m416.bundle.js      # Gói Base64 JS cho M416 chạy không lỗi CORS trên file://
     ├── pistol.glb          # Asset nhị phân glTF 2.0 chuẩn PBR cho súng lục Glock-17
     ├── pistol.bundle.js    # Gói Base64 JS cho Glock-17 chạy không lỗi CORS trên file://
+    ├── awm.glb             # Asset nhị phân glTF 2.0 chuẩn PBR cho súng tỉa AWM Sniper
+    ├── awm.bundle.js       # Gói Base64 JS cho AWM chạy không lỗi CORS trên file://
     ├── fps_arms.glb        # Asset nhị phân glTF 2.0 chuẩn PBR (đã chuẩn hóa arms_root) cho tay nhân vật FPP
     ├── fps_arms.bundle.js  # Gói Base64 JS cho fps_arms chạy không lỗi CORS trên file://
     ├── soldier.glb         # Asset nhị phân glTF 2.0 chuẩn PBR cho chiến binh 3rd-person trên LAN
@@ -47,17 +52,14 @@ model/
 Chạy từ thư mục gốc dự án:
 
 ```bash
-# Sinh toàn bộ .glb và .bundle.js (m416 + pistol + fps_arms + soldier) trong model/dist/
+# Sinh toàn bộ .glb và .bundle.js (m416 + pistol + awm + fps_arms + soldier) trong model/dist/
 python3 -m model.build
 
-# Tùy chọn kích thước texture & thư mục đích (fps_arms tự đọc fps_arms.glb ở root nếu có, fallback về model/assets/fps_arms.glb)
+# Tùy chọn kích thước texture & thư mục đích (awm / fps_arms tự đọc file ở root nếu có, fallback về model/assets/)
 python3 -m model.build --tex-size 512 --seed 42 --out model/dist
 
-# Trên Windows (dùng uv)
-uv run --python 3.12 --with "numpy>=1.24.0" --with "Pillow>=9.5.0" python -m model.build
-
-# Chạy bộ kiểm thử đơn vị AAA (23 test cases; hiện 22 PASS, 1 ERROR có sẵn tại test_pistol_model.py:56)
-uv run --python 3.12 --with "numpy>=1.24.0" --with "Pillow>=9.5.0" python -m unittest discover -s model/tests -v
+# Chạy bộ kiểm thử đơn vị AAA (25 test cases)
+python3 -m unittest discover -s model/tests -v
 ```
 
 > Lưu ý: `build_fps_arms_glb(texture_size=512, source_path=None)` ưu tiên đọc `fps_arms.glb` ở thư mục gốc nếu tồn tại, ngược lại dùng bản tracked `model/assets/fps_arms.glb`, xuất ra `model/dist/fps_arms.glb` (`1,082,400 B`, ~1.08 MB) và `model/dist/fps_arms.bundle.js` (`1,443,464 B`).

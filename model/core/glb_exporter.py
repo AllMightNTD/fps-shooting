@@ -8,7 +8,7 @@ import json
 import math
 from pathlib import Path
 import struct
-from typing import Any
+from typing import Any, Sequence
 
 import numpy as np
 
@@ -51,6 +51,85 @@ def euler_xyz_to_quat(rx: float, ry: float, rz: float) -> list[float]:
     z = c1 * c2 * s3 + s1 * s2 * c3
     w = c1 * c2 * c3 - s1 * s2 * s3
     return [round(x, 7), round(y, 7), round(z, 7), round(w, 7)]
+
+
+def socket_euler_xyz(
+    distal: Sequence[float],
+    palm_normal: Sequence[float],
+    is_right_hand: bool = False,
+) -> tuple[float, float, float]:
+    """Compute socket XYZ Euler rotation where -Z=distal, +Y=radial, and +/-X=palm_normal."""
+    z_axis = -np.asarray(distal, dtype=np.float64)
+    z_axis /= np.linalg.norm(z_axis)
+    sign = -1.0 if is_right_hand else 1.0
+    x_axis = np.asarray(palm_normal, dtype=np.float64) * sign
+    x_axis = x_axis - z_axis * float(np.dot(x_axis, z_axis))
+    x_axis /= np.linalg.norm(x_axis)
+    y_axis = np.cross(z_axis, x_axis)
+    y_axis /= np.linalg.norm(y_axis)
+    mat = np.column_stack((x_axis, y_axis, z_axis))
+
+    sy = max(-1.0, min(1.0, float(mat[0, 2])))
+    ry = math.asin(sy)
+    if abs(mat[0, 2]) < 0.99999:
+        rx = math.atan2(-mat[1, 2], mat[2, 2])
+        rz = math.atan2(-mat[0, 1], mat[0, 0])
+    else:
+        rx = math.atan2(mat[2, 1], mat[1, 1])
+        rz = 0.0
+    return (round(rx, 6), round(ry, 6), round(rz, 6))
+
+
+def parse_glb(raw_bytes: bytes) -> tuple[dict[str, Any], bytes]:
+    """Parse and validate a glTF 2.0 binary (.glb) container into (gltf_json, bin_chunk)."""
+    if len(raw_bytes) < 20:
+        raise ValueError("GLB payload too small")
+    magic, version, total_len = struct.unpack_from("<III", raw_bytes, 0)
+    if magic != _GLB_MAGIC:
+        raise ValueError(f"Invalid GLB magic: 0x{magic:08x}")
+    if version != 2:
+        raise ValueError(f"Unsupported glTF version: {version}")
+    if total_len != len(raw_bytes):
+        raise ValueError(f"GLB length mismatch: header={total_len}, actual={len(raw_bytes)}")
+
+    json_len, json_type = struct.unpack_from("<II", raw_bytes, 12)
+    if json_type != _CHUNK_JSON:
+        raise ValueError("First GLB chunk must be JSON")
+    json_end = 20 + json_len
+    if json_end + 8 > len(raw_bytes):
+        raise ValueError("GLB JSON chunk truncated or missing BIN header")
+
+    try:
+        gltf = json.loads(raw_bytes[20:json_end].decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Invalid glTF JSON chunk") from exc
+    if not isinstance(gltf, dict):
+        raise ValueError("glTF root JSON must be an object")
+
+    bin_len, bin_type = struct.unpack_from("<II", raw_bytes, json_end)
+    if bin_type != _CHUNK_BIN:
+        raise ValueError("Second GLB chunk must be BIN")
+    bin_start = json_end + 8
+    bin_end = bin_start + bin_len
+    if bin_end > len(raw_bytes):
+        raise ValueError("GLB BIN chunk truncated")
+    return gltf, raw_bytes[bin_start:bin_end]
+
+
+def pack_glb(gltf: dict[str, Any], bin_bytes: bytes) -> bytes:
+    """Serialize a glTF JSON dict and raw BIN chunk into a 4-byte-aligned .glb binary."""
+    json_raw = json.dumps(gltf, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    json_pad = (-len(json_raw)) % 4
+    json_bytes = json_raw + (b" " * json_pad)
+
+    bin_pad = (-len(bin_bytes)) % 4
+    padded_bin = bin_bytes + (b"\x00" * bin_pad)
+
+    total_length = 12 + 8 + len(json_bytes) + 8 + len(padded_bin)
+    header = struct.pack("<III", _GLB_MAGIC, 2, total_length)
+    json_hdr = struct.pack("<II", len(json_bytes), _CHUNK_JSON)
+    bin_hdr = struct.pack("<II", len(padded_bin), _CHUNK_BIN)
+    return header + json_hdr + json_bytes + bin_hdr + padded_bin
 
 
 @dataclass(frozen=True)

@@ -77,6 +77,31 @@ const WEAPON_FINGER_PROFILES = Object.freeze({
       pink: [[-0.42, 0.0, 0.0], [-0.48, 0.0, 0.0], [-0.36, 0.0, 0.0]],
     }),
   }),
+  sniper: Object.freeze({
+    leftSupport: Object.freeze({
+      thumb: [[-0.24, -0.32, 0.06], [-0.10, 0.0, 0.0], [0.04, 0.0, 0.0]],
+      point: [[-0.42, 0.04, 0.0], [-0.50, 0.0, 0.0], [-0.34, 0.0, 0.0]],
+      middle: [[-0.28, 0.0, 0.0], [-0.32, 0.0, 0.0], [-0.22, 0.0, 0.0]],
+      ring: [[-0.26, 0.0, 0.0], [-0.28, 0.0, 0.0], [-0.20, 0.0, 0.0]],
+      pink: [[-0.22, 0.0, 0.0], [-0.22, 0.0, 0.0], [-0.18, 0.0, 0.0]],
+    }),
+    rightGrip: Object.freeze({
+      thumb: [[-0.28, 0.34, 0.06], [-0.34, 0.0, 0.0], [-0.24, 0.0, 0.0]],
+      indexIdle: [[0.06, -0.14, 0.0], [0.08, 0.0, 0.0], [0.06, 0.0, 0.0]],
+      indexFire: [[-0.48, 0.24, 0.0], [-0.68, 0.0, 0.0], [-0.42, 0.0, 0.0]],
+      middle: [[-0.46, 0.0, 0.0], [-0.58, 0.0, 0.0], [-0.40, 0.0, 0.0]],
+      ring: [[-0.42, 0.0, 0.0], [-0.52, 0.0, 0.0], [-0.36, 0.0, 0.0]],
+      pink: [[-0.38, 0.0, 0.0], [-0.46, 0.0, 0.0], [-0.34, 0.0, 0.0]],
+    }),
+    rightBolt: Object.freeze({
+      thumb: [[-0.42, 0.20, -0.10], [-0.38, 0.0, 0.0], [-0.26, 0.0, 0.0]],
+      indexIdle: [[-0.64, 0.08, 0.0], [-0.74, 0.0, 0.0], [-0.48, 0.0, 0.0]],
+      indexFire: [[-0.64, 0.08, 0.0], [-0.74, 0.0, 0.0], [-0.48, 0.0, 0.0]],
+      middle: [[-0.58, 0.0, 0.0], [-0.64, 0.0, 0.0], [-0.42, 0.0, 0.0]],
+      ring: [[-0.48, 0.0, 0.0], [-0.48, 0.0, 0.0], [-0.34, 0.0, 0.0]],
+      pink: [[-0.40, 0.0, 0.0], [-0.38, 0.0, 0.0], [-0.28, 0.0, 0.0]],
+    }),
+  }),
 });
 
 export function buildSocketPose(pos, distal, palmNormal, isRightHand, MathApi) {
@@ -315,6 +340,7 @@ export function createSkinnedArmsController(root, MathApi) {
       triggerPull = 0,
       ads = 0,
       leftAction = "support", // "support" | "mag" | "bolt"
+      rightAction = "grip", // "grip" | "bolt"
       hideArms = false,
     } = state;
 
@@ -385,7 +411,7 @@ export function createSkinnedArmsController(root, MathApi) {
     rWrist.quaternion.multiplyQuaternions(_qInv, _rWristQuat).normalize();
 
     // 4. Pose fingers & trigger discipline (idle outside trigger guard -> curled onto trigger when firing)
-    const profile = WEAPON_FINGER_PROFILES[weaponId === "pistol" ? "pistol" : "m416"];
+    const profile = WEAPON_FINGER_PROFILES[weaponId] || WEAPON_FINGER_PROFILES.m416;
     const leftProfile =
       leftAction === "bolt"
         ? WEAPON_FINGER_PROFILES.m416.leftBolt
@@ -398,7 +424,8 @@ export function createSkinnedArmsController(root, MathApi) {
     }
 
     const trigK = Math.max(0, Math.min(1, triggerPull));
-    const rightProfile = profile.rightGrip;
+    const rightProfile =
+      rightAction === "bolt" && profile.rightBolt ? profile.rightBolt : profile.rightGrip;
     applyDigitDelta(fingerBones.right.thumb, rightProfile.thumb);
     applyDigitDelta(fingerBones.right.point, rightProfile.indexIdle, rightProfile.indexFire, trigK);
     applyDigitDelta(fingerBones.right.middle, rightProfile.middle);

@@ -74,11 +74,19 @@ class TestPistolGeometryAndTextures(unittest.TestCase):
         tex = create_pistol_textures(size=tex_size, scratch_count=20, droplet_count=60, seed=99)
         slide_mr = np.asarray(Image.open(io.BytesIO(tex.slide_mr_png)))
         stipple_norm = Image.open(io.BytesIO(tex.stipple_normal_png))
+        poly_norm = Image.open(io.BytesIO(tex.polymer_normal_png))
+        poly_mr = np.asarray(Image.open(io.BytesIO(tex.polymer_mr_png)))
+        stipple_mr = np.asarray(Image.open(io.BytesIO(tex.stipple_mr_png)))
 
         # Assert
         self.assertEqual(slide_mr.shape, (tex_size, tex_size, 3))
         self.assertEqual(stipple_norm.size, (tex_size, tex_size))
         self.assertEqual(stipple_norm.mode, "RGB")
+        self.assertEqual(poly_norm.size, (tex_size, tex_size))
+        self.assertEqual(poly_norm.mode, "RGB")
+        self.assertTrue(np.all(poly_mr[..., 2] == 0))
+        self.assertGreaterEqual(int(poly_mr[..., 1].min()), 190)
+        self.assertTrue(np.all(stipple_mr[..., 2] == 0))
         # Rain droplets create glossy low-roughness pixels in G channel
         self.assertLess(int(slide_mr[..., 1].min()), 30)
         self.assertGreater(int(slide_mr[..., 1].max()), 90)
@@ -131,10 +139,19 @@ class TestPistolGLBExport(unittest.TestCase):
             self.assertAlmostEqual(root_node["extras"]["slideBlowbackZ"], PISTOL_METADATA["slideBlowbackZ"])
             self.assertAlmostEqual(root_node["extras"]["slideLockZ"], PISTOL_METADATA["slideLockZ"])
 
-            slide_mat = next(m for m in gltf["materials"] if m["name"] == "Pistol_Slide")
-            self.assertAlmostEqual(slide_mat["extras"]["pbrPhysical"]["clearcoat"], 0.72)
+            mats_by_name = {m["name"]: m for m in gltf["materials"]}
+            slide_mat = mats_by_name["Pistol_Slide"]
+            self.assertAlmostEqual(slide_mat["extras"]["pbrPhysical"]["clearcoat"], 0.18)
 
-            tritium_mat = next(m for m in gltf["materials"] if m["name"] == "Pistol_Tritium")
+            poly_mat = mats_by_name["Pistol_Polymer"]
+            stipple_mat = mats_by_name["Pistol_GripStipple"]
+            for mat in (poly_mat, stipple_mat):
+                self.assertEqual(mat["pbrMetallicRoughness"]["metallicFactor"], 0.0)
+                cc = mat.get("extras", {}).get("pbrPhysical", {}).get("clearcoat", 0.0)
+                self.assertLessEqual(cc, 0.04)
+            self.assertNotEqual(poly_mat["normalTexture"]["index"], slide_mat["normalTexture"]["index"])
+
+            tritium_mat = mats_by_name["Pistol_Tritium"]
             self.assertTrue(tritium_mat["extras"]["pbrPhysical"]["unlit"])
             self.assertAlmostEqual(tritium_mat["extras"]["pbrPhysical"]["emissiveIntensity"], 4.5)
 

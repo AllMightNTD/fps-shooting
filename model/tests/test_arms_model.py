@@ -135,9 +135,11 @@ class TestFPSArmsBuildPipeline(unittest.TestCase):
             self.assertIn("metallicRoughnessTexture", mat["pbrMetallicRoughness"])
             self.assertIn("normalTexture", mat)
             self.assertIn("occlusionTexture", mat)
-            self.assertAlmostEqual(mat["occlusionTexture"]["strength"], 0.41, places=2)
-            self.assertEqual(mat["extras"]["pbrPhysical"]["sheenColor"], 0x8A9280)
-            self.assertAlmostEqual(mat["extras"]["pbrPhysical"]["clearcoat"], 0.16)
+            self.assertGreaterEqual(mat["occlusionTexture"]["strength"], 0.85)
+            self.assertLessEqual(mat["occlusionTexture"]["strength"], 1.0)
+            self.assertNotIn("sheenColor", mat["extras"]["pbrPhysical"])
+            self.assertNotIn("sheenRoughness", mat["extras"]["pbrPhysical"])
+            self.assertLessEqual(mat["extras"]["pbrPhysical"]["clearcoat"], 0.04)
 
             node_names = {n["name"] for n in gltf["nodes"]}
             self.assertTrue(required_nodes.issubset(node_names))
@@ -330,6 +332,64 @@ class TestFPSArmsBuildPipeline(unittest.TestCase):
             ):
                 with self.assertRaises(FileNotFoundError):
                     fps_arms_mod.build_fps_arms_glb(texture_size=64)
+
+    def test_fps_arms_textures_separate_sleeve_cuff_glove_skin_and_contact_ao(self) -> None:
+        # Arrange
+        from model.characters import build_fps_arms_glb
+
+        sz = 256
+        # Act
+        glb_bytes = build_fps_arms_glb(texture_size=sz)
+        jlen, _ = struct.unpack_from("<II", glb_bytes, 12)
+        gltf = json.loads(glb_bytes[20 : 20 + jlen].decode("utf-8"))
+        bin_off = 20 + jlen + 8
+
+        def read_img(idx: int) -> np.ndarray:
+            bv = gltf["bufferViews"][gltf["images"][idx]["bufferView"]]
+            raw = glb_bytes[bin_off + bv["byteOffset"] : bin_off + bv["byteOffset"] + bv["byteLength"]]
+            return np.asarray(Image.open(io.BytesIO(raw)))
+
+        diff = read_img(0).astype(np.float32)
+        mr = read_img(1)
+        occ = read_img(3)
+
+        def slc(u0: float, u1: float, v0: float, v1: float) -> tuple[slice, slice]:
+            return (slice(int(v0 * sz), int(v1 * sz)), slice(int(u0 * sz), int(u1 * sz)))
+
+        # Assert Sleeve: dark olive green + fold roughness contrast
+        sl_y, sl_x = slc(0.20, 0.48, 0.65, 0.90)
+        sl_rgb = diff[sl_y, sl_x]
+        sl_mr = mr[sl_y, sl_x]
+        self.assertGreater(float(sl_rgb[..., 1].mean()), float(sl_rgb[..., 0].mean()))
+        self.assertGreater(float(sl_rgb[..., 1].mean()), float(sl_rgb[..., 2].mean()))
+        self.assertGreaterEqual(float(sl_rgb[..., 0].mean()), 25.0)
+        self.assertLessEqual(float(sl_rgb[..., 0].mean()), 75.0)
+        self.assertGreaterEqual(float(np.percentile(sl_mr[..., 1], 90) - np.percentile(sl_mr[..., 1], 10)), 45.0)
+
+        # Assert Wrist Cuff: distinctly darker than sleeve
+        cf_y, cf_x = slc(0.58, 0.63, 0.72, 0.88)
+        self.assertLess(float(diff[cf_y, cf_x].mean()), float(sl_rgb.mean()) * 0.85)
+
+        # Assert Glove: charcoal/leather, non-green, no knuckle metalness spike
+        gl_y, gl_x = slc(0.15, 0.45, 0.15, 0.38)
+        gl_rgb = diff[gl_y, gl_x]
+        self.assertLess(float(gl_rgb.mean()), 75.0)
+        self.assertLess(float(gl_rgb[..., 1].mean() - gl_rgb[..., 2].mean()), 10.0)
+        self.assertLessEqual(int(mr[gl_y, gl_x, 2].max()), 35)
+
+        # Assert Skin (Thumb): warm tone, natural roughness, zero metalness
+        sk_y, sk_x = slc(0.73, 0.83, 0.75, 0.83)
+        sk_rgb = diff[sk_y, sk_x]
+        self.assertGreater(float(sk_rgb[..., 0].mean()), float(sk_rgb[..., 1].mean()))
+        self.assertGreater(float(sk_rgb[..., 1].mean()), float(sk_rgb[..., 2].mean()))
+        self.assertGreaterEqual(float(mr[sk_y, sk_x, 1].mean()), 95.0)
+        self.assertLessEqual(float(mr[sk_y, sk_x, 1].mean()), 165.0)
+        self.assertEqual(int(mr[sk_y, sk_x, 2].max()), 0)
+
+        # Assert Contact AO: strong dark seam shadows without uniformly blackening the map
+        self.assertLessEqual(int(occ.min()), 110)
+        self.assertLessEqual(float(np.percentile(occ, 5)), 135.0)
+        self.assertGreaterEqual(float(occ.mean()), 175.0)
 
 
 if __name__ == "__main__":

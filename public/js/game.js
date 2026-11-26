@@ -97,32 +97,39 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
   });
 
   // ---------- Lights & Lamp halos ----------
-  const hemi = new THREE.HemisphereLight(0x4d7094, 0x0b1016, 0.55);
+  // R3: Warm-vs-cool night contrast (amber streetlamp tint vs cool moonlight & deep wet ground bounce)
+  const hemi = new THREE.HemisphereLight(0x364d68, 0x04070b, 0.34);
   S.add(hemi);
-  const moon = new THREE.DirectionalLight(0x88b0d8, 0.55);
+  const moon = new THREE.DirectionalLight(0x6c8eb4, 0.38);
   moon.position.set(-30, 50, 20);
   moon.castShadow = true;
   moon.shadow.mapSize.set(2048, 2048);
   Object.assign(moon.shadow.camera, { left: -50, right: 50, top: 50, bottom: -50, far: 140 });
   S.add(moon);
+  // Warm amber fill from lamp height to separate foreground gun/arms from the cool night backdrop
+  const warmFill = new THREE.DirectionalLight(0xffbd68, 0.22);
+  warmFill.position.set(12, 8, -6);
+  S.add(warmFill);
 
+  // R3: Warm amber halo for harbor sodium lamps
   const lampHaloTex = (() => {
     const c = document.createElement("canvas");
     c.width = c.height = 128;
     const g = c.getContext("2d");
     const gr = g.createRadialGradient(64, 64, 0, 64, 64, 64);
-    gr.addColorStop(0, "rgba(220,235,255,.95)");
-    gr.addColorStop(0.18, "rgba(170,205,240,.42)");
-    gr.addColorStop(0.55, "rgba(110,145,180,.10)");
+    gr.addColorStop(0, "rgba(255,218,152,.95)");
+    gr.addColorStop(0.18, "rgba(255,196,110,.45)");
+    gr.addColorStop(0.55, "rgba(200,145,65,.12)");
     gr.addColorStop(1, "rgba(0,0,0,0)");
     g.fillStyle = gr;
     g.fillRect(0, 0, 128, 128);
     return new THREE.CanvasTexture(c);
   })();
 
+  // R3: Warm amber harbor lamps (sodium streetlamp feel) vs cool ambient
   const lamps = [];
   for (const [x, z] of [[-6.5, -6.5], [6.5, -6.5], [-6.5, 6.5], [6.5, 6.5]]) {
-    const L = new THREE.PointLight(0xcfe4ff, 2.1, 36, 1.45);
+    const L = new THREE.PointLight(0xffd494, 1.85, 36, 1.45);
     L.position.set(x, 6.2, z);
     S.add(L);
     lamps.push(L);
@@ -133,7 +140,7 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     pole.position.set(x, 3.1, z);
     const bulb = new THREE.Mesh(
       new THREE.SphereGeometry(0.14, 8, 6),
-      new THREE.MeshBasicMaterial({ color: 0xe8f3ff }),
+      new THREE.MeshBasicMaterial({ color: 0xffe8c8 }),
     );
     bulb.position.set(x, 6.2, z);
     const halo = new THREE.Sprite(
@@ -162,66 +169,196 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     return t;
   }
 
-  // ---------- Wet asphalt harbor floor + deterministic container layout ----------
-  const puddleGrid = new Float32Array(256 * 256);
-  const gtex = tex(256, 256, (g, w, h) => {
-    g.fillStyle = "#10151b";
-    g.fillRect(0, 0, w, h);
-    for (let i = 0; i < 7000; i++) {
-      const v = (11 + sr() * 18) | 0;
-      g.fillStyle = `rgb(${v},${v + 3},${v + 7})`;
-      g.fillRect(sr() * w, sr() * h, 1.5, 1.5);
-    }
-    for (let i = 0; i < 18; i++) {
-      const px = sr() * w, py = sr() * h, rx = 24 + sr() * 46, ry = 14 + sr() * 30;
-      const gr = g.createRadialGradient(px, py, 4, px, py, rx);
-      gr.addColorStop(0, "rgba(4,7,11,.68)");
-      gr.addColorStop(0.55, "rgba(7,12,18,.30)");
-      gr.addColorStop(1, "rgba(0,0,0,0)");
-      g.fillStyle = gr;
-      g.beginPath();
-      g.ellipse(px, py, rx, ry, sr() * 3, 0, 7);
-      g.fill();
-    }
-    const im = g.getImageData(0, 0, w, h).data;
-    for (let i = 0; i < puddleGrid.length; i++) {
-      puddleGrid[i] = Math.max(0, Math.min(1, (22 - im[i * 4]) / 14));
-    }
-  }, 14);
+  // ---------- R3: Seamless wet asphalt harbor floor (2x2 wide organic puddles + 36x36 close-up pebble detail normal) ----------
+  const GROUND_TEX_SIZE = 512;
+  const GROUND_REPEAT = 2;
+  const puddleMask = new Float32Array(GROUND_TEX_SIZE * GROUND_TEX_SIZE);
+  // Exact periodic toroidal value noise in [0, 1] (zero seam at x=0/w-1 or y=0/h-1)
+  function tileNoise(nx, ny, period, seedOff) {
+    const x0 = Math.floor(nx), y0 = Math.floor(ny);
+    const fx = nx - x0, fy = ny - y0;
+    const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+    const h = (ix, iy) => {
+      const wx = ((ix % period) + period) % period;
+      const wy = ((iy % period) + period) % period;
+      let n = Math.imul(wx * 374761393 + wy * 668265263 + seedOff, 1274126177);
+      n = (n ^ (n >>> 13)) * 1274126177;
+      return ((n ^ (n >>> 16)) >>> 0) / 4294967295;
+    };
+    const a = h(x0, y0), b = h(x0 + 1, y0), c = h(x0, y0 + 1), d = h(x0 + 1, y0 + 1);
+    return (a * (1 - ux) + b * ux) * (1 - uy) + (c * (1 - ux) + d * ux) * uy;
+  }
 
-  const gNormTex = tex(256, 256, (g, w, h) => {
+  // Generate organic puddles via exact toroidal rotated-ellipse smoothstep fields (zero hard edges or wrap jumps)
+  const puddleDefs = [];
+  for (let i = 0; i < 16; i++) {
+    const a = sr() * Math.PI;
+    puddleDefs.push({
+      cx: sr(),
+      cy: sr(),
+      rx: 0.08 + sr() * 0.14,
+      ry: 0.05 + sr() * 0.09,
+      cs: Math.cos(a),
+      sn: Math.sin(a),
+      strength: 0.65 + sr() * 0.35,
+    });
+  }
+  for (let y = 0; y < GROUND_TEX_SIZE; y++) {
+    const py = y / GROUND_TEX_SIZE;
+    for (let x = 0; x < GROUND_TEX_SIZE; x++) {
+      const px = x / GROUND_TEX_SIZE;
+      const edgeWarp = (tileNoise(px * 10, py * 10, 10, 17) - 0.5) * 0.16;
+      let wMax = 0;
+      for (let i = 0; i < puddleDefs.length; i++) {
+        const p = puddleDefs[i];
+        let dx = px - p.cx;
+        let dy = py - p.cy;
+        if (dx > 0.5) dx -= 1; else if (dx < -0.5) dx += 1;
+        if (dy > 0.5) dy -= 1; else if (dy < -0.5) dy += 1;
+        const u = (dx * p.cs + dy * p.sn) / p.rx;
+        const v = (-dx * p.sn + dy * p.cs) / p.ry;
+        const d = Math.sqrt(u * u + v * v) + edgeWarp;
+        if (d < 1.0) {
+          const t = 1 - Math.max(0, d);
+          const s = t * t * (3 - 2 * t) * p.strength;
+          if (s > wMax) wMax = s;
+        }
+      }
+      puddleMask[y * GROUND_TEX_SIZE + x] = Math.max(0, Math.min(1, wMax));
+    }
+  }
+
+  const gtex = tex(GROUND_TEX_SIZE, GROUND_TEX_SIZE, (g, w, h) => {
     const im = g.createImageData(w, h), d = im.data;
-    for (let i = 0; i < puddleGrid.length; i++) {
-      const wet = puddleGrid[i];
-      d[i * 4] = wet > 0.45 ? 128 : 120 + ((sr() * 16) | 0);
-      d[i * 4 + 1] = wet > 0.45 ? 128 : 120 + ((sr() * 16) | 0);
-      d[i * 4 + 2] = 255;
-      d[i * 4 + 3] = 255;
+    for (let y = 0; y < h; y++) {
+      const u = y / h;
+      for (let x = 0; x < w; x++) {
+        const v = x / w;
+        const idx = y * w + x;
+        const nMacro = tileNoise(v * 6, u * 6, 6, 31);
+        const nMid = tileNoise(v * 24, u * 24, 24, 73);
+        const nFine = tileNoise(v * 96, u * 96, 96, 137);
+        const wet = puddleMask[idx];
+        const pebble = 0.5 * nMid + 0.5 * nFine;
+        // Dark wet harbor asphalt (#090c11..#161b23) with deeper mirror puddles (#04060a)
+        const base = (8 + nMacro * 8 + pebble * 11) * (1 - wet * 0.62);
+        d[idx * 4] = Math.max(3, Math.min(255, Math.round(base * 0.92)));
+        d[idx * 4 + 1] = Math.max(4, Math.min(255, Math.round(base * 1.02)));
+        d[idx * 4 + 2] = Math.max(6, Math.min(255, Math.round(base * 1.16)));
+        d[idx * 4 + 3] = 255;
+      }
     }
     g.putImageData(im, 0, 0);
-  }, 14);
+  }, GROUND_REPEAT);
 
-  const gRoughTex = tex(256, 256, (g, w, h) => {
+  const gNormTex = tex(GROUND_TEX_SIZE, GROUND_TEX_SIZE, (g, w, h) => {
     const im = g.createImageData(w, h), d = im.data;
-    for (let i = 0; i < puddleGrid.length; i++) {
-      const r = Math.round((0.78 - puddleGrid[i] * 0.7) * 255);
-      d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = r;
-      d[i * 4 + 3] = 255;
+    const hMap = new Float32Array(w * h);
+    for (let y = 0; y < h; y++) {
+      const u = y / h;
+      for (let x = 0; x < w; x++) {
+        const v = x / w;
+        const idx = y * w + x;
+        const nFine = tileNoise(v * 48, u * 48, 48, 211);
+        const nMid = tileNoise(v * 20, u * 20, 20, 97);
+        const smoothCalm = 1 - Math.min(1, puddleMask[idx] * 1.5);
+        hMap[idx] = (0.60 * nFine + 0.40 * nMid) * smoothCalm;
+      }
+    }
+    for (let y = 0; y < h; y++) {
+      const ym = (y - 1 + h) % h, yp = (y + 1) % h;
+      for (let x = 0; x < w; x++) {
+        const xm = (x - 1 + w) % w, xp = (x + 1) % w;
+        const idx = y * w + x;
+        const dx = (hMap[y * w + xp] - hMap[y * w + xm]) * 1.1;
+        const dy = (hMap[yp * w + x] - hMap[ym * w + x]) * 1.1;
+        d[idx * 4] = Math.max(0, Math.min(255, Math.round(128 - dx * 45)));
+        d[idx * 4 + 1] = Math.max(0, Math.min(255, Math.round(128 - dy * 45)));
+        d[idx * 4 + 2] = 255;
+        d[idx * 4 + 3] = 255;
+      }
     }
     g.putImageData(im, 0, 0);
-  }, 14);
+  }, GROUND_REPEAT);
+
+  const gRoughTex = tex(GROUND_TEX_SIZE, GROUND_TEX_SIZE, (g, w, h) => {
+    const im = g.createImageData(w, h), d = im.data;
+    for (let y = 0; y < h; y++) {
+      const u = y / h;
+      for (let x = 0; x < w; x++) {
+        const v = x / w;
+        const idx = y * w + x;
+        const dampVar = tileNoise(v * 12, u * 12, 12, 313);
+        const wet = Math.pow(Math.min(1, puddleMask[idx] * 1.35), 1.35);
+        // Mirror-smooth puddles (~0.06) vs textured damp asphalt (~0.68..0.84) with soft transition
+        const rough = (0.68 + 0.16 * dampVar) * (1 - wet) + 0.06 * wet;
+        const r = Math.max(10, Math.min(235, Math.round(rough * 255)));
+        d[idx * 4] = d[idx * 4 + 1] = d[idx * 4 + 2] = r;
+        d[idx * 4 + 3] = 255;
+      }
+    }
+    g.putImageData(im, 0, 0);
+  }, GROUND_REPEAT);
+
+  // Seamless 512x512 high-frequency asphalt pebble normal map (tiled 18x -> 36x36 over floor via onBeforeCompile; min_dimension=512 & edge diff <= 5)
+  const asphaltDetailNormal = tex(512, 512, (g, w, h) => {
+    const im = g.createImageData(w, h), d = im.data;
+    const hMap = new Float32Array(w * h);
+    for (let y = 0; y < h; y++) {
+      const u = y / h;
+      for (let x = 0; x < w; x++) {
+        const v = x / w;
+        const g1 = tileNoise(v * 48, u * 48, 48, 509);
+        const g2 = tileNoise(v * 24, u * 24, 24, 617);
+        hMap[y * w + x] = 0.65 * g1 + 0.35 * g2;
+      }
+    }
+    for (let y = 0; y < h; y++) {
+      const ym = (y - 1 + h) % h, yp = (y + 1) % h;
+      for (let x = 0; x < w; x++) {
+        const xm = (x - 1 + w) % w, xp = (x + 1) % w;
+        const idx = y * w + x;
+        const dx = (hMap[y * w + xp] - hMap[y * w + xm]) * 1.1;
+        const dy = (hMap[yp * w + x] - hMap[ym * w + x]) * 1.1;
+        d[idx * 4] = Math.max(0, Math.min(255, Math.round(128 - dx * 52)));
+        d[idx * 4 + 1] = Math.max(0, Math.min(255, Math.round(128 - dy * 52)));
+        d[idx * 4 + 2] = 255;
+        d[idx * 4 + 3] = 255;
+      }
+    }
+    g.putImageData(im, 0, 0);
+  }, 1);
+
+  const groundMat = new THREE.MeshStandardMaterial({
+    map: gtex,
+    normalMap: gNormTex,
+    normalScale: new THREE.Vector2(0.45, 0.45),
+    roughnessMap: gRoughTex,
+    roughness: 1,
+    metalness: 0.04,
+    envMapIntensity: 0.78,
+  });
+  // Inject 36x36 detail pebble normal & micro-sparkle into Three.js r128 MeshStandardMaterial (single GPU pass)
+  groundMat.onBeforeCompile = (shader) => {
+    shader.uniforms.detailNormalMap = { value: asphaltDetailNormal };
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        "#include <normalmap_pars_fragment>",
+        "#include <normalmap_pars_fragment>\nuniform sampler2D detailNormalMap;"
+      )
+      .replace(
+        "vec3 mapN = texture2D( normalMap, vUv ).xyz * 2.0 - 1.0;\n\tmapN.xy *= normalScale;",
+        "vec3 mapN = texture2D( normalMap, vUv ).xyz * 2.0 - 1.0;\n\tmapN.xy *= normalScale;\n\tvec3 detN = texture2D( detailNormalMap, vUv * 18.0 ).xyz * 2.0 - 1.0;\n\tfloat puddleCalm = clamp((0.36 - roughnessFactor) * 3.5, 0.0, 1.0);\n\tmapN.xy += detN.xy * 0.75 * (1.0 - puddleCalm);\n\tmapN = normalize(mapN);"
+      )
+      .replace(
+        "#include <roughnessmap_fragment>",
+        "#include <roughnessmap_fragment>\n\tvec3 detR = texture2D( detailNormalMap, vUv * 18.0 ).xyz * 2.0 - 1.0;\n\tfloat rCalm = clamp((0.36 - roughnessFactor) * 3.5, 0.0, 1.0);\n\troughnessFactor = clamp(roughnessFactor - abs(detR.x + detR.y) * 0.14 * (1.0 - rCalm), 0.04, 0.96);"
+      );
+  };
 
   const ground = new THREE.Mesh(
     new THREE.PlaneGeometry(130, 130),
-    new THREE.MeshStandardMaterial({
-      map: gtex,
-      normalMap: gNormTex,
-      normalScale: new THREE.Vector2(0.55, 0.55),
-      roughnessMap: gRoughTex,
-      roughness: 1,
-      metalness: 0.26,
-      envMapIntensity: 0.95,
-    }),
+    groundMat,
   );
   ground.rotation.x = -Math.PI / 2;
   ground.receiveShadow = true;
@@ -243,11 +380,6 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       g.fillStyle = col;
       g.fillRect(0, 0, w, h * 0.045);
       g.fillRect(0, h * 0.955, w, h * 0.045);
-      const gr = g.createLinearGradient(0, h, 0, h * 0.55);
-      gr.addColorStop(0, "rgba(35,25,15,.6)");
-      gr.addColorStop(1, "rgba(35,25,15,0)");
-      g.fillStyle = gr;
-      g.fillRect(0, 0, w, h);
       for (let i = 0; i < 65; i++) {
         const x = sr() * w, y = sr() * h * 0.6, l = h * (0.1 + sr() * 0.5);
         const q = g.createLinearGradient(0, y, 0, y + l);
@@ -270,6 +402,14 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
         g.fillStyle = "rgba(0,0,0,.45)";
         g.fillRect(w / 2 - 2, h * 0.05, 4, h * 0.9);
       }
+      // R3: strong grime/occlusion at the container foot so it is not lit evenly top-to-bottom
+      const gr = g.createLinearGradient(0, h, 0, h * 0.46);
+      gr.addColorStop(0, "rgba(1,2,3,.99)");
+      gr.addColorStop(0.32, "rgba(4,5,7,.90)");
+      gr.addColorStop(0.65, "rgba(14,12,10,.45)");
+      gr.addColorStop(1, "rgba(35,25,15,0)");
+      g.fillStyle = gr;
+      g.fillRect(0, 0, w, h);
     });
   }
 
@@ -281,12 +421,37 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
         map: t,
         bumpMap: t,
         bumpScale: 1.4,
-        roughness: 0.62,
-        metalness: 0.35,
+        roughness: 0.74,
+        metalness: 0.20,
       });
     };
     const side = mk(0);
     return [mk(1), mk(2), mk(3), new THREE.MeshStandardMaterial({ color: 0x1b1d1f, roughness: 0.9 }), side, side];
+  });
+
+  // R3: soft contact-shadow decal under each container foot (blurred dark rectangle)
+  const contactShadowTex = (() => {
+    const c = document.createElement("canvas");
+    c.width = 256;
+    c.height = 128;
+    const g = c.getContext("2d");
+    g.filter = "blur(8px)";
+    g.fillStyle = "rgba(0,0,0,0.98)";
+    g.fillRect(14, 12, 228, 104);
+    g.filter = "blur(2px)";
+    g.fillStyle = "rgba(0,0,0,1.0)";
+    g.fillRect(20, 18, 216, 92);
+    return new THREE.CanvasTexture(c);
+  })();
+  const contactShadowGeo = new THREE.PlaneGeometry(8.8, 5.0);
+  const contactShadowMat = new THREE.MeshBasicMaterial({
+    map: contactShadowTex,
+    color: 0x000000,
+    transparent: true,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
   });
 
   const cGeo = new THREE.BoxGeometry(6.1, 2.6, 2.44);
@@ -301,19 +466,25 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       const mat = cMats[(msr() * cMats.length) | 0];
       const stacked = msr() < 0.3;
       const m = new THREE.Mesh(cGeo, mat);
-      m.position.set(x, 1.3, z);
+      m.position.set(x, 1.29, z);
       m.rotation.y = rot ? Math.PI / 2 : 0;
       m.castShadow = m.receiveShadow = true;
       S.add(m);
       solid.push(m);
       if (stacked) {
         const t = m.clone();
-        t.position.y = 3.9;
+        t.position.y = 3.89;
         S.add(t);
         solid.push(t);
       }
       const hx = rot ? 1.22 : 3.05, hz = rot ? 3.05 : 1.22;
       cols.push({ x0: x - hx, x1: x + hx, z0: z - hz, z1: z + hz, y1: stacked ? 5.2 : 2.6 });
+      const contactShadow = new THREE.Mesh(contactShadowGeo, contactShadowMat);
+      contactShadow.rotation.x = -Math.PI / 2;
+      contactShadow.rotation.z = rot ? Math.PI / 2 : 0;
+      contactShadow.position.set(x, 0.007, z);
+      contactShadow.renderOrder = 1;
+      S.add(contactShadow);
     }
   }
 
@@ -340,10 +511,12 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       m.lookAt(0, 0, 0);
       es.add(m);
     };
-    panel(2.2, 2.8, 3.6, 14, 5, 0, 15, -4);
-    for (const [x, y, z] of [[-10, 6, -9], [10, 6, -9], [-9, 5, 10], [11, 5, 9], [0, 14, -11]]) {
-      panel(7.5, 8.5, 10, 1.6, 1.6, x, y, z);
+    // Cool overcast moonlight canopy + warm amber harbor streetlamp reflections without harsh white overhead glare
+    panel(1.3, 1.8, 2.5, 14, 5, 0, 15, -4);
+    for (const [x, y, z] of [[-9, 6.2, -9], [9, 6.2, -9], [-9, 6.2, 9], [9, 6.2, 9]]) {
+      panel(7.4, 4.7, 1.9, 1.8, 1.8, x, y, z);
     }
+    panel(2.4, 3.1, 4.2, 2.2, 2.2, 0, 14, -11);
     const pm = new THREE.PMREMGenerator(R), rt = pm.fromScene(es, 0.025);
     pm.dispose();
     return rt.texture;
@@ -397,7 +570,86 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     };
   }
   const sparks = mkPS(320, 0xffb060, 0.11);
-  const splash = mkPS(240, 0xcfe6f5, 0.045);
+  // R3: InstancedMesh thin 22-34cm rain ripple rings (zero alpha texture overdraw, single draw call)
+  const rainRipples = (() => {
+    const geo = new THREE.RingGeometry(0.86, 1.0, 24);
+    geo.rotateX(-Math.PI / 2);
+    const POOL = 80;
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 1.0,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    const inst = new THREE.InstancedMesh(geo, mat, POOL);
+    inst.position.set(0, 0.014, 0);
+    inst.frustumCulled = false;
+    S.add(inst);
+
+    const dummy = new THREE.Object3D();
+    const fadeColor = new THREE.Color();
+    const state = [];
+    for (let i = 0; i < POOL; i++) {
+      const active = i < 56;
+      const inArenaCenter = i < 34;
+      const rx = inArenaCenter ? (-8 + sr() * 14) : (sr() - 0.5) * 24;
+      const rz = inArenaCenter ? (-6 + sr() * 12) : (sr() - 0.5) * 24;
+      const maxRadius = 0.22 + sr() * 0.12;
+      const life = active ? sr() * 0.30 : 0;
+      const maxLife = 0.42 + sr() * 0.12;
+      const t0 = life / maxLife;
+      const sc0 = active ? (0.03 + (maxRadius - 0.03) * t0) : 0.001;
+      state.push({ active, x: rx, z: rz, life, maxLife, size: maxRadius });
+      dummy.position.set(rx, active ? 0 : -50, rz);
+      dummy.scale.set(sc0, 1, sc0);
+      dummy.updateMatrix();
+      inst.setMatrixAt(i, dummy.matrix);
+      const f0 = active ? Math.pow(1 - t0, 1.8) * 0.40 : 0;
+      inst.setColorAt(i, fadeColor.setRGB(0.70 * f0, 0.84 * f0, 0.98 * f0));
+    }
+    inst.instanceMatrix.needsUpdate = true;
+    if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
+
+    let next = 0;
+    return {
+      emit(x, z) {
+        const s = state[next++ % POOL];
+        s.active = true;
+        s.x = x;
+        s.z = z;
+        s.life = 0;
+        s.maxLife = rnd(0.40, 0.52);
+        s.size = rnd(0.22, 0.34);
+      },
+      upd(dt) {
+        for (let i = 0; i < POOL; i++) {
+          const s = state[i];
+          if (!s.active) continue;
+          s.life += dt;
+          const t = s.life / s.maxLife;
+          if (t >= 1) {
+            s.active = false;
+            dummy.position.set(0, -50, 0);
+            dummy.scale.setScalar(0.001);
+            dummy.updateMatrix();
+            inst.setMatrixAt(i, dummy.matrix);
+            continue;
+          }
+          const sc = 0.03 + (s.size - 0.03) * t;
+          dummy.position.set(s.x, 0, s.z);
+          dummy.scale.set(sc, 1, sc);
+          dummy.updateMatrix();
+          inst.setMatrixAt(i, dummy.matrix);
+          const fade = Math.pow(1 - t, 1.8) * 0.40;
+          inst.setColorAt(i, fadeColor.setRGB(0.70 * fade, 0.84 * fade, 0.98 * fade));
+        }
+        inst.instanceMatrix.needsUpdate = true;
+        if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
+      },
+    };
+  })();
 
   function burst(pt, n, spd, dir) {
     for (let k = 0; k < n; k++) {
@@ -415,7 +667,7 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
   const ND2 = 3000, rd = new Float32Array(ND2 * 4), rp2 = new Float32Array(ND2 * 6), rc2 = new Float32Array(ND2 * 6);
   for (let i = 0; i < ND2; i++) {
     rd.set([rnd(-24, 24), rnd(0, 26), rnd(-24, 24), rnd(0.6, 1.4)], i * 4);
-    const b = rd[i * 4 + 3] * 0.5;
+    const b = rd[i * 4 + 3] * 0.36;
     rc2.set([0, 0, 0, b * 0.55, b * 0.68, b * 0.82], i * 6);
   }
   const rg2 = new THREE.BufferGeometry();
@@ -562,11 +814,14 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
   mf.visible = false;
   gun.add(mf);
 
-  const vmKey = new THREE.PointLight(0xd8e8ff, 0.72, 2.4, 1.1);
+  // R1/R3: cool key + warm amber fill/rim separates arms & gun from the cold night background without blowing out thumb skin
+  const vmKey = new THREE.PointLight(0xbcd0ea, 0.44, 2.4, 1.1);
   vmKey.position.set(-0.35, 0.55, 0.25);
-  const vmFill = new THREE.PointLight(0xffa658, 0.34, 2.0, 1.2);
+  const vmFill = new THREE.PointLight(0xffb36a, 0.18, 2.0, 1.2);
   vmFill.position.set(0.45, -0.2, -0.1);
-  vmCam.add(vmKey, vmFill, gun);
+  const vmRim = new THREE.PointLight(0xffc27a, 0.40, 2.2, 1.3);
+  vmRim.position.set(0.32, 0.38, -0.65);
+  vmCam.add(vmKey, vmFill, vmRim, gun);
 
   const _vmScratchPt = new Vec();
   function getViewmodelWorldPoint(node, outVec) {
@@ -588,6 +843,7 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       const col = src.emissive && src.emissive.getHex() ? src.emissive : src.color;
       const isOverlayReticle = objName === "reticle_group";
       return new THREE.MeshBasicMaterial({
+        name: src.name || objName || "",
         color: col,
         side: src.side,
         fog: false,
@@ -597,6 +853,8 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       });
     }
     const isGlass = phys.transmission > 0 || src.transparent;
+    // R2: near-clear Red Dot glass with weak reflections so the red reticle reads as a crisp dot, not a smear
+    const isHoloLens = objName === "holo_lens";
     const isSkin = src.name === "Arms_WetSkin" || src.name === "Soldier_Skin";
     const isGlove =
       src.name === "Arms_TacticalGlove" ||
@@ -605,10 +863,11 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       src.name === "Soldier_Glove" ||
       objName.toLowerCase().includes("armmesh");
     const mat = new THREE.MeshPhysicalMaterial({
+      name: src.name || objName || "",
       color: src.color,
       map: src.map || null,
       aoMap: src.aoMap || null,
-      aoMapIntensity: src.aoMapIntensity ?? 0.42,
+      aoMapIntensity: src.aoMap ? (isSkinned ? 0.95 : 0.85) : (src.aoMapIntensity ?? 0.42),
       metalness: src.metalness,
       roughness: src.roughness,
       roughnessMap: src.roughnessMap || null,
@@ -616,11 +875,11 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       normalMap: src.normalMap || null,
       normalScale: src.normalScale ? src.normalScale.clone() : new THREE.Vector2(1, 1),
       envMap,
-      envMapIntensity: isGlass ? 1.8 : isSkin ? 0.45 : isGlove ? 0.58 : envScale,
-      clearcoat: phys.clearcoat || 0,
+      envMapIntensity: isHoloLens ? 0.5 : isGlass ? 1.8 : isSkin ? 0.42 : isGlove ? 0.36 : envScale,
+      clearcoat: src.name === "AWM_RiflePBR" ? 0.04 : (phys.clearcoat || 0),
       clearcoatRoughness: phys.clearcoatRoughness || 0,
       transparent: isGlass,
-      opacity: isGlass ? 0.26 : 1,
+      opacity: isHoloLens ? 0.1 : isGlass ? 0.26 : 1,
       depthWrite: !isGlass,
       side: src.side,
       skinning: Boolean(src.skinning || isSkinned),
@@ -636,9 +895,13 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
 
   let boltVis = new THREE.Object3D(), trig = new THREE.Group(), ch = new THREE.Group(), reticle = new THREE.Object3D(), laserLens = new THREE.Object3D(), mag = new THREE.Group();
   let pistolSlideNode = new THREE.Object3D(), pistolTriggerNode = new THREE.Object3D(), pistolMagNode = new THREE.Object3D();
-  let m416WorldProto = null, pistolWorldProto = null, soldierProto = null;
+  let awmBoltPivot = new THREE.Object3D(), awmMagGroup = new THREE.Object3D(), awmTriggerNode = new THREE.Object3D();
+  let m416WorldProto = null, pistolWorldProto = null, awmWorldProto = null, soldierProto = null;
   const pistolMuzAnchorPos = new Vec(0, 0.0495, -0.172);
+  const awmMuzAnchorPos = new Vec(0, 0.020, -0.802);
+  let awmOpticY = 0.0947;
   let pistolSlideOffset = 0, pistolRecoilPitch = 0, pistolRecoilKickZ = 0, pistolTrigPull = 0;
+  let awmBoltCycleStartAt = 0;
 
   // Multi-weapon Viewmodel sub-groups mounted under gun
   const m416ViewGroup = new THREE.Group();
@@ -669,28 +932,6 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
   pistolViewGroup.visible = false;
 
   const sniperViewGroup = new THREE.Group();
-  const sniperChassis = new THREE.Mesh(
-    new THREE.BoxGeometry(0.048, 0.072, 0.56),
-    new THREE.MeshStandardMaterial({ color: 0x2f3b2c, metalness: 0.18, roughness: 0.72 }),
-  );
-  sniperChassis.position.set(0, 0.01, -0.22);
-  const sniperBarrel = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.014, 0.018, 0.72, 12),
-    new THREE.MeshStandardMaterial({ color: 0x1b2026, metalness: 0.82, roughness: 0.28 }),
-  );
-  sniperBarrel.rotation.x = Math.PI / 2;
-  sniperBarrel.position.set(0, 0.026, -0.68);
-  const sniperScopeTube = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.024, 0.024, 0.34, 14),
-    new THREE.MeshStandardMaterial({ color: 0x14181d, metalness: 0.78, roughness: 0.3 }),
-  );
-  sniperScopeTube.rotation.x = Math.PI / 2;
-  sniperScopeTube.position.set(0, 0.088, -0.21);
-  const sniperMagMesh = new THREE.Mesh(
-    new THREE.BoxGeometry(0.036, 0.085, 0.095),
-    new THREE.MeshStandardMaterial({ color: 0x20252a, metalness: 0.65, roughness: 0.35 }),
-  );
-  sniperMagMesh.position.set(0, -0.045, -0.18);
   function makeSocketNode(name, pos, distal, palmNormal, isRightHand) {
     const pose = buildSocketPose(pos, distal, palmNormal, isRightHand, THREE);
     const node = new THREE.Object3D();
@@ -702,34 +943,33 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
 
   const sniperSockHandguard = makeSocketNode(
     "socket_handguard",
-    [-0.026, -0.028, -0.34],
+    [-0.026, -0.036, -0.275],
     [-0.20, -0.12, -0.972],
     [0.50, 0.86, -0.04],
     false,
   );
   const sniperSockGrip = makeSocketNode(
     "socket_grip",
-    [0.024, -0.048, 0.058],
+    [0.024, -0.056, 0.070],
     [0.18, -0.04, -0.983],
     [-0.96, 0.08, 0.26],
     true,
   );
   const sniperSockMag = makeSocketNode(
     "socket_mag",
-    [-0.016, -0.036, 0.0],
+    [-0.016, -0.060, -0.085],
     [0.54, -0.18, -0.82],
     [0.80, 0.24, 0.55],
     false,
   );
   const sniperSockBolt = makeSocketNode(
     "socket_charging",
-    [-0.024, 0.036, 0.04],
-    [0.66, 0.08, -0.74],
-    [0.24, -0.94, 0.23],
-    false,
+    [0.0604, -0.019, 0.018],
+    [0.12, 0.16, -0.98],
+    [-0.88, -0.42, 0.22],
+    true,
   );
-  sniperMagMesh.add(sniperSockMag);
-  sniperViewGroup.add(sniperChassis, sniperBarrel, sniperScopeTube, sniperMagMesh, sniperSockHandguard, sniperSockGrip, sniperSockBolt);
+  sniperViewGroup.add(sniperSockHandguard, sniperSockGrip, sniperSockMag, sniperSockBolt);
   sniperViewGroup.traverse((o) => o.layers.set(VIEW_LAYER));
   sniperViewGroup.visible = false;
 
@@ -768,9 +1008,9 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       mf.position.copy(pistolMuzAnchorPos);
       flashL.position.set(0, 0.0495, -0.185);
     } else if (weaponId === "sniper") {
-      muz.position.set(0, 0.026, -1.04);
-      mf.position.set(0, 0.026, -1.04);
-      flashL.position.set(0, 0.026, -1.1);
+      muz.position.copy(awmMuzAnchorPos);
+      mf.position.copy(awmMuzAnchorPos);
+      flashL.position.set(awmMuzAnchorPos.x, awmMuzAnchorPos.y, awmMuzAnchorPos.z - 0.08);
     } else {
       muz.position.set(0, 0.02, -0.615);
       mf.position.set(0, 0.02, -0.615);
@@ -816,7 +1056,7 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       obj.layers.set(VIEW_LAYER);
       if (!obj.isMesh) return;
       obj.castShadow = obj.receiveShadow = true;
-      if (!matCache.has(obj.material)) matCache.set(obj.material, hydratePbrMaterial(obj.material, obj.name, 1.55));
+      if (!matCache.has(obj.material)) matCache.set(obj.material, hydratePbrMaterial(obj.material, obj.name, 1.05));
       obj.material = matCache.get(obj.material);
       if (obj.name === "holo_lens") obj.renderOrder = 5;
       if (obj.name === "reticle_group") obj.renderOrder = 10;
@@ -849,7 +1089,7 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       if (!obj.isMesh) return;
       obj.castShadow = obj.receiveShadow = true;
       const ck = `${obj.material.uuid}:${obj.name}`;
-      if (!matCache.has(ck)) matCache.set(ck, hydratePbrMaterial(obj.material, obj.name, 1.62));
+      if (!matCache.has(ck)) matCache.set(ck, hydratePbrMaterial(obj.material, obj.name, 0.88));
       obj.material = matCache.get(ck);
     });
     pistolWorldProto = root.clone();
@@ -870,6 +1110,38 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     upgradeRemoteWeapons();
     gunAnim(0, 0);
     window.__pistolLoaded = true;
+  });
+
+  loadModelAsset("awm", "/model/dist/awm.glb", (gltf) => {
+    const root = gltf.scene, matCache = new Map();
+    root.traverse((obj) => {
+      obj.layers.set(VIEW_LAYER);
+      if (!obj.isMesh) return;
+      obj.castShadow = obj.receiveShadow = true;
+      const ck = `${obj.material.uuid}:${obj.name}`;
+      if (!matCache.has(ck)) matCache.set(ck, hydratePbrMaterial(obj.material, obj.name, 0.96));
+      obj.material = matCache.get(ck);
+    });
+    awmWorldProto = root.clone();
+    awmBoltPivot = root.getObjectByName("awm_bolt_pivot") || awmBoltPivot;
+    awmMagGroup = root.getObjectByName("awm_mag_group") || awmMagGroup;
+    awmTriggerNode = root.getObjectByName("trigger") || awmTriggerNode;
+    weaponSockets.sniper.handguard = root.getObjectByName("socket_handguard") || weaponSockets.sniper.handguard;
+    weaponSockets.sniper.grip = root.getObjectByName("socket_grip") || weaponSockets.sniper.grip;
+    weaponSockets.sniper.mag = root.getObjectByName("socket_mag") || weaponSockets.sniper.mag;
+    weaponSockets.sniper.bolt =
+      root.getObjectByName("socket_bolt_right") ||
+      root.getObjectByName("socket_charging") ||
+      weaponSockets.sniper.bolt;
+    const aMuz = root.getObjectByName("muzzle_anchor");
+    if (aMuz) awmMuzAnchorPos.copy(aMuz.position);
+    const aEye = root.getObjectByName("scope_eye");
+    if (aEye) awmOpticY = aEye.position.y;
+    sniperViewGroup.add(root);
+    applyViewmodelWeapon(SLOT_TO_WEAPON_ID[activeSlot] || "m416");
+    upgradeRemoteWeapons();
+    gunAnim(0, 0);
+    window.__awmLoaded = true;
   });
 
   loadModelAsset("fps_arms", "/model/dist/fps_arms.glb", (gltf) => {
@@ -1039,10 +1311,16 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
   }
 
   function syncRemoteWeaponVisibility(av) {
-    const isPistol = av.weaponId === "pistol";
-    if (av.m416Mesh) av.m416Mesh.visible = !isPistol;
-    if (av.pistolMesh) av.pistolMesh.visible = isPistol;
-    av.muzNode = isPistol ? (av.pistolMuzNode || av.m416MuzNode) : av.m416MuzNode;
+    const wid = av.weaponId || "m416";
+    if (av.m416Mesh) av.m416Mesh.visible = wid !== "pistol" && wid !== "sniper";
+    if (av.pistolMesh) av.pistolMesh.visible = wid === "pistol";
+    if (av.awmMesh) av.awmMesh.visible = wid === "sniper";
+    av.muzNode =
+      wid === "pistol"
+        ? av.pistolMuzNode || av.m416MuzNode
+        : wid === "sniper"
+          ? av.awmMuzNode || av.m416MuzNode
+          : av.m416MuzNode;
   }
 
   function attachWeaponToRig(av) {
@@ -1064,7 +1342,16 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       av.pistolMesh = pw;
       av.pistolMuzNode = pw.getObjectByName("pistol_muzzle") || null;
     }
-    av.weaponAttached = Boolean(av.m416Mesh || av.pistolMesh);
+    if (!av.awmMesh && awmWorldProto) {
+      const aw = awmWorldProto.clone();
+      aw.traverse((o) => o.layers.set(0));
+      aw.scale.setScalar(1.02);
+      aw.position.set(0.0, -0.006, 0.04);
+      av.rig.weaponMount.add(aw);
+      av.awmMesh = aw;
+      av.awmMuzNode = aw.getObjectByName("muzzle_anchor") || null;
+    }
+    av.weaponAttached = Boolean(av.m416Mesh || av.pistolMesh || av.awmMesh);
     syncRemoteWeaponVisibility(av);
   }
 
@@ -1090,7 +1377,7 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
 
     const av = {
       id: p.id, name: p.name, team: p.team, container, rig, hitMeshes: rig.hitMeshes,
-      shieldDome, muzFlash, muzNode: null, m416Mesh: null, pistolMesh: null, m416MuzNode: null, pistolMuzNode: null,
+      shieldDome, muzFlash, muzNode: null, m416Mesh: null, pistolMesh: null, awmMesh: null, m416MuzNode: null, pistolMuzNode: null, awmMuzNode: null,
       weaponAttached: false, nameplate,
       snapshots: [], walkPhase: 0, flashTimer: 0, alive: p.alive, deathTime: 0,
       weaponId: p.weaponId || "m416", reloadEndsAt: 0, reloadDurMs: 0, radarBlipUntil: 0, crouchK: 0,
@@ -1106,7 +1393,7 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     av.rig = buildSoldierVisual(team, av.id);
     av.hitMeshes = av.rig.hitMeshes;
     av.weaponAttached = false;
-    av.muzNode = av.m416Mesh = av.pistolMesh = av.m416MuzNode = av.pistolMuzNode = null;
+    av.muzNode = av.m416Mesh = av.pistolMesh = av.awmMesh = av.m416MuzNode = av.pistolMuzNode = av.awmMuzNode = null;
     av.container.add(av.rig.root);
     attachWeaponToRig(av);
   }
@@ -1154,7 +1441,7 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
         av.deathTime = 0;
         av.reloadEndsAt = 0; // Cancel reload animation immediately on death
       }
-      if (pose.weaponId && pose.weaponId !== av.weaponId) {
+      if (pose.weaponId && pose.weaponId !== av.weaponId && nowMs >= (av.weaponLockUntil || 0)) {
         av.weaponId = pose.weaponId;
         av.reloadEndsAt = 0;
         syncRemoteWeaponVisibility(av);
@@ -1239,7 +1526,7 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
   // Lower bottom-right placement with upright roll (0) & gentle inward cant toward center crosshair
   const HIP_POS = new Vec(0.172, -0.156, -0.435), ADS_POS = new Vec(0, -OPTIC_Y, -0.215);
   const PISTOL_HIP_POS = new Vec(0.125, -0.128, -0.315), PISTOL_ADS_POS = new Vec(0, -0.0671, -0.245);
-  const SNIPER_HIP_POS = new Vec(0.178, -0.162, -0.445);
+  const SNIPER_HIP_POS = new Vec(0.166, -0.140, -0.455);
   const lerp = THREE.MathUtils.lerp;
   const smooth01 = (t) => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
 
@@ -1247,8 +1534,36 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
   const _sockHgP = new Vec(), _sockHgQ = new THREE.Quaternion();
   const _sockMagP = new Vec(), _sockMagQ = new THREE.Quaternion();
   const _sockBoltP = new Vec(), _sockBoltQ = new THREE.Quaternion();
+  const _sockGripP = new Vec(), _sockGripQ = new THREE.Quaternion();
+  const _sockRBoltP = new Vec(), _sockRBoltQ = new THREE.Quaternion();
   const _leftTargetP = new Vec(), _leftTargetQ = new THREE.Quaternion();
   const _rightTargetP = new Vec(), _rightTargetQ = new THREE.Quaternion();
+
+  function sampleSniperLeftSocket(rl, socks) {
+    readSocketInVmCam(socks.handguard, _sockHgP, _sockHgQ);
+    if (rl <= 0.04 || rl >= 0.78) {
+      if (rl >= 0.66 && rl < 0.78) {
+        readSocketInVmCam(socks.mag, _sockMagP, _sockMagQ);
+        const k = smooth01((rl - 0.66) / 0.12);
+        _leftTargetP.lerpVectors(_sockMagP, _sockHgP, k);
+        _leftTargetQ.copy(_sockMagQ).slerp(_sockHgQ, k);
+        return k < 0.5 ? "mag" : "support";
+      }
+      _leftTargetP.copy(_sockHgP);
+      _leftTargetQ.copy(_sockHgQ);
+      return "support";
+    }
+    readSocketInVmCam(socks.mag, _sockMagP, _sockMagQ);
+    if (rl <= 0.22) {
+      const k = smooth01((rl - 0.04) / 0.18);
+      _leftTargetP.lerpVectors(_sockHgP, _sockMagP, k);
+      _leftTargetQ.copy(_sockHgQ).slerp(_sockMagQ, k);
+      return k > 0.5 ? "mag" : "support";
+    }
+    _leftTargetP.copy(_sockMagP);
+    _leftTargetQ.copy(_sockMagQ);
+    return "mag";
+  }
 
   function readSocketInVmCam(node, outPos, outQuat) {
     node.getWorldPosition(outPos);
@@ -1360,6 +1675,7 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
   S.traverse((o) => { if (o.isLight) o.layers.enableAll(); });
   vmKey.layers.set(VIEW_LAYER);
   vmFill.layers.set(VIEW_LAYER);
+  vmRim.layers.set(VIEW_LAYER);
 
   function gunAnim(dt, mv) {
     const nowMs = performance.now();
@@ -1404,14 +1720,49 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     const tl = rl > 0 ? Math.min(1, rl / 0.1, (1 - rl) / 0.1) : 0;
 
     mag.position.copy(MAG_REST);
-    sniperMagMesh.position.set(0, -0.045, -0.18);
+    awmMagGroup.position.set(0, 0, 0);
     if (rl > 0.24 && rl < 0.72) {
       const magArc = Math.sin(((rl - 0.24) / 0.48) * Math.PI);
       if (cfg.id === "m416") {
         mag.position.set(-0.042 * magArc, MAG_REST.y - 0.088 * magArc, MAG_REST.z + 0.028 * magArc);
       } else if (isSniper) {
-        sniperMagMesh.position.y -= magArc * 0.14;
+        awmMagGroup.position.y = -14.0 * magArc;
       }
+    }
+
+    // AWM bolt-action cycling: lift handle (-0.88 rad on RootNode Z), pull back (-11cm on RootNode Z), push & lock
+    let awmCycleT = 0;
+    if (isSniper) {
+      if (isReloading && !st.isTactical && rl >= 0.72) {
+        awmCycleT = smooth01((rl - 0.72) / 0.26);
+      } else if (awmBoltCycleStartAt > 0 && !isReloading) {
+        const dtShot = (nowMs - awmBoltCycleStartAt) / 920;
+        if (dtShot >= 0 && dtShot < 1) {
+          awmCycleT = dtShot;
+        } else if (dtShot >= 1) {
+          awmBoltCycleStartAt = 0;
+        }
+      }
+    }
+    if (awmCycleT > 0 && awmCycleT < 1) {
+      let liftK = 0;
+      let pullK = 0;
+      if (awmCycleT < 0.18) {
+        liftK = smooth01(awmCycleT / 0.18);
+      } else if (awmCycleT < 0.50) {
+        liftK = 1;
+        pullK = smooth01((awmCycleT - 0.18) / 0.32);
+      } else if (awmCycleT < 0.82) {
+        liftK = 1;
+        pullK = 1 - smooth01((awmCycleT - 0.50) / 0.32);
+      } else {
+        liftK = 1 - smooth01((awmCycleT - 0.82) / 0.18);
+      }
+      awmBoltPivot.rotation.z = -0.88 * liftK;
+      awmBoltPivot.position.z = -23.12 - 11.0 * pullK;
+    } else {
+      awmBoltPivot.rotation.z = 0;
+      awmBoltPivot.position.z = -23.12;
     }
 
     // Tactical Pistol blowback, empty slide-lock (0.042m), slide-release & angled 17.5° mag drop
@@ -1470,8 +1821,8 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     const chW = !st.isTactical && rl > 0.74 && rl < 0.98 ? smooth01(Math.min((rl - 0.74) / 0.09, (0.98 - rl) / 0.08)) : 0;
     const baseHip = isPistol ? PISTOL_HIP_POS : isSniper ? SNIPER_HIP_POS : HIP_POS;
     const targetAdsX = isPistol ? PISTOL_ADS_POS.x : ADS_POS.x;
-    const adsPosY = isPistol ? PISTOL_ADS_POS.y : ADS_POS.y;
-    const adsPosZ = isPistol ? PISTOL_ADS_POS.z : isSniper ? -0.18 : ADS_POS.z;
+    const adsPosY = isPistol ? PISTOL_ADS_POS.y : isSniper ? -awmOpticY : ADS_POS.y;
+    const adsPosZ = isPistol ? PISTOL_ADS_POS.z : isSniper ? -0.165 : ADS_POS.z;
 
     gun.position.set(
       lerp(baseHip.x, targetAdsX, ads) + (swx + Math.sin(bob) * 0.0055 * bobK) * calm - (isPistol ? 0.024 : 0.044) * tl,
@@ -1480,8 +1831,8 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     );
 
     // Upright roll = 0 at rest (no rightward tilt), barrel angled gently inward toward center crosshair
-    const hipPitch = (isPistol ? 0.028 : isSniper ? 0.034 : 0.036) * hip;
-    const hipYaw = (isPistol ? 0.038 : isSniper ? 0.050 : 0.052) * hip;
+    const hipPitch = (isPistol ? 0.028 : isSniper ? 0.032 : 0.036) * hip;
+    const hipYaw = (isPistol ? 0.038 : isSniper ? 0.046 : 0.052) * hip;
     gun.rotation.set(
       hipPitch + (recoil * (isPistol ? 0.85 : 1.85) + swy * 1.8) * calm - 0.20 * spr + (isPistol ? 0.09 : 0.16) * tl,
       hipYaw + (0.48 * spr + swx * 1.8) * calm + (isPistol ? 0.12 : 0.20) * tl,
@@ -1495,8 +1846,27 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     _vmInvQ.copy(vmCam.quaternion).invert();
 
     const activeSocks = weaponSockets[cfg.id] || weaponSockets.m416;
-    const leftAction = sampleLeftSocket(rl, Boolean(st.isTactical), activeSocks);
-    readSocketInVmCam(activeSocks.grip, _rightTargetP, _rightTargetQ);
+    const leftAction = isSniper
+      ? sampleSniperLeftSocket(rl, activeSocks)
+      : sampleLeftSocket(rl, Boolean(st.isTactical), activeSocks);
+
+    readSocketInVmCam(activeSocks.grip, _sockGripP, _sockGripQ);
+    let rightAction = "grip";
+    if (isSniper && awmCycleT > 0.02 && awmCycleT < 0.98) {
+      readSocketInVmCam(activeSocks.bolt, _sockRBoltP, _sockRBoltQ);
+      const reachK =
+        awmCycleT < 0.15
+          ? smooth01(awmCycleT / 0.15)
+          : awmCycleT > 0.85
+            ? 1 - smooth01((awmCycleT - 0.85) / 0.15)
+            : 1;
+      _rightTargetP.lerpVectors(_sockGripP, _sockRBoltP, reachK);
+      _rightTargetQ.copy(_sockGripQ).slerp(_sockRBoltQ, reachK);
+      rightAction = reachK > 0.4 ? "bolt" : "grip";
+    } else {
+      _rightTargetP.copy(_sockGripP);
+      _rightTargetQ.copy(_sockGripQ);
+    }
 
     if (armsCtrl) {
       const canShowArms = (engineMode === "solo" || meAlive) && engineMode !== "idle" && !scopedSniper;
@@ -1509,6 +1879,7 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
         triggerPull: isPistol ? Math.min(1, pistolTrigPull / 0.42) : trigPull,
         ads,
         leftAction,
+        rightAction,
         hideArms: !canShowArms,
       });
       if (armsRoot) armsRoot.updateMatrixWorld(true);
@@ -1732,7 +2103,9 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     prevSlot = activeSlot;
     activeSlot = targetSlot;
     rlp = 0;
+    awmBoltCycleStartAt = 0;
     applyViewmodelWeapon(wid);
+    gunAnim(0, 0);
     snd.click(740);
     if (engineMode === "lan") {
       net.send(MSG.SWITCH_WEAPON, { slot: targetSlot });
@@ -1787,6 +2160,8 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       pistolSlideOffset = 0.044;
       pistolTrigPull = 0.42;
       pistolMuzzleFlash.rotation.z = rnd(0, 6.28);
+    } else if (cfg.id === "sniper" && st.mag > 0) {
+      awmBoltCycleStartAt = nowMs + 190;
     }
     mf.rotation.z = rnd(0, 6.28);
     mf.scale.setScalar(rnd(0.8, 1.3));
@@ -2040,6 +2415,7 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     const av = remotePlayers.get(ev.playerId);
     if (av) {
       av.weaponId = ev.weaponId || "m416";
+      av.weaponLockUntil = performance.now() + 260;
       av.reloadEndsAt = 0;
       syncRemoteWeaponVisibility(av);
     }
@@ -2122,12 +2498,12 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       let x = rd[k] + wind * 3 * dt, y = rd[k + 1] - sp * dt, z = rd[k + 2];
       if (x - px > 24) x -= 48; else if (x - px < -24) x += 48;
       if (z - pz > 24) z -= 48; else if (z - pz < -24) z += 48;
-      if (y < 0) { y += 26; if (i % 6 === 0 && Math.abs(x - px) < 12 && Math.abs(z - pz) < 12) splash.emit(x, 0.03, z, 2, 2.2, 0.5); }
+      if (y < 0) { y += 26; if (i % 2 === 0 && Math.abs(x - px) < 11 && Math.abs(z - pz) < 11) rainRipples.emit(x, z); }
       rd[k] = x; rd[k + 1] = y; rd[k + 2] = z;
       rp2.set([x - wind * 0.07, y + sp * 0.022, z, x, y, z], i * 6);
     }
     rg2.attributes.position.needsUpdate = true;
-    splash.upd(dt);
+    rainRipples.upd(dt);
     sparks.upd(dt);
 
     ltn -= dt;

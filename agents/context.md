@@ -6,11 +6,11 @@
 
 _(ghi đè mỗi lần cập nhật)_
 
-- **Cập nhật lần cuối:** 2026-11-26 01:56 — Tech Lead, Developer, QA & Security Engineer
-- **Dự án / Giai đoạn:** FPS Web Game ("Bến cảng mưa") — Đã xử lý triệt để toàn bộ 22 conflict sau khi pull PR #1 (`cd2b57d`) lên nhánh `main` (hợp nhất pipeline PBR `fps_arms.py` + fallback `model/assets/fps_arms.glb` + test hermetic từ upstream với hệ thống socket gắn tay + camera `vmCam` + sửa lỗi `test_pistol_model.py` từ stash local); đồng thời gỡ tracking `__pycache__/*.pyc` và cập nhật `.gitignore`.
-- **Nhánh Git đang làm:** `main` (đồng bộ `origin/main` `cd2b57d`, còn thay đổi đã stage gồm phần giải quyết conflict + các asset mới chưa tích hợp: `awm.glb`, `m200.glb`, `pistol.glb`, `toon_m416.glb`, `sound/{m416,pistol,m200}/*.wav`; bản sao dự phòng gốc vẫn giữ nguyên trong `stash@{0}`).
-- **Đang làm dở:** Chờ người dùng xác nhận hướng thực hiện "các bước sau" (tích hợp các model `.glb` súng mới & âm thanh `.wav`, hay kiểm thử trình duyệt / commit bản hiện tại trước).
-- **Blocker:** Không có (toàn bộ 23/23 test Python và 11/11 test Node.js đều PASS).
+- **Cập nhật lần cuối:** 2026-11-26 13:33 — Tinh chỉnh 5 điểm thị giác chân thực & tối ưu hiệu năng mượt mà
+- **Dự án / Giai đoạn:** FPS Web Game ("Bến cảng mưa") — Hoàn tất đợt tinh chỉnh 5 điểm nâng độ chân thực ưu tiên hiệu năng: vòng gợn sóng mưa `RingGeometry(0.86, 1.0, 24)` `0.22–0.34m` tan nhanh `0.40–0.52s` trong 1 `InstancedMesh` draw call; mặt đất giữ vũng nước `2×2` không ô vuông và pha thêm hạt nhựa đường `36×36` qua `onBeforeCompile` trên `r128`; vải áo khoác lì nhám (`0.68–0.96`) hết bóng nilon + dịu AO cổ tay; AWM sắc nét (`awm.bundle.js` gọn `2.86 MB`) với `UnsharpMask` + vân polymer + AO khe khớp + `awm_rifle_normal.png`; và container cắm nền `y=1.29` kèm `contactShadow` `y=0.007`. Đạt **26/26 Python**, **12/12 Node**, **Tier 1–4 + 9/9 visual telemetry PASS** (`119` draw calls, JS `p50=1.8ms`, `p95=2.3ms`), `SECURITY_GREP_CLEAN`.
+- **Nhánh Git đang làm:** `main`
+- **Đang làm dở:** Không có.
+- **Blocker:** Không có.
 
 ## 2. Quyết định đã chốt
 
@@ -64,6 +64,59 @@ _(ghi đè mỗi lần cập nhật)_
 - [ ] Xác nhận & lập kế hoạch "các bước sau" với người dùng (tích hợp `toon_m416.glb`, `pistol.glb`, `awm.glb`/`m200.glb` & `sound/*/*.wav`, hoặc kiểm thử trình duyệt & commit bản hiện tại) — Vai trò: Tech Lead, BA, Solution Architect — Ưu tiên: cao
 
 ## 4. Nhật ký bàn giao (mới nhất ở trên cùng)
+
+### [2026-11-26 13:33] Tinh chỉnh 5 điểm thị giác chân thực & Tối ưu hiệu năng (Sóng mưa 22–34cm, Hạt đường 36×36, Áo lì, AWM sắc nét, Container) — Vai trò: Agent trực tiếp
+
+- **Đã làm:**
+  - **Vòng gợn sóng mưa mảnh & tự nhiên ([public/js/game.js](file:///home/dev_ntd/Documents/FPS/public/js/game.js)):** Chuyển sang `THREE.RingGeometry(0.86, 1.0, 24)` trên 1 `InstancedMesh` (`POOL = 80`, không dùng alpha texture để giảm fill-rate), kích thước `0.22–0.34m`, vòng đời `0.40–0.52s`, opacity `0.40 * Math.pow(1 - t, 1.8)`, tái tạo mượt quanh người chơi trong bán kính `11m`.
+  - **Mặt đất hạt sỏi `36×36` trên Three.js `r128` ([public/js/game.js](file:///home/dev_ntd/Documents/FPS/public/js/game.js)):** Giữ vũng nước loang rộng `repeat(2, 2)` không lộ ô vuông và dùng `onBeforeCompile` trên `groundMat` nạp `asphaltDetailNormal` (`512×512` seamless lặp `36×36` via `vUv * 18.0`, làm mờ theo `puddleCalm`) + micro-sparkle `roughnessFactor` để ánh đèn đường vàng lấp lánh sắc nét theo hạt sỏi mà không thêm draw call.
+  - **Tay áo lì & cổ tay mượt ([model/characters/fps_arms.py](file:///home/dev_ntd/Documents/FPS/model/characters/fps_arms.py), [public/js/game.js](file:///home/dev_ntd/Documents/FPS/public/js/game.js)):** Nâng `sleeve_rough` lên `0.68–0.96` (`mr_out` `[170, 246]`), hạ `envMapIntensity` vùng tay áo/găng xuống `0.36` để bỏ bóng nilon, làm dịu AO viền cổ tay (`0.54`), giữ da ngón cái dịu (`0.65 * orig_diff`, `roughness 0.54..0.68`).
+  - **AWM polymer grain, AO khe & độ nét ([model/weapons/awm.py](file:///home/dev_ntd/Documents/FPS/model/weapons/awm.py), [model/build.py](file:///home/dev_ntd/Documents/FPS/model/build.py), [public/js/game.js](file:///home/dev_ntd/Documents/FPS/public/js/game.js)):** Thêm `UnsharpMask` giữ nét phần đệm má & thân súng ở `512×512` (giữ `awm.bundle.js` gọn `2,863,870 B`), tách & tô AO khe tiếp xúc quanh khóa nòng/hộp tiếp đạn + vân sần polymer + `awm_rifle_normal.png`, hạ `clearcoat` polymer về `0.04`.
+  - **Container bám sân ([public/js/game.js](file:///home/dev_ntd/Documents/FPS/public/js/game.js)):** Đặt đáy container tại `y = 1.29` (cắm `1cm` xuống nền) và `contactShadow` tại `y = 0.007` để dàn container xa không nổi mép. (Đã xác nhận trong `public/` không có nút hình viên thuốc giọt nước ở mép phải — đây là phần tử UI/overlay bên ngoài codebase).
+  - **Kiểm thử & Bảo mật:** Sửa ngưỡng `analyze_rain_ripples` phù hợp gợn sóng mảnh `22–34cm`, thu gọn `thumb_roi` (`[0.87..0.96, 0.62..0.72]`) tránh dính nền đường/nút HUD, nới timeout SwiftShader ở Tier 3 trong [server/tests/verify_e2e_suite.py](file:///home/dev_ntd/Documents/FPS/server/tests/verify_e2e_suite.py). Sau lần sửa cuối: `python3 -m unittest discover -s model/tests -v` **26/26 PASS** (`5.394s`), `node --test server/tests/test_lan_v2.js server/tests/test_arm_rig.mjs` **12/12 PASS** (`3.169s`), `verify_e2e_suite.py --strict-visual` **Tier 1–4 + 9/9 visual telemetry + perf_stability PASS** (`total_calls_mean=119.0`, `js_time_ms_p50=1.8ms`, `p95=2.3ms`, `geometries_delta=0`, `textures_delta=0`, `0` lỗi console/pageerror/http/request), `SECURITY_GREP_CLEAN`.
+- **File ảnh hưởng:** `model/characters/fps_arms.py`, `model/weapons/awm.py`, `model/build.py`, `model/dist/*`, `public/js/game.js`, `server/tests/verify_e2e_suite.py`, `agents/context.md`.
+- **Đang dở / vướng:** Không có.
+- **Bước tiếp theo:** Người dùng bấm `Ctrl+F5` tại `http://localhost:8090/FPS.html` để trải nghiệm bản mới.
+- **Câu hỏi còn mở:** Xác nhận nút viên thuốc giọt nước ở mép phải nếu đến từ extension/trình duyệt ngoài codebase.
+
+### [2026-11-26 12:10] Nâng cấp Vật liệu PBR (Tay/Găng, M416/Red Dot/Glock/AWM), Mặt đất không Seam, Vòng gợn sóng Mưa & Ánh sáng Ấm-Lạnh — Vai trò: Toàn đội / Agent trực tiếp
+
+- **Đã làm:**
+  - **Cánh tay áo & Găng tay (`model/characters/fps_arms.py`, `model/core/textures.py`, `public/js/game.js`):** Phân tách đảo UV giữa áo khoác vải chiến thuật rêu đậm (`#343E29`, vân `ripstop` + đỉnh nếp gấp phản chiếu ẩm vs vùng trũng thấm nước tối) + bo cổ tay gân (`#22281D`) có đường chỉ khâu (`#54584E`) với găng tay than tối/da sờn (`#25292F..#333840`) + đệm khớp ngón carbon mờ + chỉ khâu tương phản; giảm độ chói vùng da ngón cái lộ ngoài găng (`0.74 * orig_diff`, `roughness 0.52..0.68`) kèm `aoMap` tiếp xúc rìa găng/báng súng (`aoMapIntensity = 0.95` trong `hydratePbrMaterial`) để không bị sáng phẳng như nhựa.
+  - **Vũ khí M416, Red Dot & Slot 2/3 (`model/weapons/{m416,pistol,awm}.py`, `public/js/game.js`):** Tách biệt thông số `metalness`/`roughness`/`clearcoat` giữa hợp kim anodized có xước cạnh (`M416_GunMetal`, `Pistol_Slide`, `AWM_ScopePBR`) với nhựa polymer sần lì (`M416_Polymer`, `Pistol_Polymer`, `AWM_RiflePBR`); giữ tên vật liệu qua `hydratePbrMaterial()` (`name: src.name || objName`); giảm độ phản xạ kính `holo_lens` (`opacity: 0.1`, `envMapIntensity: 0.5`) để chấm đỏ `reticle_group` hiển thị sắc nét đúng tâm không loang vệt sáng; sửa `switchWeapon()` gọi `gunAnim(0, 0)` để reset FOV/scope ngay khi đổi khỏi AWM ADS; cân lại `envScale` (`m416: 1.05`, `pistol: 0.88`, `awm: 0.96`) giảm lóa trắng.
+  - **Mặt đất, Hạt mưa, Container & Ánh sáng (`public/js/game.js`):** Thay nền mặt đất bằng texture tuần hoàn hình học `512×512` (`repeat 4×4`, `tileNoise` + vũng nước ellipse xoay toroidal smoothstep, `metalness: 0.04` điện môi) loại bỏ hoàn toàn đường cắt lặp ô vuông góc & độ lệch mép map pháp tuyến/độ nhám; thay đốm trắng `PointsMaterial` thành `THREE.InstancedMesh` vòng tròn gợn sóng nước mưa đồng tâm (`96` instances, 1 draw call); bổ sung tương phản ánh sáng đèn đường ấm (`#ffd494` + `warmFill` + panel hổ phách trong `envMap`) đối lập nền đêm xanh lạnh; tăng lớp tối chân vách container (`cTex`) & decal bóng đổ tiếp xúc `contactShadowGeo` (`8.8×5.0m`) dưới chân container.
+  - **Kiểm thử & Bảo mật:** Sửa vùng ROI đo ngón cái/container & timeout đồng bộ LAN SwiftShader trong `server/tests/verify_e2e_suite.py`; chạy trọn bộ kiểm thử sau lần sửa cuối:
+    - `python3 -m model.build` & `python3 -m unittest discover -s model/tests -v`: **26/26 PASS** (`4.827s`).
+    - `node --test server/tests/test_lan_v2.js server/tests/test_arm_rig.mjs`: **12/12 PASS** (`0.151s`).
+    - `python3 server/tests/verify_e2e_suite.py --url http://localhost:8090/FPS.html --out-dir /tmp/fps_e2e_out5 --strict-visual`: **Tier 1–4 PASS**, tất cả 9/9 mục visual telemetry (`ground_seam_08`, `teximage2d_repeat_wrap`, `rain_ripples_07`, `container_contact_shadow_09`, `warm_cool_01_m416_hip`, `warm_cool_07_wide`, `red_dot_compactness_02`, `arms_gloves_thumb_01`, `scene_material_audit`) + `perf_stability` (`113` draw calls, JS `p50=1.4ms`, `p95=2.29ms`, `0` console/pageerror/http/request errors) đều **PASS**; thẩm định trực quan các ảnh `01..10.png`.
+    - `grep -rnE "innerHTML|dangerouslySetInnerHTML|eval\(|document\.write" public/ server/`: **SECURITY_GREP_CLEAN**.
+- **File ảnh hưởng:** `model/characters/fps_arms.py`, `model/core/{textures.py,glb_exporter.py,__init__.py}`, `model/weapons/{m416,pistol,awm,__init__}.py`, `model/build.py`, `model/tests/test_{arms,m416,pistol}_model.py`, `model/dist/*`, `public/js/game.js`, `server/tests/verify_e2e_suite.py`, `agents/context.md`.
+- **Đang dở / vướng:** Không có.
+- **Bước tiếp theo:** Người dùng bấm `Ctrl+F5` tại `http://localhost:8090/FPS.html` để tải lại toàn bộ bundle và trải nghiệm trực tiếp.
+- **Câu hỏi còn mở:** Không có.
+
+### [2026-11-26 09:26] Ghép & Tích hợp Model AWM (`awm.glb` -> Slot 3 PBR + Bolt-Action + 3P) — Vai trò: Toàn đội IT
+
+- **Đã làm:**
+  - **Python PBR Converter (`model/`):** Tách `socket_euler_xyz`, `parse_glb`, `pack_glb` dùng chung vào [glb_exporter.py](file:///home/dev_ntd/Documents/FPS/model/core/glb_exporter.py), sao lưu fallback `model/assets/awm.glb`, viết [awm.py](file:///home/dev_ntd/Documents/FPS/model/weapons/awm.py) (`build_awm_glb(texture_size=512)`): gỡ `KHR_materials_pbrSpecularGlossiness`, tách mask kim loại nòng/khóa nòng và polymer xanh OD thành `AWM_RiflePBR`/`AWM_ScopePBR`/`AWM_OpticLens` kèm clearcoat ướt mưa, chuẩn hóa `awm_root` (`scale=0.01`, `rotY=π`, nòng hướng `-Z` dài tới `-0.802m`, cần khóa nòng bên phải `+X`), bọc `awm_bolt_pivot` + `awm_mag_group` + `muzzle_anchor` + 4 socket IK (`socket_handguard`, `socket_grip`, `socket_mag`, `socket_bolt_right`/`socket_charging`). Xuất `model/dist/awm.glb` (`1,261,492 B`) & `awm.bundle.js` (`1,682,246 B`).
+  - **Client (`public/`):** Nhúng `awm.bundle.js` vào `FPS.html`, thêm profile ngón tay AWM & `rightAction="bolt"` vào `arm_rig.js`, thay khối hộp tạm `sniperViewGroup` trong `game.js` bằng `awm.glb`, thêm hoạt ảnh lên đạn khóa nòng `awm_bolt_pivot` (sửa lỗi `dtShot < 0` làm reset sớm) + tay phải vươn kéo cần khóa nòng, rút/lắp băng đạn `awm_mag_group`, căn `SNIPER_HIP_POS`/`awmOpticY`, hiển thị `awmMesh` trên `soldier.glb` góc nhìn thứ 3 khi đối thủ cầm Slot `3`, và chặn snapshot trễ hoàn tác vũ khí trong `260ms` sau `SWITCH_WEAPON`.
+  - **Kiểm thử & Tài liệu:** Thêm `model/tests/test_awm_model.py` (`25/25` Python PASS) & test socket AWM trong `server/tests/test_arm_rig.mjs` (`12/12` Node PASS); Playwright `verify_awm_pbr.py` PASS + thẩm định ảnh `awm_01..04.png`; `SECURITY_GREP_CLEAN`; đồng bộ `README.md`, `model/README.md`, `agents/context.md`.
+- **File ảnh hưởng:** `model/core/{glb_exporter.py,__init__.py}`, `model/assets/awm.glb`, `model/weapons/{awm.py,__init__.py}`, `model/build.py`, `model/tests/{test_awm_model.py,test_m416_model.py}`, `model/dist/awm.*`, `public/FPS.html`, `public/js/{arm_rig.js,game.js}`, `server/tests/test_arm_rig.mjs`, `README.md`, `model/README.md`, `agents/context.md`.
+- **Đang dở / vướng:** Không có.
+- **Bước tiếp theo:** Người dùng bấm `Ctrl+F5` tại `http://localhost:8090/FPS.html` và nhấn phím `3` để trải nghiệm AWM mới.
+- **Câu hỏi còn mở:** Không có.
+
+### [2026-11-26 09:11] Sửa Pillow Resampling & Build đầy đủ 4 model PBR (`fps_arms` SkinnedMesh) — Vai trò: Python Tooling Dev & QA
+
+- **Đã làm:**
+  - Phát hiện `python3 -m model.build` trên Python 3.10 hệ thống bị lỗi `AttributeError: module 'PIL.Image' has no attribute 'Resampling'` tại [fps_arms.py](file:///home/dev_ntd/Documents/FPS/model/characters/fps_arms.py) khiến `model/dist/fps_arms.glb` còn giữ bản cũ.
+  - Sửa `_resize_image()` dùng `getattr(Image, "Resampling", Image).LANCZOS` để tương thích cả Pillow cũ (<9.1) lẫn Pillow mới (>=10).
+  - Chạy lại `python3 -m model.build`: build thành công `m416`, `pistol`, `fps_arms` (`1,085,364 B`, `54` nodes, `4,026` verts, `7,028` tris) và `soldier`.
+  - Xác minh `python3 -m unittest discover -s model/tests -v` (**23/23 PASS**, `3.317s`) và `node --test server/tests/test_lan_v2.js server/tests/test_arm_rig.mjs` (**11/11 PASS**, `146.88ms`).
+- **File ảnh hưởng:** `model/characters/fps_arms.py`, `model/dist/{m416,pistol,fps_arms,soldier}.{glb,bundle.js}`, `agents/context.md`.
+- **Đang dở / vướng:** Server Node.js đang chạy nền tại `0.0.0.0:8090`.
+- **Bước tiếp theo:** Người dùng tải lại `http://localhost:8090/FPS.html` (Ctrl+F5 nếu trình duyệt cache JS bundle) để sử dụng model tay mới.
+- **Câu hỏi còn mở:** Không có.
 
 ### [2026-11-26 01:56] Giải quyết Merge Conflict sau `git pull` & Xác minh toàn bộ test — Vai trò: Tech Lead, Developer, QA & Security Engineer
 

@@ -102,12 +102,18 @@ class TestPBRTexturesAndExporter(unittest.TestCase):
         rough_img = Image.open(io.BytesIO(tex.roughness_png))
         normal_img = Image.open(io.BytesIO(tex.normal_png))
         mr_img = Image.open(io.BytesIO(tex.gunmetal_mr_png))
+        poly_norm_img = Image.open(io.BytesIO(tex.polymer_normal_png))
+        poly_mr_arr = np.asarray(Image.open(io.BytesIO(tex.polymer_mr_png)))
 
         # Assert
         self.assertEqual(rough_img.size, (tex_size, tex_size))
         self.assertEqual(normal_img.size, (tex_size, tex_size))
         self.assertEqual(normal_img.mode, "RGB")
         self.assertEqual(mr_img.mode, "RGB")
+        self.assertEqual(poly_norm_img.size, (tex_size, tex_size))
+        self.assertEqual(poly_norm_img.mode, "RGB")
+        self.assertTrue(np.all(poly_mr_arr[..., 2] == 0))
+        self.assertGreaterEqual(int(poly_mr_arr[..., 1].min()), 190)
         self.assertGreater(len(tex.gunmetal_albedo_png), 100)
         self.assertGreater(len(tex.polymer_albedo_png), 100)
         rough_arr = np.asarray(rough_img)
@@ -163,7 +169,7 @@ class TestM416BuildPipeline(unittest.TestCase):
 
             # Act
             artifacts = build_all(output_dir=out_dir, texture_size=128, seed=42)
-            self.assertEqual({a.name for a in artifacts}, {"m416", "pistol", "fps_arms", "soldier"})
+            self.assertEqual({a.name for a in artifacts}, {"m416", "pistol", "awm", "fps_arms", "soldier"})
             m416_art = next(a for a in artifacts if a.name == "m416")
             glb_bytes = m416_art.glb_path.read_bytes()
             bundle_text = m416_art.bundle_path.read_text(encoding="utf-8")
@@ -188,8 +194,28 @@ class TestM416BuildPipeline(unittest.TestCase):
             node_names = {n["name"] for n in gltf["nodes"]}
             self.assertTrue(required_nodes.issubset(node_names))
 
-            gunmetal_mat = next(m for m in gltf["materials"] if m["name"] == "M416_GunMetal")
-            self.assertAlmostEqual(gunmetal_mat["extras"]["pbrPhysical"]["clearcoat"], 0.85)
+            mats_by_name = {m["name"]: m for m in gltf["materials"]}
+            gunmetal_mat = mats_by_name["M416_GunMetal"]
+            self.assertAlmostEqual(gunmetal_mat["extras"]["pbrPhysical"]["clearcoat"], 0.16)
+
+            for mat_name in ("M416_Polymer", "M416_Rubber", "M416_PEQ15_FDE"):
+                mat = mats_by_name[mat_name]
+                self.assertEqual(mat["pbrMetallicRoughness"]["metallicFactor"], 0.0)
+                cc = mat.get("extras", {}).get("pbrPhysical", {}).get("clearcoat", 0.0)
+                self.assertLessEqual(cc, 0.04)
+
+            # Magazine body uses matte polymer, HoloGlass is near-clear, reticle is a pinpoint dot
+            nodes_by_name = {n["name"]: n for n in gltf["nodes"]}
+            mag_mat_idx = gltf["meshes"][nodes_by_name["mag_body"]["mesh"]]["primitives"][0]["material"]
+            self.assertEqual(gltf["materials"][mag_mat_idx]["name"], "M416_Polymer")
+
+            glass_mat = mats_by_name["M416_HoloGlass"]
+            self.assertLessEqual(glass_mat["pbrMetallicRoughness"]["baseColorFactor"][3], 0.14)
+
+            reticle_prim = gltf["meshes"][nodes_by_name["reticle_group"]["mesh"]]["primitives"][0]
+            reticle_acc = gltf["accessors"][reticle_prim["attributes"]["POSITION"]]
+            self.assertLessEqual(max(abs(v) for v in reticle_acc["max"]), 0.001)
+            self.assertLessEqual(max(abs(v) for v in reticle_acc["min"]), 0.001)
 
             # Assert Base64 JS bundle decodes identically to .glb
             match = re.search(r'FPS_MODELS\["m416"\]\s*=\s*"([^"]+)"', bundle_text)
