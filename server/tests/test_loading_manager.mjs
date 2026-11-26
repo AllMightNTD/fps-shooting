@@ -10,6 +10,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { createLanServer } from "../index.js";
 import {
   collectSceneTextures,
   compileScenePass,
@@ -236,4 +237,30 @@ test("createMapSwitchGuard achieves 0ms cache hit, prevents stale dropdown races
   shouldFailHarbor = true;
   await assert.rejects(() => guard.ensureMapReady("harbor"), /Simulated harbor load error/);
   assert.equal(guard.isBusy(), false);
+});
+
+test("HTTP server serves optimized /assets/loading_bg.webp with image/webp MIME and blocks path traversal", async () => {
+  // Arrange
+  const srv = createLanServer();
+  const port = await srv.start(0, "127.0.0.1");
+  try {
+    // Act: valid WebP loading background + traversal & disallowed extension attempts
+    const okRes = await fetch(`http://127.0.0.1:${port}/assets/loading_bg.webp`);
+    const buf = Buffer.from(await okRes.arrayBuffer());
+    const travRes = await fetch(`http://127.0.0.1:${port}/assets/%2e%2e/server/index.js`);
+    const travRes2 = await fetch(`http://127.0.0.1:${port}/assets/..%2f..%2fserver%2findex.js`);
+    const badExtRes = await fetch(`http://127.0.0.1:${port}/assets/loading_bg.svg`);
+
+    // Assert
+    assert.equal(okRes.status, 200);
+    assert.equal(okRes.headers.get("content-type"), "image/webp");
+    assert.equal(buf.subarray(0, 4).toString("ascii"), "RIFF");
+    assert.equal(buf.subarray(8, 12).toString("ascii"), "WEBP");
+    assert.ok(buf.length < 300 * 1024, `Optimized WebP should stay under 300KB, got ${buf.length}B`);
+    assert.equal(travRes.status, 404);
+    assert.equal(travRes2.status, 404);
+    assert.equal(badExtRes.status, 404);
+  } finally {
+    await srv.stop();
+  }
 });

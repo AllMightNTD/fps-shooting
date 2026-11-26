@@ -21,7 +21,15 @@ export const TICK_MS = 50; // 20 Hz snapshot & room loop
 
 const MODEL_ASSET_RE = /^\/model\/dist\/([a-z0-9_]+)\.(glb|bundle\.js)$/;
 const PUBLIC_JS_RE = /^\/js\/([a-z0-9_]+)\.js$/;
+const PUBLIC_ASSET_RE = /^\/assets\/([a-z0-9_]+)\.(webp|png|jpg|jpeg)$/;
 const SHARED_MAP_RE = /^\/shared\/maps\/([a-z0-9_]+)\.json$/;
+
+const IMAGE_MIME = {
+  webp: "image/webp",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+};
 
 export function getLanUrls(port) {
   const ifaces = os.networkInterfaces();
@@ -42,6 +50,7 @@ export function createLanServer(options = {}) {
   const rootDir = path.resolve(options.rootDir || DEFAULT_ROOT);
   const publicDir = path.join(rootDir, "public");
   const publicJsDir = path.join(publicDir, "js");
+  const publicAssetsDir = path.join(publicDir, "assets");
   const fpsPath = path.join(publicDir, "FPS.html");
   const protocolPath = path.join(rootDir, "server", "protocol.js");
   const weaponsPath = path.join(rootDir, "server", "weapons.js");
@@ -281,6 +290,16 @@ export function createLanServer(options = {}) {
       const candidate = path.resolve(publicJsDir, `${jsMatch[1]}.js`);
       if (candidate.startsWith(publicJsDir + path.sep)) {
         streamFile(res, req.method, candidate, "application/javascript; charset=utf-8", "no-store");
+        return;
+      }
+    }
+
+    const publicAssetMatch = PUBLIC_ASSET_RE.exec(pathname);
+    if (publicAssetMatch) {
+      const ext = publicAssetMatch[2];
+      const candidate = path.resolve(publicAssetsDir, `${publicAssetMatch[1]}.${ext}`);
+      if (candidate.startsWith(publicAssetsDir + path.sep)) {
+        streamFile(res, req.method, candidate, IMAGE_MIME[ext] || "application/octet-stream", "public, max-age=3600");
         return;
       }
     }

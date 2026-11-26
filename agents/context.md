@@ -6,8 +6,8 @@
 
 _(ghi đè mỗi lần cập nhật)_
 
-- **Cập nhật lần cuối:** 2026-11-27 00:38 — Hoàn tất **Màn hình Loading 4 bước & Khởi động/Vào trận không khựng (Phương án A)**
-- **Dự án / Giai đoạn:** FPS Web Game (Khu Quân Sự Cũ 5v5 + Bến Cảng Mưa) — Đã triệt tiêu hiện tượng khựng lúc mở game và khi bấm **Luyện tập Offline (Drone)** lần đầu theo đúng Phương án A đã chốt: (1) Tạo [public/js/loading_manager.js](file:///d:/FPS/fps-shooting/public/js/loading_manager.js) (`yieldToUI`, `createLoadingTracker`, `collectSceneTextures`, `warmupTexturesChunked`, `compileScenePass` hỗ trợ cả `compileAsync` lẫn Three.js `r128` `compile`, `createMapSwitchGuard`); (2) Tách dựng bất đồng bộ có `yieldToUI()` cho cả `military` ([map_loader.js](file:///d:/FPS/fps-shooting/public/js/map_loader.js)) lẫn `harbor` ([game.js](file:///d:/FPS/fps-shooting/public/js/game.js)), chỉ build map mặc định lúc mở trang và build/cache map thứ 2 ngay khi đổi dropdown `#soloMapSelect` hoặc vào phòng LAN; (3) Trong Loading Screen (`#loadingOverlay` hiển thị từ `0ms` trong [FPS.html](file:///d:/FPS/fps-shooting/public/FPS.html)): nạp tuần tự 5 GLB, tiền khởi tạo `AudioContext` + `ConvolverNode` (loại bỏ ~`100ms` khựng WASAPI/FFT lúc bấm nút đầu), upload toàn bộ texture lên VRAM theo lô (`renderer.initTexture`), bật tạm 3 súng + `fps_arms` + Drone + Soldier + chớp lửa/laser để biên dịch shader tách pha + render nháp 1 frame ẩn, rồi khôi phục sạch trong `finally`; (4) Cache map theo ID `currentActiveMapId` giúp bấm **Luyện tập Offline** vào trận đồng bộ ngay lập tức (`9.6ms` trên Military, `1.0ms` trên Harbor), giữ trọn user gesture cho `requestPointerLock()`, và đổi ngược về map đã cache đạt `0.5ms` không bật lại Loading. Xác minh **24/24 Node**, **28/28 Python**, **Playwright Chromium WebGL E2E PASS** (`101` texture VRAM, `sw2=8.4ms`, `sw3=4.2ms`, `shot=5.7ms`, `errors: []`, `SECURITY_SCAN_HITS: 0`).
+- **Cập nhật lần cuối:** 2026-11-27 01:03 — Nâng cấp giao diện & tối ưu ảnh nền **Màn hình Loading 3D Đội Đặc Nhiệm + Thanh tiến độ dưới đáy**
+- **Dự án / Giai đoạn:** FPS Web Game (Khu Quân Sự Cũ 5v5 + Bến Cảng Mưa) — Đã hoàn tất Loading Screen 4 bước không khựng (Phương án A) và nâng cấp giao diện Loading Screen dùng ảnh đội đặc nhiệm 3D nén tối ưu từ `3d_screen_loading.png` (`8.53 MB` PNG `2752×1536`) → `public/assets/loading_bg.webp` (`151.9 KB` WebP `1600×893`, giảm **56.1×**), phục vụ qua route allowlist `/assets/*` (`Cache-Control: public, max-age=3600`) trong `server/index.js`, preload ưu tiên cao `<link rel="preload" as="image" fetchpriority="high">` và thiết kế bố cục full-bleed + scrim tối chân ảnh + thanh loading ở bottom (`dockTopRatio: 0.85`). Đạt **25/25 Node**, **28/28 Python**, **Playwright Chromium WebGL E2E PASS** (`naturalWidth=1600`, bấm Solo Military `2.8ms`, Harbor `1.3ms`, đổi map đã cache `0.8ms`, `errors: []`, `SECURITY_SCAN_HITS: 0`).
 - **Nhánh Git đang làm:** `main`
 - **Đang làm dở:** Không có.
 - **Blocker:** Không có (lệnh `git` bị chặn bởi deny rule môi trường, nhưng `python3` và `node` chạy bình thường).
@@ -72,6 +72,18 @@ _(ghi đè mỗi lần cập nhật)_
 - [ ] Xác nhận & lập kế hoạch "các bước sau" với người dùng (tích hợp `toon_m416.glb`, `pistol.glb`, `awm.glb`/`m200.glb` & `sound/*/*.wav`, hoặc kiểm thử trình duyệt & commit bản hiện tại) — Vai trò: Tech Lead, BA, Solution Architect — Ưu tiên: cao
 
 ## 4. Nhật ký bàn giao (mới nhất ở trên cùng)
+
+### [2026-11-27 01:03] Nâng cấp giao diện Loading Screen ảnh Đội Đặc Nhiệm 3D + Thanh tiến độ đáy — Vai trò: Frontend Dev, Backend Dev, QA, Technical Writer
+
+- **Đã làm:**
+  - **Tối ưu tài nguyên ảnh (`public/assets/loading_bg.webp`):** Chuyển đổi & nén `3d_screen_loading.png` (`8,730,371 B`, `2752×1536` RGBA PNG) sang `public/assets/loading_bg.webp` (`155,546 B` / `151.9 KB`, `1600×893` WebP `quality=82, method=6`, nhỏ hơn **56.1×**) giúp tải và giải mã gần như tức thì.
+  - **Server Static Allowlist (`server/index.js`, `server/tests/test_loading_manager.mjs`):** Bổ sung route `PUBLIC_ASSET_RE` phục vụ `/assets/<name>.(webp|png|jpg|jpeg)` có kiểm tra containment chống path traversal, trả đúng MIME `image/webp` và `Cache-Control: public, max-age=3600`; bổ sung unit test AAA kiểm tra magic header WebP + chặn traversal/SVG.
+  - **Thiết kế lại `#loadingOverlay` (`public/FPS.html`):** Thêm `<link rel="preload" as="image" href="/assets/loading_bg.webp" fetchpriority="high">`, hiển thị ảnh đội đặc nhiệm toàn màn hình (`object-fit: cover`, hiệu ứng Ken Burns GPU mượt nhẹ), phủ scrim chuyển tối vùng đáy, nhãn thương hiệu góc trên-trái và đặt thanh tiến độ phát sáng + `%` + chi tiết bước + mẹo điều khiển gọn ở bottom (`dockTopRatio: 0.85`).
+  - **Kiểm thử & Thẩm định trực quan:** **25/25 Node** PASS, `SECURITY_SCAN_HITS: 0`, Playwright Chrome WebGL E2E **PASS** (`naturalWidth=1600×893`, bấm Solo Military `2.8ms`, Harbor `1.3ms`, đổi map cache `0.8ms`, `errors: []`), đã kiểm tra trực tiếp ảnh chụp màn hình Loading thực tế.
+- **File ảnh hưởng:** `public/assets/loading_bg.webp`, `server/index.js`, `public/FPS.html`, `server/tests/test_loading_manager.mjs`, `README.md`, `agents/context.md`.
+- **Đang dở / vướng:** Không có.
+- **Bước tiếp theo:** Người dùng tải lại `http://localhost:8090/FPS.html` (`Ctrl+F5`) sau khi khởi động lại `node server/index.js` (để server nạp route `/assets/*` mới) và trải nghiệm màn hình Loading mới.
+- **Câu hỏi còn mở:** Không có.
 
 ### [2026-11-27 00:38] Màn hình Loading 4 bước & Khởi động/Vào trận không khựng (Phương án A) — Vai trò: Tech Lead, Frontend Dev, QA, Security, Reviewer, Technical Writer
 

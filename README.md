@@ -28,7 +28,8 @@ Trò chơi bắn súng góc nhìn thứ nhất (FPS) trên nền WebGL sử dụ
 ├── shared/
 │   └── maps/               # military_layout.json & military_colliders.json dùng chung Client/Server
 ├── public/                 # Giao diện & Engine phía Client (ES Modules)
-│   ├── FPS.html            # Màn hình Loading 4 bước, HUD vô hạn đạn, chọn map (Khu Quân Sự Cũ / Bến Cảng Mưa), Radar & Cài đặt
+│   ├── FPS.html            # Màn hình Loading 4 bước (ảnh đội đặc nhiệm 3D + thanh tiến độ đáy), HUD vô hạn đạn, chọn map, Radar & Cài đặt
+│   ├── assets/             # Tài nguyên hình ảnh tối ưu (loading_bg.webp ~152KB nén từ 3d_screen_loading.png)
 │   └── js/
 │       ├── net.js          # Tự suy ra ws(s)://${location.host}/ws, tự nối lại & sessionStorage 30s
 │       ├── lobby.js        # Danh sách phòng thời gian thực, tiền tải & cache map ngay khi đổi dropdown Solo, Vào nhanh, Mật khẩu
@@ -124,7 +125,7 @@ Server mặc định lắng nghe `0.0.0.0:8090` (tự động chuyển sang cổ
 ## Kiểm thử
 
 - **Python Unit Tests (`python3 -m unittest discover -s model/tests -v`):** **28/28 PASS** (kiểm tra geometry, textures PBR, chuyển đổi Spec-Gloss → Metallic-Roughness `fps_arms.glb` & `awm.glb`, 12 model bản đồ Khu Quân Sự Cũ và chuẩn nhị phân glTF 2.0 `.glb` + `.bundle.js`).
-- **Node.js Server, Arm Rig, Graphics Quality & Loading Tests (`node --test server/tests/test_*.js server/tests/test_*.mjs`):** **24/24 PASS** (gồm LAN server, `arm_rig`, `military_map`, `graphics_quality` và `loading_manager`).
+- **Node.js Server, Arm Rig, Graphics Quality & Loading Tests (`node --test server/tests/test_*.js server/tests/test_*.mjs`):** **25/25 PASS** (gồm LAN server, `arm_rig`, `military_map`, `graphics_quality` và `loading_manager` kèm kiểm tra phục vụ `/assets/loading_bg.webp` & chặn path traversal).
 - **Trình duyệt Headless (Chrome/Playwright):**
   - `verify_lan_v2_e2e.py` (**PASS**): 3-tab Lobby → Phòng chờ → Mật khẩu → Chat → Kick → Host Cài đặt → `STARTING` → `PLAYING` → Headshot → `ENDING` → `"Về phòng ngay"` → Reconnect tab → Solo Drone (`0` console/pageerror).
   - `verify_lan_v2_1_e2e.py` (**PASS**): Lưu cài đặt & gán phím `localStorage` qua reload, chuyển súng `1/2/3`, đổi súng hủy nạp giữ nguyên mag, `Alt+Tab`/`blur` không kẹt phím, `Shift+R` nạp khi chạy nhưng chặn bắn, phân biệt đội `30m` trong mưa + giả lập mù màu Chromium `protanopia`, nameplate chỉ hiện đồng đội, tư thế ngồi đồng bộ & hoạt ảnh nạp người chơi khác, Radar chấm địch khi bắn, chặn cheat `w.mag=99` trên console, khôi phục đúng `m416.mag = 26` khi reconnect giữa trận, ống ngắm AWM Sniper & tâm ngắm đổi đỏ (`0` console/pageerror).
