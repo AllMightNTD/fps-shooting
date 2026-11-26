@@ -18,7 +18,7 @@ const STATE_LABEL = {
   ENDING: "Tổng kết",
 };
 
-export function createLobbyController({ net, getNickFn, onEnterSolo, onError }) {
+export function createLobbyController({ net, getNickFn, onEnterSolo, onSelectSoloMap, onError }) {
   const tbody = document.getElementById("lobbyRoomBody");
   const emptyNote = document.getElementById("lobbyEmpty");
   const createForm = document.getElementById("createRoomPanel");
@@ -157,7 +157,45 @@ export function createLobbyController({ net, getNickFn, onEnterSolo, onError }) 
     pwBox.style.display = "none";
   };
 
-  document.getElementById("btnSoloMode").onclick = () => onEnterSolo(soloMapEl ? soloMapEl.value : "military");
+  const btnSoloMode = document.getElementById("btnSoloMode");
+  const defaultSoloBtnText = btnSoloMode ? btnSoloMode.textContent : "Luyện tập Offline (Drone)";
+  let soloMapSwitchToken = 0;
+  let isSwitchingSoloMap = false;
+
+  // Step 4: Preload, warmup & cache map immediately when dropdown changes (before Pointer Lock click!)
+  if (soloMapEl && typeof onSelectSoloMap === "function") {
+    soloMapEl.addEventListener("change", () => {
+      const targetMap = soloMapEl.value;
+      const token = ++soloMapSwitchToken;
+      isSwitchingSoloMap = true;
+      if (btnSoloMode) {
+        btnSoloMode.disabled = true;
+        btnSoloMode.textContent = "Đang tải bản đồ...";
+      }
+      Promise.resolve(onSelectSoloMap(targetMap))
+        .catch((err) => {
+          console.error("Solo map switch failed:", err);
+          if (typeof onError === "function") {
+            onError("Không thể chuyển bản đồ, vui lòng thử lại.");
+          }
+        })
+        .finally(() => {
+          if (token !== soloMapSwitchToken) return;
+          isSwitchingSoloMap = false;
+          if (btnSoloMode) {
+            btnSoloMode.disabled = false;
+            btnSoloMode.textContent = defaultSoloBtnText;
+          }
+        });
+    });
+  }
+
+  if (btnSoloMode) {
+    btnSoloMode.onclick = () => {
+      if (isSwitchingSoloMap) return;
+      onEnterSolo(soloMapEl ? soloMapEl.value : "military");
+    };
+  }
 
   net.on(MSG.WELCOME, (msg) => renderRooms(msg.rooms));
   net.on(MSG.ROOM_LIST, (msg) => renderRooms(msg.rooms));

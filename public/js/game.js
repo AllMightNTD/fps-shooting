@@ -9,6 +9,15 @@
 import { MSG, sanitizeText } from "/js/protocol.js";
 import { createMilitaryMapLoader } from "/js/map_loader.js";
 import {
+  collectSceneTextures,
+  compileScenePass,
+  createLoadingTracker,
+  createMapSwitchGuard,
+  normalizeMapId,
+  warmupTexturesChunked,
+  yieldToUI,
+} from "/js/loading_manager.js";
+import {
   computeEffectivePixelRatio,
   detectHardwareTier,
   probeHardwareInfo,
@@ -64,11 +73,16 @@ function lerpAngle(a, b, t) {
   return a + d * t;
 }
 
-export function createGameEngine({ net, settings, input, onRequestExitToRoom, onRequestExitToLobby }) {
+export function createGameEngine({
+  net,
+  settings,
+  input,
+  onRequestExitToRoom,
+  onRequestExitToLobby,
+  onLoadingUpdate,
+}) {
   const $ = (id) => document.getElementById(id);
   const rnd = (a, b) => a + Math.random() * (b - a);
-  let seed = 11;
-  const sr = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
 
   // ---------- Renderer, scene, camera & Graphics Quality ----------
   const R = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
@@ -118,70 +132,29 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     vmCam.updateProjectionMatrix();
   });
 
-  // ---------- Lights & Lamp halos ----------
+  // ---------- Lights & Deferred Async Harbor Builder ----------
   const harborGroup = new THREE.Group();
   harborGroup.name = "HarborMapGroup";
+  harborGroup.visible = false;
   S.add(harborGroup);
 
   // R3: Warm-vs-cool night contrast (deep cold midnight ambient vs rich warm sodium streetlamps)
   const hemi = new THREE.HemisphereLight(0x28456b, 0x030509, 0.28);
+  hemi.visible = false;
   S.add(hemi);
   const moon = new THREE.DirectionalLight(0x5b82b8, 0.38);
   moon.position.set(-30, 50, 20);
-  moon.castShadow = true;
-  moon.shadow.mapSize.set(2048, 2048);
+  moon.castShadow = Boolean(activeQuality.preset.shadowsEnabled);
+  const initMoonShadowSz = activeQuality.preset.shadowMapSize || 2048;
+  moon.shadow.mapSize.set(initMoonShadowSz, initMoonShadowSz);
   Object.assign(moon.shadow.camera, { left: -50, right: 50, top: 50, bottom: -50, far: 140 });
+  moon.visible = false;
   S.add(moon);
   // Warm amber fill from lamp height to separate foreground gun/arms from the cool night backdrop
   const warmFill = new THREE.DirectionalLight(0xffb45c, 0.20);
   warmFill.position.set(12, 8, -6);
+  warmFill.visible = false;
   S.add(warmFill);
-
-  // R3: Warm amber halo for harbor sodium lamps
-  const lampHaloTex = (() => {
-    const c = document.createElement("canvas");
-    c.width = c.height = 128;
-    const g = c.getContext("2d");
-    const gr = g.createRadialGradient(64, 64, 0, 64, 64, 64);
-    gr.addColorStop(0, "rgba(255,208,132,.95)");
-    gr.addColorStop(0.20, "rgba(255,176,84,.48)");
-    gr.addColorStop(0.55, "rgba(195,120,40,.14)");
-    gr.addColorStop(1, "rgba(0,0,0,0)");
-    g.fillStyle = gr;
-    g.fillRect(0, 0, 128, 128);
-    return new THREE.CanvasTexture(c);
-  })();
-
-  // R3: Warm amber harbor lamps (sodium streetlamp feel) vs deep cold night shadows
-  const lamps = [];
-  for (const [x, z] of [[-6.5, -6.5], [6.5, -6.5], [-6.5, 6.5], [6.5, 6.5]]) {
-    const L = new THREE.PointLight(0xffa94d, 1.55, 30, 1.75);
-    L.position.set(x, 6.2, z);
-    harborGroup.add(L);
-    lamps.push(L);
-    const pole = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.07, 0.09, 6.2, 8),
-      new THREE.MeshStandardMaterial({ color: 0x1b2128, metalness: 0.6, roughness: 0.5 }),
-    );
-    pole.position.set(x, 3.1, z);
-    const bulb = new THREE.Mesh(
-      new THREE.SphereGeometry(0.14, 8, 6),
-      new THREE.MeshBasicMaterial({ color: 0xffe4be }),
-    );
-    bulb.position.set(x, 6.2, z);
-    const halo = new THREE.Sprite(
-      new THREE.SpriteMaterial({
-        map: lampHaloTex,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-        transparent: true,
-        opacity: 0.90,
-      }),
-    );
-    halo.position.set(x, 6.2, z);
-    halo.scale.set(7.8, 7.8, 1);
-    harborGroup.add(pole, bulb, halo);
-  }
 
   const maxAniso = Math.min(16, R.capabilities.getMaxAnisotropy ? R.capabilities.getMaxAnisotropy() : 16);
   function tex(w, h, fn, rep) {
@@ -196,10 +169,13 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     return t;
   }
 
-  // ---------- R3: Crisp wet asphalt harbor floor (organic puddles + 5mm aggregate & hairline cracks via onBeforeCompile) ----------
-  const GROUND_TEX_SIZE = 512;
-  const GROUND_REPEAT = 4;
-  const puddleMask = new Float32Array(GROUND_TEX_SIZE * GROUND_TEX_SIZE);
+  let ground = null;
+  let harborEnvMap = null;
+  let harborData = null;
+  let harborBuildPromise = null;
+  const solid = [];
+  const cols = [];
+
   // Exact periodic toroidal value noise in [0, 1] (zero seam at x=0/w-1 or y=0/h-1)
   function tileNoise(nx, ny, period, seedOff) {
     const x0 = Math.floor(nx), y0 = Math.floor(ny);
@@ -216,426 +192,623 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     return (a * (1 - ux) + b * ux) * (1 - uy) + (c * (1 - ux) + d * ux) * uy;
   }
 
-  // Generate irregular multi-lobe organic puddles with natural wet-to-damp shorelines (kept clear of tile wrap boundary)
-  const puddleDefs = [];
-  for (let i = 0; i < 18; i++) {
-    const a = sr() * Math.PI;
-    puddleDefs.push({
-      cx: 0.22 + sr() * 0.56,
-      cy: 0.22 + sr() * 0.56,
-      rx: 0.06 + sr() * 0.07,
-      ry: 0.04 + sr() * 0.05,
-      cs: Math.cos(a),
-      sn: Math.sin(a),
-      strength: 0.80 + sr() * 0.20,
-    });
-  }
-  for (let y = 0; y < GROUND_TEX_SIZE; y++) {
-    const py = y / GROUND_TEX_SIZE;
-    for (let x = 0; x < GROUND_TEX_SIZE; x++) {
-      const px = x / GROUND_TEX_SIZE;
-      const edgeWarp =
-        (tileNoise(px * 8, py * 8, 8, 17) - 0.5) * 0.42 +
-        (tileNoise(px * 22, py * 22, 22, 43) - 0.5) * 0.18 +
-        (tileNoise(px * 52, py * 52, 52, 79) - 0.5) * 0.07;
-      let wMax = 0;
-      for (let i = 0; i < puddleDefs.length; i++) {
-        const p = puddleDefs[i];
-        let dx = px - p.cx;
-        let dy = py - p.cy;
-        if (dx > 0.5) dx -= 1; else if (dx < -0.5) dx += 1;
-        if (dy > 0.5) dy -= 1; else if (dy < -0.5) dy += 1;
-        const u = (dx * p.cs + dy * p.sn) / p.rx;
-        const v = (-dx * p.sn + dy * p.cs) / p.ry;
-        const d = Math.sqrt(u * u + v * v) + edgeWarp;
-        if (d < 0.96) {
-          const tShore = Math.max(0, Math.min(1, (0.96 - d) / 0.20));
-          const s = tShore * tShore * (3 - 2 * tShore) * p.strength;
-          if (s > wMax) wMax = s;
+  async function buildHarborSceneAsync(onProgress = null) {
+    if (harborData) return harborData;
+    if (harborBuildPromise) return harborBuildPromise;
+
+    harborBuildPromise = (async () => {
+      const emit = (frac, detail = "") => {
+        if (typeof onProgress === "function") onProgress(frac, detail);
+      };
+      // Preserve exact deterministic PRNG sequence (seed = 11) for bit-identical harbor visuals
+      let hSeed = 11;
+      const sr = () => (hSeed = (hSeed * 16807) % 2147483647) / 2147483647;
+      const extraTextures = [];
+
+      emit(0.04, "Dựng đèn cảng & quầng sáng sodium...");
+      const lampHaloTex = (() => {
+        const c = document.createElement("canvas");
+        c.width = c.height = 128;
+        const g = c.getContext("2d");
+        const gr = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+        gr.addColorStop(0, "rgba(255,208,132,.95)");
+        gr.addColorStop(0.20, "rgba(255,176,84,.48)");
+        gr.addColorStop(0.55, "rgba(195,120,40,.14)");
+        gr.addColorStop(1, "rgba(0,0,0,0)");
+        g.fillStyle = gr;
+        g.fillRect(0, 0, 128, 128);
+        return new THREE.CanvasTexture(c);
+      })();
+      extraTextures.push(lampHaloTex);
+
+      for (const [x, z] of [[-6.5, -6.5], [6.5, -6.5], [-6.5, 6.5], [6.5, 6.5]]) {
+        const L = new THREE.PointLight(0xffa94d, 1.55, 30, 1.75);
+        L.position.set(x, 6.2, z);
+        L.layers.enableAll();
+        harborGroup.add(L);
+        const pole = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.07, 0.09, 6.2, 8),
+          new THREE.MeshStandardMaterial({ color: 0x1b2128, metalness: 0.6, roughness: 0.5 }),
+        );
+        pole.position.set(x, 3.1, z);
+        const bulb = new THREE.Mesh(
+          new THREE.SphereGeometry(0.14, 8, 6),
+          new THREE.MeshBasicMaterial({ color: 0xffe4be }),
+        );
+        bulb.position.set(x, 6.2, z);
+        const halo = new THREE.Sprite(
+          new THREE.SpriteMaterial({
+            map: lampHaloTex,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+            transparent: true,
+            opacity: 0.90,
+          }),
+        );
+        halo.position.set(x, 6.2, z);
+        halo.scale.set(7.8, 7.8, 1);
+        harborGroup.add(pole, bulb, halo);
+      }
+      await yieldToUI();
+
+      // R3: Crisp wet asphalt harbor floor (organic puddles + 5mm aggregate & hairline cracks via onBeforeCompile)
+      emit(0.10, "Sinh mặt nhựa đường ướt & vũng nước Bến Cảng...");
+      const GROUND_TEX_SIZE = 512;
+      const GROUND_REPEAT = 4;
+      const puddleMask = new Float32Array(GROUND_TEX_SIZE * GROUND_TEX_SIZE);
+      const puddleDefs = [];
+      for (let i = 0; i < 18; i++) {
+        const a = sr() * Math.PI;
+        puddleDefs.push({
+          cx: 0.22 + sr() * 0.56,
+          cy: 0.22 + sr() * 0.56,
+          rx: 0.06 + sr() * 0.07,
+          ry: 0.04 + sr() * 0.05,
+          cs: Math.cos(a),
+          sn: Math.sin(a),
+          strength: 0.80 + sr() * 0.20,
+        });
+      }
+      for (let y = 0; y < GROUND_TEX_SIZE; y++) {
+        if (y === 256) await yieldToUI();
+        const py = y / GROUND_TEX_SIZE;
+        for (let x = 0; x < GROUND_TEX_SIZE; x++) {
+          const px = x / GROUND_TEX_SIZE;
+          const edgeWarp =
+            (tileNoise(px * 8, py * 8, 8, 17) - 0.5) * 0.42 +
+            (tileNoise(px * 22, py * 22, 22, 43) - 0.5) * 0.18 +
+            (tileNoise(px * 52, py * 52, 52, 79) - 0.5) * 0.07;
+          let wMax = 0;
+          for (let i = 0; i < puddleDefs.length; i++) {
+            const p = puddleDefs[i];
+            let dx = px - p.cx;
+            let dy = py - p.cy;
+            if (dx > 0.5) dx -= 1; else if (dx < -0.5) dx += 1;
+            if (dy > 0.5) dy -= 1; else if (dy < -0.5) dy += 1;
+            const u = (dx * p.cs + dy * p.sn) / p.rx;
+            const v = (-dx * p.sn + dy * p.cs) / p.ry;
+            const d = Math.sqrt(u * u + v * v) + edgeWarp;
+            if (d < 0.96) {
+              const tShore = Math.max(0, Math.min(1, (0.96 - d) / 0.20));
+              const s = tShore * tShore * (3 - 2 * tShore) * p.strength;
+              if (s > wMax) wMax = s;
+            }
+          }
+          puddleMask[y * GROUND_TEX_SIZE + x] = wMax;
         }
       }
-      puddleMask[y * GROUND_TEX_SIZE + x] = wMax;
-    }
-  }
+      await yieldToUI();
 
-  const gtex = tex(GROUND_TEX_SIZE, GROUND_TEX_SIZE, (g, w, h) => {
-    const im = g.createImageData(w, h), d = im.data;
-    for (let y = 0; y < h; y++) {
-      const u = y / h;
-      for (let x = 0; x < w; x++) {
-        const v = x / w;
-        const idx = y * w + x;
-        const nMacro = tileNoise(v * 8, u * 8, 8, 31);
-        const nMid = tileNoise(v * 32, u * 32, 32, 73);
-        const nFine = tileNoise(v * 128, u * 128, 128, 137);
-        const wet = puddleMask[idx];
-        const pebble = 0.40 * nMid + 0.60 * nFine;
-        // Deep charcoal wet asphalt (#080a0e..#11151b) subtly darker in mirror puddles (#040609)
-        const base = (7.5 + nMacro * 4.5 + pebble * 8.5) * (1 - wet * 0.42);
-        d[idx * 4] = Math.max(2, Math.min(255, Math.round(base * 0.90)));
-        d[idx * 4 + 1] = Math.max(3, Math.min(255, Math.round(base * 0.98)));
-        d[idx * 4 + 2] = Math.max(4, Math.min(255, Math.round(base * 1.12)));
-        d[idx * 4 + 3] = 255;
-      }
-    }
-    g.putImageData(im, 0, 0);
-  }, GROUND_REPEAT);
+      emit(0.20, "Sinh texture Albedo mặt đường...");
+      const gtex = tex(GROUND_TEX_SIZE, GROUND_TEX_SIZE, (g, w, h) => {
+        const im = g.createImageData(w, h), d = im.data;
+        for (let y = 0; y < h; y++) {
+          const u = y / h;
+          for (let x = 0; x < w; x++) {
+            const v = x / w;
+            const idx = y * w + x;
+            const nMacro = tileNoise(v * 8, u * 8, 8, 31);
+            const nMid = tileNoise(v * 32, u * 32, 32, 73);
+            const nFine = tileNoise(v * 128, u * 128, 128, 137);
+            const wet = puddleMask[idx];
+            const pebble = 0.40 * nMid + 0.60 * nFine;
+            const base = (7.5 + nMacro * 4.5 + pebble * 8.5) * (1 - wet * 0.42);
+            d[idx * 4] = Math.max(2, Math.min(255, Math.round(base * 0.90)));
+            d[idx * 4 + 1] = Math.max(3, Math.min(255, Math.round(base * 0.98)));
+            d[idx * 4 + 2] = Math.max(4, Math.min(255, Math.round(base * 1.12)));
+            d[idx * 4 + 3] = 255;
+          }
+        }
+        g.putImageData(im, 0, 0);
+      }, GROUND_REPEAT);
+      await yieldToUI();
 
-  const gNormTex = tex(GROUND_TEX_SIZE, GROUND_TEX_SIZE, (g, w, h) => {
-    const im = g.createImageData(w, h), d = im.data;
-    const hMap = new Float32Array(w * h);
-    for (let y = 0; y < h; y++) {
-      const u = y / h;
-      for (let x = 0; x < w; x++) {
-        const v = x / w;
-        const idx = y * w + x;
-        const nFine = tileNoise(v * 96, u * 96, 96, 211);
-        const nMid = tileNoise(v * 32, u * 32, 32, 97);
-        const smoothCalm = 1 - Math.min(1, puddleMask[idx] * 1.15);
-        hMap[idx] = (0.62 * nFine + 0.38 * nMid) * smoothCalm;
-      }
-    }
-    for (let y = 0; y < h; y++) {
-      const ym = (y - 1 + h) % h, yp = (y + 1) % h;
-      for (let x = 0; x < w; x++) {
-        const xm = (x - 1 + w) % w, xp = (x + 1) % w;
-        const idx = y * w + x;
-        const dx = (hMap[y * w + xp] - hMap[y * w + xm]) * 1.15;
-        const dy = (hMap[yp * w + x] - hMap[ym * w + x]) * 1.15;
-        d[idx * 4] = Math.max(0, Math.min(255, Math.round(128 - dx * 48)));
-        d[idx * 4 + 1] = Math.max(0, Math.min(255, Math.round(128 - dy * 48)));
-        d[idx * 4 + 2] = 255;
-        d[idx * 4 + 3] = 255;
-      }
-    }
-    g.putImageData(im, 0, 0);
-  }, GROUND_REPEAT);
+      emit(0.28, "Sinh texture Normal mặt đường...");
+      const gNormTex = tex(GROUND_TEX_SIZE, GROUND_TEX_SIZE, (g, w, h) => {
+        const im = g.createImageData(w, h), d = im.data;
+        const hMap = new Float32Array(w * h);
+        for (let y = 0; y < h; y++) {
+          const u = y / h;
+          for (let x = 0; x < w; x++) {
+            const v = x / w;
+            const idx = y * w + x;
+            const nFine = tileNoise(v * 96, u * 96, 96, 211);
+            const nMid = tileNoise(v * 32, u * 32, 32, 97);
+            const smoothCalm = 1 - Math.min(1, puddleMask[idx] * 1.15);
+            hMap[idx] = (0.62 * nFine + 0.38 * nMid) * smoothCalm;
+          }
+        }
+        for (let y = 0; y < h; y++) {
+          const ym = (y - 1 + h) % h, yp = (y + 1) % h;
+          for (let x = 0; x < w; x++) {
+            const xm = (x - 1 + w) % w, xp = (x + 1) % w;
+            const idx = y * w + x;
+            const dx = (hMap[y * w + xp] - hMap[y * w + xm]) * 1.15;
+            const dy = (hMap[yp * w + x] - hMap[ym * w + x]) * 1.15;
+            d[idx * 4] = Math.max(0, Math.min(255, Math.round(128 - dx * 48)));
+            d[idx * 4 + 1] = Math.max(0, Math.min(255, Math.round(128 - dy * 48)));
+            d[idx * 4 + 2] = 255;
+            d[idx * 4 + 3] = 255;
+          }
+        }
+        g.putImageData(im, 0, 0);
+      }, GROUND_REPEAT);
+      await yieldToUI();
 
-  const gRoughTex = tex(GROUND_TEX_SIZE, GROUND_TEX_SIZE, (g, w, h) => {
-    const im = g.createImageData(w, h), d = im.data;
-    for (let y = 0; y < h; y++) {
-      const u = y / h;
-      for (let x = 0; x < w; x++) {
-        const v = x / w;
-        const idx = y * w + x;
-        const dampVar = tileNoise(v * 18, u * 18, 18, 313);
-        const wet = puddleMask[idx];
-        // Textured damp asphalt (~0.56..0.78) that sparkles on stone chips vs mirror puddles (~0.035)
-        const rough = (0.56 + 0.22 * dampVar) * (1 - wet) + 0.035 * wet;
-        const r = Math.max(8, Math.min(225, Math.round(rough * 255)));
-        d[idx * 4] = d[idx * 4 + 1] = d[idx * 4 + 2] = r;
-        d[idx * 4 + 3] = 255;
-      }
-    }
-    g.putImageData(im, 0, 0);
-  }, GROUND_REPEAT);
+      emit(0.36, "Sinh texture Roughness & hạt sỏi mặt đường...");
+      const gRoughTex = tex(GROUND_TEX_SIZE, GROUND_TEX_SIZE, (g, w, h) => {
+        const im = g.createImageData(w, h), d = im.data;
+        for (let y = 0; y < h; y++) {
+          const u = y / h;
+          for (let x = 0; x < w; x++) {
+            const v = x / w;
+            const idx = y * w + x;
+            const dampVar = tileNoise(v * 18, u * 18, 18, 313);
+            const wet = puddleMask[idx];
+            const rough = (0.56 + 0.22 * dampVar) * (1 - wet) + 0.035 * wet;
+            const r = Math.max(8, Math.min(225, Math.round(rough * 255)));
+            d[idx * 4] = d[idx * 4 + 1] = d[idx * 4 + 2] = r;
+            d[idx * 4 + 3] = 255;
+          }
+        }
+        g.putImageData(im, 0, 0);
+      }, GROUND_REPEAT);
+      await yieldToUI();
 
-  // Seamless 512x512 crisp asphalt stone-chip & hairline crack detail map (100% periodic mod w/h; R/G=normal, B=grit/crack)
-  const asphaltDetailNormal = tex(512, 512, (g, w, h) => {
-    const im = g.createImageData(w, h), d = im.data;
-    const hMap = new Float32Array(w * h);
-    const detCrack = new Float32Array(w * h);
-    for (let y = 0; y < h; y++) {
-      const u = y / h;
-      for (let x = 0; x < w; x++) {
-        const v = x / w;
-        const g1 = tileNoise(v * 64, u * 64, 64, 509);
-        const g2 = tileNoise(v * 32, u * 32, 32, 617);
-        const g3 = tileNoise(v * 16, u * 16, 16, 733);
-        hMap[y * w + x] = Math.pow(g1, 1.35) * 0.55 + g2 * 0.30 + g3 * 0.15;
+      const asphaltDetailNormal = tex(512, 512, (g, w, h) => {
+        const im = g.createImageData(w, h), d = im.data;
+        const hMap = new Float32Array(w * h);
+        const detCrack = new Float32Array(w * h);
+        for (let y = 0; y < h; y++) {
+          const u = y / h;
+          for (let x = 0; x < w; x++) {
+            const v = x / w;
+            const g1 = tileNoise(v * 64, u * 64, 64, 509);
+            const g2 = tileNoise(v * 32, u * 32, 32, 617);
+            const g3 = tileNoise(v * 16, u * 16, 16, 733);
+            hMap[y * w + x] = Math.pow(g1, 1.35) * 0.55 + g2 * 0.30 + g3 * 0.15;
 
-        // Exact periodic ridged-noise hairline cracks (smoothly continuous across x=0/511 and y=0/511)
-        const wx = (tileNoise(v * 4, u * 4, 4, 811) - 0.5) * 0.32;
-        const wy = (tileNoise(v * 4, u * 4, 4, 823) - 0.5) * 0.32;
-        const r1 = Math.abs(tileNoise((v + wx) * 3, (u + wy) * 3, 3, 911) - 0.5);
-        const r2 = Math.abs(tileNoise((v - wy * 0.8) * 4, (u + wx * 0.8) * 4, 4, 977) - 0.5);
-        const c1 = Math.max(0, 1 - r1 / 0.032);
-        const c2 = Math.max(0, 1 - r2 / 0.028);
-        detCrack[y * w + x] = Math.max(c1, c2);
-      }
-    }
-    for (let y = 0; y < h; y++) {
-      const ym = (y - 1 + h) % h, yp = (y + 1) % h;
-      for (let x = 0; x < w; x++) {
-        const xm = (x - 1 + w) % w, xp = (x + 1) % w;
-        const idx = y * w + x;
-        const hL = hMap[y * w + xm] - detCrack[y * w + xm] * 0.28;
-        const hR = hMap[y * w + xp] - detCrack[y * w + xp] * 0.28;
-        const hD = hMap[ym * w + x] - detCrack[ym * w + x] * 0.28;
-        const hU = hMap[yp * w + x] - detCrack[yp * w + x] * 0.28;
-        const dx = (hR - hL) * 1.85;
-        const dy = (hU - hD) * 1.85;
-        d[idx * 4] = Math.max(0, Math.min(255, Math.round(128 - dx * 60)));
-        d[idx * 4 + 1] = Math.max(0, Math.min(255, Math.round(128 - dy * 60)));
-        const gritVal = 150 + (hMap[idx] - 0.45) * 165 - detCrack[idx] * 95;
-        d[idx * 4 + 2] = Math.max(24, Math.min(255, Math.round(gritVal)));
-        d[idx * 4 + 3] = 255;
-      }
-    }
-    g.putImageData(im, 0, 0);
-  }, 1);
+            const wx = (tileNoise(v * 4, u * 4, 4, 811) - 0.5) * 0.32;
+            const wy = (tileNoise(v * 4, u * 4, 4, 823) - 0.5) * 0.32;
+            const r1 = Math.abs(tileNoise((v + wx) * 3, (u + wy) * 3, 3, 911) - 0.5);
+            const r2 = Math.abs(tileNoise((v - wy * 0.8) * 4, (u + wx * 0.8) * 4, 4, 977) - 0.5);
+            const c1 = Math.max(0, 1 - r1 / 0.032);
+            const c2 = Math.max(0, 1 - r2 / 0.028);
+            detCrack[y * w + x] = Math.max(c1, c2);
+          }
+        }
+        for (let y = 0; y < h; y++) {
+          const ym = (y - 1 + h) % h, yp = (y + 1) % h;
+          for (let x = 0; x < w; x++) {
+            const xm = (x - 1 + w) % w, xp = (x + 1) % w;
+            const idx = y * w + x;
+            const hL = hMap[y * w + xm] - detCrack[y * w + xm] * 0.28;
+            const hR = hMap[y * w + xp] - detCrack[y * w + xp] * 0.28;
+            const hD = hMap[ym * w + x] - detCrack[ym * w + x] * 0.28;
+            const hU = hMap[yp * w + x] - detCrack[yp * w + x] * 0.28;
+            const dx = (hR - hL) * 1.85;
+            const dy = (hU - hD) * 1.85;
+            d[idx * 4] = Math.max(0, Math.min(255, Math.round(128 - dx * 60)));
+            d[idx * 4 + 1] = Math.max(0, Math.min(255, Math.round(128 - dy * 60)));
+            const gritVal = 150 + (hMap[idx] - 0.45) * 165 - detCrack[idx] * 95;
+            d[idx * 4 + 2] = Math.max(24, Math.min(255, Math.round(gritVal)));
+            d[idx * 4 + 3] = 255;
+          }
+        }
+        g.putImageData(im, 0, 0);
+      }, 1);
+      extraTextures.push(gtex, gNormTex, gRoughTex, asphaltDetailNormal);
+      await yieldToUI();
 
-  const groundMat = new THREE.MeshStandardMaterial({
-    map: gtex,
-    normalMap: gNormTex,
-    normalScale: new THREE.Vector2(0.65, 0.65),
-    roughnessMap: gRoughTex,
-    roughness: 1,
-    metalness: 0.04,
-    envMapIntensity: 0.88,
-  });
-  // Inject multi-octave crisp stone-chip aggregate & hairline cracks into albedo, normal, and roughness on Three.js r128
-  groundMat.onBeforeCompile = (shader) => {
-    shader.uniforms.detailNormalMap = { value: asphaltDetailNormal };
-    shader.fragmentShader = shader.fragmentShader
-      .replace(
-        "#include <normalmap_pars_fragment>",
-        "#include <normalmap_pars_fragment>\nuniform sampler2D detailNormalMap;"
-      )
-      .replace(
-        "#include <map_fragment>",
-        "#include <map_fragment>\n\tfloat gritA = texture2D( detailNormalMap, vUv * 22.0 ).z;\n\tfloat gritB = texture2D( detailNormalMap, vUv * 57.0 ).z;\n\tfloat gritMix = mix(gritA, gritB, 0.48);\n\tdiffuseColor.rgb *= (0.62 + 0.68 * gritMix);"
-      )
-      .replace(
-        "vec3 mapN = texture2D( normalMap, vUv ).xyz * 2.0 - 1.0;\n\tmapN.xy *= normalScale;",
-        "vec3 mapN = texture2D( normalMap, vUv ).xyz * 2.0 - 1.0;\n\tmapN.xy *= normalScale;\n\tvec3 detN1 = texture2D( detailNormalMap, vUv * 22.0 ).xyz * 2.0 - 1.0;\n\tvec3 detN2 = texture2D( detailNormalMap, vUv * 57.0 ).xyz * 2.0 - 1.0;\n\tfloat puddleCalm = clamp((0.32 - roughnessFactor) * 4.5, 0.0, 1.0);\n\tmapN.xy += (detN1.xy * 1.75 + detN2.xy * 1.35) * (1.0 - puddleCalm);\n\tmapN = normalize(mapN);"
-      )
-      .replace(
-        "#include <roughnessmap_fragment>",
-        "#include <roughnessmap_fragment>\n\tvec3 detR = texture2D( detailNormalMap, vUv * 22.0 ).xyz * 2.0 - 1.0;\n\tfloat rCalm = clamp((0.32 - roughnessFactor) * 4.5, 0.0, 1.0);\n\troughnessFactor = clamp(roughnessFactor - abs(detR.x + detR.y) * 0.24 * (1.0 - rCalm), 0.035, 0.94);"
-      );
-  };
-
-  const ground = new THREE.Mesh(
-    new THREE.PlaneGeometry(130, 130),
-    groundMat,
-  );
-  ground.rotation.x = -Math.PI / 2;
-  ground.receiveShadow = true;
-  harborGroup.add(ground);
-
-  const solid = [];
-  const cols = [];
-
-  function cTex(col, k) {
-    return tex(k ? 256 : 1024, 512, (g, w, h) => {
-      g.fillStyle = col;
-      g.fillRect(0, 0, w, h);
-      const rb = [44, 12, 10, 30][k];
-      for (let x = 0; x < w; x++) {
-        const a = Math.cos((x / w) * 6.2832 * rb);
-        g.fillStyle = a > 0 ? `rgba(255,255,255,${a * 0.12})` : `rgba(0,0,0,${-a * 0.3})`;
-        g.fillRect(x, 0, 1, h);
-      }
-      g.fillStyle = col;
-      g.fillRect(0, 0, w, h * 0.045);
-      g.fillRect(0, h * 0.955, w, h * 0.045);
-      for (let i = 0; i < 65; i++) {
-        const x = sr() * w, y = sr() * h * 0.6, l = h * (0.1 + sr() * 0.5);
-        const q = g.createLinearGradient(0, y, 0, y + l);
-        q.addColorStop(0, "rgba(120,52,18,.45)");
-        q.addColorStop(1, "rgba(120,52,18,0)");
-        g.fillStyle = q;
-        g.fillRect(x, y, 1 + sr() * 3, l);
-      }
-      if (k === 0) {
-        g.fillStyle = "rgba(240,240,235,.88)";
-        g.textBaseline = "top";
-        g.font = "bold 56px Arial,sans-serif";
-        g.fillText("MSKU " + ((100000 + sr() * 899999) | 0) + " " + ((sr() * 9) | 0), 30, h * 0.1);
-        g.font = "bold 120px Arial,sans-serif";
-        g.fillText("HALDEN", w * 0.42, h * 0.3);
-        g.font = "bold 30px Arial,sans-serif";
-        g.fillText("MAX GROSS 30480 KG   TARE 2220 KG", w * 0.42, h * 0.62);
-      }
-      if (k === 1) {
-        g.fillStyle = "rgba(0,0,0,.45)";
-        g.fillRect(w / 2 - 2, h * 0.05, 4, h * 0.9);
-      }
-      // R3: strong grime/occlusion at the container foot so it is not lit evenly top-to-bottom
-      const gr = g.createLinearGradient(0, h, 0, h * 0.46);
-      gr.addColorStop(0, "rgba(1,2,3,.99)");
-      gr.addColorStop(0.32, "rgba(4,5,7,.90)");
-      gr.addColorStop(0.65, "rgba(14,12,10,.45)");
-      gr.addColorStop(1, "rgba(35,25,15,0)");
-      g.fillStyle = gr;
-      g.fillRect(0, 0, w, h);
-    });
-  }
-
-  const cPalette = [0x8c3a2b, 0x2c5878, 0x3b6a4a, 0xb08428, 0x6a7077, 0x6e3f55];
-  const cMats = cPalette.map((c) => {
-    const col = "#" + c.toString(16).padStart(6, "0");
-    const mk = (k) => {
-      const t = cTex(col, k);
-      return new THREE.MeshStandardMaterial({
-        map: t,
-        bumpMap: t,
-        bumpScale: 1.4,
-        roughness: 0.74,
-        metalness: 0.20,
+      const groundMat = new THREE.MeshStandardMaterial({
+        map: gtex,
+        normalMap: gNormTex,
+        normalScale: new THREE.Vector2(0.65, 0.65),
+        roughnessMap: gRoughTex,
+        roughness: 1,
+        metalness: 0.04,
+        envMapIntensity: 0.88,
       });
-    };
-    const side = mk(0);
-    return [mk(1), mk(2), mk(3), new THREE.MeshStandardMaterial({ color: 0x1b1d1f, roughness: 0.9 }), side, side];
-  });
+      groundMat.userData.extraTextures = [asphaltDetailNormal];
+      groundMat.onBeforeCompile = (shader) => {
+        shader.uniforms.detailNormalMap = { value: asphaltDetailNormal };
+        shader.fragmentShader = shader.fragmentShader
+          .replace(
+            "#include <normalmap_pars_fragment>",
+            "#include <normalmap_pars_fragment>\nuniform sampler2D detailNormalMap;",
+          )
+          .replace(
+            "#include <map_fragment>",
+            "#include <map_fragment>\n\tfloat gritA = texture2D( detailNormalMap, vUv * 22.0 ).z;\n\tfloat gritB = texture2D( detailNormalMap, vUv * 57.0 ).z;\n\tfloat gritMix = mix(gritA, gritB, 0.48);\n\tdiffuseColor.rgb *= (0.62 + 0.68 * gritMix);",
+          )
+          .replace(
+            "vec3 mapN = texture2D( normalMap, vUv ).xyz * 2.0 - 1.0;\n\tmapN.xy *= normalScale;",
+            "vec3 mapN = texture2D( normalMap, vUv ).xyz * 2.0 - 1.0;\n\tmapN.xy *= normalScale;\n\tvec3 detN1 = texture2D( detailNormalMap, vUv * 22.0 ).xyz * 2.0 - 1.0;\n\tvec3 detN2 = texture2D( detailNormalMap, vUv * 57.0 ).xyz * 2.0 - 1.0;\n\tfloat puddleCalm = clamp((0.32 - roughnessFactor) * 4.5, 0.0, 1.0);\n\tmapN.xy += (detN1.xy * 1.75 + detN2.xy * 1.35) * (1.0 - puddleCalm);\n\tmapN = normalize(mapN);",
+          )
+          .replace(
+            "#include <roughnessmap_fragment>",
+            "#include <roughnessmap_fragment>\n\tvec3 detR = texture2D( detailNormalMap, vUv * 22.0 ).xyz * 2.0 - 1.0;\n\tfloat rCalm = clamp((0.32 - roughnessFactor) * 4.5, 0.0, 1.0);\n\troughnessFactor = clamp(roughnessFactor - abs(detR.x + detR.y) * 0.24 * (1.0 - rCalm), 0.035, 0.94);",
+          );
+      };
 
-  // R3: soft contact-shadow decal + blurred wet-asphalt reflection under each container foot
-  const contactShadowTex = (() => {
-    const c = document.createElement("canvas");
-    c.width = 256;
-    c.height = 128;
-    const g = c.getContext("2d");
-    g.filter = "blur(9px)";
-    g.fillStyle = "rgba(0,0,0,0.92)";
-    g.fillRect(14, 12, 228, 104);
-    g.filter = "blur(2px)";
-    g.fillStyle = "rgba(0,0,0,1.0)";
-    g.fillRect(26, 22, 204, 84);
-    return new THREE.CanvasTexture(c);
-  })();
-  const contactShadowGeo = new THREE.PlaneGeometry(8.8, 5.0);
-  const contactShadowMat = new THREE.MeshBasicMaterial({
-    map: contactShadowTex,
-    color: 0x000000,
-    transparent: true,
-    depthWrite: false,
-    polygonOffset: true,
-    polygonOffsetFactor: -2,
-    polygonOffsetUnits: -2,
-  });
+      ground = new THREE.Mesh(new THREE.PlaneGeometry(130, 130), groundMat);
+      ground.rotation.x = -Math.PI / 2;
+      ground.receiveShadow = true;
+      harborGroup.add(ground);
 
-  // Soft wet-asphalt reflection streak under containers (single InstancedMesh draw call)
-  const containerReflTex = (() => {
-    const c = document.createElement("canvas");
-    c.width = 128;
-    c.height = 128;
-    const g = c.getContext("2d");
-    const gr = g.createRadialGradient(64, 64, 12, 64, 64, 62);
-    gr.addColorStop(0.0, "rgba(255,255,255,0.0)");
-    gr.addColorStop(0.42, "rgba(255,255,255,0.34)");
-    gr.addColorStop(0.75, "rgba(255,255,255,0.16)");
-    gr.addColorStop(1.0, "rgba(255,255,255,0.0)");
-    g.fillStyle = gr;
-    g.fillRect(0, 0, 128, 128);
-    return new THREE.CanvasTexture(c);
-  })();
-  const containerReflGeo = new THREE.PlaneGeometry(8.2, 5.2);
-  containerReflGeo.rotateX(-Math.PI / 2);
-  const containerReflMat = new THREE.MeshBasicMaterial({
-    map: containerReflTex,
-    transparent: true,
-    opacity: 0.44,
-    depthWrite: false,
-  });
-  const containerReflItems = [];
-
-  const cGeo = new THREE.BoxGeometry(6.1, 2.6, 2.44);
-  let mapSeed = 11042026;
-  const msr = () => (mapSeed = (mapSeed * 16807) % 2147483647) / 2147483647;
-  for (let gx = -3; gx <= 3; gx++) {
-    for (let gz = -3; gz <= 3; gz++) {
-      if ((gx === 0 && gz === 0) || msr() < 0.42) continue;
-      const x = gx * 13 + (msr() - 0.5) * 3;
-      const z = gz * 13 + (msr() - 0.5) * 3;
-      const rot = msr() < 0.5;
-      const cIdx = (msr() * cMats.length) | 0;
-      const mat = cMats[cIdx];
-      const stacked = msr() < 0.3;
-      const m = new THREE.Mesh(cGeo, mat);
-      m.position.set(x, 1.285, z);
-      m.rotation.y = rot ? Math.PI / 2 : 0;
-      m.castShadow = m.receiveShadow = true;
-      harborGroup.add(m);
-      solid.push(m);
-      if (stacked) {
-        const t = m.clone();
-        t.position.y = 3.885;
-        harborGroup.add(t);
-        solid.push(t);
+      function cTex(col, k) {
+        const t = tex(k ? 256 : 1024, 512, (g, w, h) => {
+          g.fillStyle = col;
+          g.fillRect(0, 0, w, h);
+          const rb = [44, 12, 10, 30][k];
+          for (let x = 0; x < w; x++) {
+            const a = Math.cos((x / w) * 6.2832 * rb);
+            g.fillStyle = a > 0 ? `rgba(255,255,255,${a * 0.12})` : `rgba(0,0,0,${-a * 0.3})`;
+            g.fillRect(x, 0, 1, h);
+          }
+          g.fillStyle = col;
+          g.fillRect(0, 0, w, h * 0.045);
+          g.fillRect(0, h * 0.955, w, h * 0.045);
+          for (let i = 0; i < 65; i++) {
+            const x = sr() * w, y = sr() * h * 0.6, l = h * (0.1 + sr() * 0.5);
+            const q = g.createLinearGradient(0, y, 0, y + l);
+            q.addColorStop(0, "rgba(120,52,18,.45)");
+            q.addColorStop(1, "rgba(120,52,18,0)");
+            g.fillStyle = q;
+            g.fillRect(x, y, 1 + sr() * 3, l);
+          }
+          if (k === 0) {
+            g.fillStyle = "rgba(240,240,235,.88)";
+            g.textBaseline = "top";
+            g.font = "bold 56px Arial,sans-serif";
+            g.fillText("MSKU " + ((100000 + sr() * 899999) | 0) + " " + ((sr() * 9) | 0), 30, h * 0.1);
+            g.font = "bold 120px Arial,sans-serif";
+            g.fillText("HALDEN", w * 0.42, h * 0.3);
+            g.font = "bold 30px Arial,sans-serif";
+            g.fillText("MAX GROSS 30480 KG   TARE 2220 KG", w * 0.42, h * 0.62);
+          }
+          if (k === 1) {
+            g.fillStyle = "rgba(0,0,0,.45)";
+            g.fillRect(w / 2 - 2, h * 0.05, 4, h * 0.9);
+          }
+          const gr = g.createLinearGradient(0, h, 0, h * 0.46);
+          gr.addColorStop(0, "rgba(1,2,3,.99)");
+          gr.addColorStop(0.32, "rgba(4,5,7,.90)");
+          gr.addColorStop(0.65, "rgba(14,12,10,.45)");
+          gr.addColorStop(1, "rgba(35,25,15,0)");
+          g.fillStyle = gr;
+          g.fillRect(0, 0, w, h);
+        });
+        extraTextures.push(t);
+        return t;
       }
-      const hx = rot ? 1.22 : 3.05, hz = rot ? 3.05 : 1.22;
-      cols.push({ x0: x - hx, x1: x + hx, z0: z - hz, z1: z + hz, y1: stacked ? 5.2 : 2.6 });
-      const contactShadow = new THREE.Mesh(contactShadowGeo, contactShadowMat);
-      contactShadow.rotation.x = -Math.PI / 2;
-      contactShadow.rotation.z = rot ? Math.PI / 2 : 0;
-      contactShadow.position.set(x, 0.007, z);
-      contactShadow.renderOrder = 1;
-      harborGroup.add(contactShadow);
-      containerReflItems.push({ x, z, rot, hex: cPalette[cIdx] });
-    }
-  }
-  if (containerReflItems.length > 0) {
-    const reflInst = new THREE.InstancedMesh(containerReflGeo, containerReflMat, containerReflItems.length);
-    reflInst.position.set(0, 0.005, 0);
-    const dummy = new THREE.Object3D();
-    const colTmp = new THREE.Color();
-    containerReflItems.forEach((it, idx) => {
-      dummy.position.set(it.x, 0, it.z);
-      dummy.rotation.set(0, it.rot ? Math.PI / 2 : 0, 0);
-      dummy.scale.set(1, 1, 1);
-      dummy.updateMatrix();
-      reflInst.setMatrixAt(idx, dummy.matrix);
-      colTmp.setHex(it.hex).multiplyScalar(0.55);
-      reflInst.setColorAt(idx, colTmp);
+
+      const cPalette = [0x8c3a2b, 0x2c5878, 0x3b6a4a, 0xb08428, 0x6a7077, 0x6e3f55];
+      const cMats = [];
+      for (let ci = 0; ci < cPalette.length; ci++) {
+        emit(0.46 + (ci / cPalette.length) * 0.30, `Sinh kết cấu container cảng (${ci + 1}/${cPalette.length})...`);
+        const col = "#" + cPalette[ci].toString(16).padStart(6, "0");
+        const mk = (k) => {
+          const t = cTex(col, k);
+          return new THREE.MeshStandardMaterial({
+            map: t,
+            bumpMap: t,
+            bumpScale: 1.4,
+            roughness: 0.74,
+            metalness: 0.20,
+          });
+        };
+        const side = mk(0);
+        cMats.push([mk(1), mk(2), mk(3), new THREE.MeshStandardMaterial({ color: 0x1b1d1f, roughness: 0.9 }), side, side]);
+        await yieldToUI();
+      }
+
+      emit(0.78, "Xếp container, tường bao & bóng chân container...");
+      const contactShadowTex = (() => {
+        const c = document.createElement("canvas");
+        c.width = 256;
+        c.height = 128;
+        const g = c.getContext("2d");
+        g.filter = "blur(9px)";
+        g.fillStyle = "rgba(0,0,0,0.92)";
+        g.fillRect(14, 12, 228, 104);
+        g.filter = "blur(2px)";
+        g.fillStyle = "rgba(0,0,0,1.0)";
+        g.fillRect(26, 22, 204, 84);
+        return new THREE.CanvasTexture(c);
+      })();
+      const contactShadowGeo = new THREE.PlaneGeometry(8.8, 5.0);
+      const contactShadowMat = new THREE.MeshBasicMaterial({
+        map: contactShadowTex,
+        color: 0x000000,
+        transparent: true,
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -2,
+        polygonOffsetUnits: -2,
+      });
+
+      const containerReflTex = (() => {
+        const c = document.createElement("canvas");
+        c.width = 128;
+        c.height = 128;
+        const g = c.getContext("2d");
+        const gr = g.createRadialGradient(64, 64, 12, 64, 64, 62);
+        gr.addColorStop(0.0, "rgba(255,255,255,0.0)");
+        gr.addColorStop(0.42, "rgba(255,255,255,0.34)");
+        gr.addColorStop(0.75, "rgba(255,255,255,0.16)");
+        gr.addColorStop(1.0, "rgba(255,255,255,0.0)");
+        g.fillStyle = gr;
+        g.fillRect(0, 0, 128, 128);
+        return new THREE.CanvasTexture(c);
+      })();
+      extraTextures.push(contactShadowTex, containerReflTex);
+
+      const containerReflGeo = new THREE.PlaneGeometry(8.2, 5.2);
+      containerReflGeo.rotateX(-Math.PI / 2);
+      const containerReflMat = new THREE.MeshBasicMaterial({
+        map: containerReflTex,
+        transparent: true,
+        opacity: 0.44,
+        depthWrite: false,
+      });
+      const containerReflItems = [];
+
+      const cGeo = new THREE.BoxGeometry(6.1, 2.6, 2.44);
+      let mapSeed = 11042026;
+      const msr = () => (mapSeed = (mapSeed * 16807) % 2147483647) / 2147483647;
+      for (let gx = -3; gx <= 3; gx++) {
+        for (let gz = -3; gz <= 3; gz++) {
+          if ((gx === 0 && gz === 0) || msr() < 0.42) continue;
+          const x = gx * 13 + (msr() - 0.5) * 3;
+          const z = gz * 13 + (msr() - 0.5) * 3;
+          const rot = msr() < 0.5;
+          const cIdx = (msr() * cMats.length) | 0;
+          const mat = cMats[cIdx];
+          const stacked = msr() < 0.3;
+          const m = new THREE.Mesh(cGeo, mat);
+          m.position.set(x, 1.285, z);
+          m.rotation.y = rot ? Math.PI / 2 : 0;
+          m.castShadow = m.receiveShadow = true;
+          harborGroup.add(m);
+          solid.push(m);
+          if (stacked) {
+            const t = m.clone();
+            t.position.y = 3.885;
+            harborGroup.add(t);
+            solid.push(t);
+          }
+          const hx = rot ? 1.22 : 3.05, hz = rot ? 3.05 : 1.22;
+          cols.push({ x0: x - hx, x1: x + hx, z0: z - hz, z1: z + hz, y1: stacked ? 5.2 : 2.6 });
+          const contactShadow = new THREE.Mesh(contactShadowGeo, contactShadowMat);
+          contactShadow.rotation.x = -Math.PI / 2;
+          contactShadow.rotation.z = rot ? Math.PI / 2 : 0;
+          contactShadow.position.set(x, 0.007, z);
+          contactShadow.renderOrder = 1;
+          harborGroup.add(contactShadow);
+          containerReflItems.push({ x, z, rot, hex: cPalette[cIdx] });
+        }
+      }
+      if (containerReflItems.length > 0) {
+        const reflInst = new THREE.InstancedMesh(containerReflGeo, containerReflMat, containerReflItems.length);
+        reflInst.position.set(0, 0.005, 0);
+        const dummy = new THREE.Object3D();
+        const colTmp = new THREE.Color();
+        containerReflItems.forEach((it, idx) => {
+          dummy.position.set(it.x, 0, it.z);
+          dummy.rotation.set(0, it.rot ? Math.PI / 2 : 0, 0);
+          dummy.scale.set(1, 1, 1);
+          dummy.updateMatrix();
+          reflInst.setMatrixAt(idx, dummy.matrix);
+          colTmp.setHex(it.hex).multiplyScalar(0.55);
+          reflInst.setColorAt(idx, colTmp);
+        });
+        reflInst.instanceMatrix.needsUpdate = true;
+        if (reflInst.instanceColor) reflInst.instanceColor.needsUpdate = true;
+        harborGroup.add(reflInst);
+      }
+
+      const wallMat = new THREE.MeshStandardMaterial({ color: 0x1a2128, roughness: 0.9 });
+      for (const [x, z, w, d] of [[0, -52, 100, 1], [0, 52, 100, 1], [-52, 0, 1, 100], [52, 0, 1, 100]]) {
+        const m = new THREE.Mesh(new THREE.BoxGeometry(w, 10, d), wallMat);
+        m.position.set(x, 5, z);
+        harborGroup.add(m);
+        solid.push(m);
+      }
+      await yieldToUI();
+
+      emit(0.88, "Dựng PMREM đêm mưa & lớp sương cảng...");
+      harborEnvMap = (() => {
+        const es = new THREE.Scene(), geo = new THREE.SphereGeometry(20, 32, 16), p = geo.attributes.position, col = [];
+        for (let i = 0; i < p.count; i++) {
+          const y = p.getY(i) / 20, t = Math.max(0, y);
+          col.push(...(y > 0 ? [0.08 + 0.22 * t, 0.11 + 0.28 * t, 0.16 + 0.36 * t] : [0.02, 0.025, 0.03]));
+        }
+        geo.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
+        es.add(new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, toneMapped: false })));
+        const panel = (r, g, b, w, h, x, y, z) => {
+          const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ color: new THREE.Color(r, g, b), side: THREE.DoubleSide, toneMapped: false }));
+          m.position.set(x, y, z);
+          m.lookAt(0, 0, 0);
+          es.add(m);
+        };
+        panel(0.9, 1.35, 2.0, 14, 5, 0, 15, -4);
+        for (const [x, y, z] of [[-9, 6.2, -9], [9, 6.2, -9], [-9, 6.2, 9], [9, 6.2, 9]]) {
+          panel(8.8, 4.9, 1.7, 2.0, 2.0, x, y, z);
+        }
+        panel(1.9, 2.5, 3.6, 2.2, 2.2, 0, 14, -11);
+        const pm = new THREE.PMREMGenerator(R), rt = pm.fromScene(es, 0.025);
+        pm.dispose();
+        geo.dispose();
+        return rt.texture;
+      })();
+      extraTextures.push(harborEnvMap);
+      ground.material.envMap = harborEnvMap;
+      ground.material.needsUpdate = true;
+
+      const mistTex = tex(128, 128, (g, w, h) => {
+        const gr = g.createRadialGradient(64, 64, 4, 64, 64, 64);
+        gr.addColorStop(0, "rgba(105,138,172,.22)");
+        gr.addColorStop(0.5, "rgba(65,92,124,.08)");
+        gr.addColorStop(1, "rgba(0,0,0,0)");
+        g.fillStyle = gr;
+        g.fillRect(0, 0, w, h);
+      });
+      extraTextures.push(mistTex);
+      for (const [x, y, z] of [[-7, 1.8, -14], [8, 1.9, -18], [0, 2.1, -24], [-15, 2.0, -22], [14, 1.8, -12]]) {
+        const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: mistTex, transparent: true, opacity: 0.16, depthWrite: false }));
+        sp.position.set(x, y, z);
+        sp.scale.set(16, 6, 1);
+        harborGroup.add(sp);
+      }
+      await yieldToUI();
+
+      emit(0.95, "Khởi tạo hệ thống mưa & gợn sóng...");
+      const rainRipples = (() => {
+        const geo = new THREE.RingGeometry(0.86, 1.0, 24);
+        geo.rotateX(-Math.PI / 2);
+        const POOL = 112;
+        const mat = new THREE.MeshBasicMaterial({
+          color: 0xffffff,
+          transparent: true,
+          opacity: 1.0,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+        });
+        const inst = new THREE.InstancedMesh(geo, mat, POOL);
+        inst.position.set(0, 0.014, 0);
+        inst.frustumCulled = false;
+        harborGroup.add(inst);
+
+        const dummy = new THREE.Object3D();
+        const fadeColor = new THREE.Color();
+        const state = [];
+        for (let i = 0; i < POOL; i++) {
+          const active = i < 76;
+          const inArenaCenter = i < 48;
+          const rx = inArenaCenter ? (-8 + sr() * 14) : (sr() - 0.5) * 24;
+          const rz = inArenaCenter ? (-6 + sr() * 12) : (sr() - 0.5) * 24;
+          const maxRadius = 0.24 + sr() * 0.11;
+          const life = active ? sr() * 0.34 : 0;
+          const maxLife = 0.46 + sr() * 0.12;
+          const t0 = life / maxLife;
+          const sc0 = active ? (0.11 + (maxRadius - 0.11) * t0) : 0.001;
+          state.push({ active, x: rx, z: rz, life, maxLife, size: maxRadius });
+          dummy.position.set(rx, active ? 0 : -50, rz);
+          dummy.scale.set(sc0, 1, sc0);
+          dummy.updateMatrix();
+          inst.setMatrixAt(i, dummy.matrix);
+          const f0 = active ? Math.min(1, t0 / 0.14) * Math.pow(1 - t0, 1.45) * 0.29 : 0;
+          inst.setColorAt(i, fadeColor.setRGB(0.70 * f0, 0.84 * f0, 0.98 * f0));
+        }
+        inst.instanceMatrix.needsUpdate = true;
+        if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
+
+        let next = 0;
+        return {
+          emit(x, z) {
+            const s = state[next++ % POOL];
+            s.active = true;
+            s.x = x;
+            s.z = z;
+            s.life = 0;
+            s.maxLife = rnd(0.46, 0.58);
+            s.size = rnd(0.24, 0.35);
+          },
+          upd(dt) {
+            for (let i = 0; i < POOL; i++) {
+              const s = state[i];
+              if (!s.active) continue;
+              s.life += dt;
+              const t = s.life / s.maxLife;
+              if (t >= 1) {
+                s.active = false;
+                dummy.position.set(0, -50, 0);
+                dummy.scale.setScalar(0.001);
+                dummy.updateMatrix();
+                inst.setMatrixAt(i, dummy.matrix);
+                continue;
+              }
+              const sc = 0.11 + (s.size - 0.11) * t;
+              dummy.position.set(s.x, 0, s.z);
+              dummy.scale.set(sc, 1, sc);
+              dummy.updateMatrix();
+              inst.setMatrixAt(i, dummy.matrix);
+              const fade = Math.min(1, t / 0.14) * Math.pow(1 - t, 1.45) * 0.29;
+              inst.setColorAt(i, fadeColor.setRGB(0.70 * fade, 0.84 * fade, 0.98 * fade));
+            }
+            inst.instanceMatrix.needsUpdate = true;
+            if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
+          },
+        };
+      })();
+
+      const ND2 = 3000, rd = new Float32Array(ND2 * 4), rp2 = new Float32Array(ND2 * 6), rc2 = new Float32Array(ND2 * 6);
+      for (let i = 0; i < ND2; i++) {
+        rd.set([rnd(-24, 24), rnd(0, 26), rnd(-24, 24), rnd(0.6, 1.4)], i * 4);
+        const b = rd[i * 4 + 3] * 0.27;
+        rc2.set([0, 0, 0, b * 0.55, b * 0.68, b * 0.82], i * 6);
+      }
+      const rg2 = new THREE.BufferGeometry();
+      rg2.setAttribute("position", new THREE.BufferAttribute(rp2, 3));
+      rg2.setAttribute("color", new THREE.BufferAttribute(rc2, 3));
+      const rain2 = new THREE.LineSegments(rg2, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+      rain2.frustumCulled = false;
+      harborGroup.add(rain2);
+
+      harborData = {
+        mapId: "harbor",
+        group: harborGroup,
+        envMap: harborEnvMap,
+        extraTextures,
+        updateRain(dt, tSec, px, pz) {
+          const wind = Math.sin(tSec * 0.23) * 0.6 + Math.sin(tSec * 0.71) * 0.25;
+          for (let i = 0; i < ND2; i++) {
+            const k = i * 4, v = rd[k + 3], sp = 24 + 16 * v;
+            let x = rd[k] + wind * 3 * dt, y = rd[k + 1] - sp * dt, z = rd[k + 2];
+            if (x - px > 24) x -= 48; else if (x - px < -24) x += 48;
+            if (z - pz > 24) z -= 48; else if (z - pz < -24) z += 48;
+            if (y < 0) { y += 26; if (i % 3 !== 0 && Math.abs(x - px) < 11 && Math.abs(z - pz) < 11) rainRipples.emit(x, z); }
+            rd[k] = x; rd[k + 1] = y; rd[k + 2] = z;
+            rp2.set([x - wind * 0.07, y + sp * 0.022, z, x, y, z], i * 6);
+          }
+          rg2.attributes.position.needsUpdate = true;
+          rainRipples.upd(dt);
+        },
+      };
+      window.__harborMapLoaded = true;
+      emit(1.0, "Hoàn tất dựng bản đồ Bến Cảng Mưa");
+      return harborData;
+    })().catch((err) => {
+      harborBuildPromise = null;
+      throw err;
     });
-    reflInst.instanceMatrix.needsUpdate = true;
-    if (reflInst.instanceColor) reflInst.instanceColor.needsUpdate = true;
-    harborGroup.add(reflInst);
+
+    return harborBuildPromise;
   }
 
-  const wallMat = new THREE.MeshStandardMaterial({ color: 0x1a2128, roughness: 0.9 });
-  for (const [x, z, w, d] of [[0, -52, 100, 1], [0, 52, 100, 1], [-52, 0, 1, 100], [52, 0, 1, 100]]) {
-    const m = new THREE.Mesh(new THREE.BoxGeometry(w, 10, d), wallMat);
-    m.position.set(x, 5, z);
-    harborGroup.add(m);
-    solid.push(m);
-  }
-
-  // ---------- Environment Map & Low Mist ----------
-  const envMap = (() => {
-    const es = new THREE.Scene(), geo = new THREE.SphereGeometry(20, 32, 16), p = geo.attributes.position, col = [];
-    for (let i = 0; i < p.count; i++) {
-      const y = p.getY(i) / 20, t = Math.max(0, y);
-      col.push(...(y > 0 ? [0.08 + 0.22 * t, 0.11 + 0.28 * t, 0.16 + 0.36 * t] : [0.02, 0.025, 0.03]));
-    }
-    geo.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
-    es.add(new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, toneMapped: false })));
-    const panel = (r, g, b, w, h, x, y, z) => {
-      const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ color: new THREE.Color(r, g, b), side: THREE.DoubleSide, toneMapped: false }));
-      m.position.set(x, y, z);
-      m.lookAt(0, 0, 0);
-      es.add(m);
-    };
-    // Cool night overcast sky + warm amber harbor streetlamp reflections
-    panel(0.9, 1.35, 2.0, 14, 5, 0, 15, -4);
-    for (const [x, y, z] of [[-9, 6.2, -9], [9, 6.2, -9], [-9, 6.2, 9], [9, 6.2, 9]]) {
-      panel(8.8, 4.9, 1.7, 2.0, 2.0, x, y, z);
-    }
-    panel(1.9, 2.5, 3.6, 2.2, 2.2, 0, 14, -11);
-    const pm = new THREE.PMREMGenerator(R), rt = pm.fromScene(es, 0.025);
-    pm.dispose();
-    return rt.texture;
-  })();
-  ground.material.envMap = envMap;
-  ground.material.needsUpdate = true;
-
-  const mistTex = tex(128, 128, (g, w, h) => {
-    const gr = g.createRadialGradient(64, 64, 4, 64, 64, 64);
-    gr.addColorStop(0, "rgba(105,138,172,.22)");
-    gr.addColorStop(0.5, "rgba(65,92,124,.08)");
-    gr.addColorStop(1, "rgba(0,0,0,0)");
-    g.fillStyle = gr;
-    g.fillRect(0, 0, w, h);
-  });
-  for (const [x, y, z] of [[-7, 1.8, -14], [8, 1.9, -18], [0, 2.1, -24], [-15, 2.0, -22], [14, 1.8, -12]]) {
-    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: mistTex, transparent: true, opacity: 0.16, depthWrite: false }));
-    sp.position.set(x, y, z);
-    sp.scale.set(16, 6, 1);
-    harborGroup.add(sp);
-  }
-
-  // ---------- Particles, Rain, Tracers, Audio ----------
+  // ---------- Particles, Tracers, Audio ----------
   function mkPS(N, col, size) {
     const p = new Float32Array(N * 3).fill(-999), v = new Float32Array(N * 3), l = new Float32Array(N);
     let n = 0;
@@ -666,86 +839,6 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     };
   }
   const sparks = mkPS(320, 0xffb060, 0.11);
-  // R3: InstancedMesh thin 22-34cm rain ripple rings (zero alpha texture overdraw, single draw call)
-  const rainRipples = (() => {
-    const geo = new THREE.RingGeometry(0.86, 1.0, 24);
-    geo.rotateX(-Math.PI / 2);
-    const POOL = 112;
-    const mat = new THREE.MeshBasicMaterial({
-      color: 0xffffff,
-      transparent: true,
-      opacity: 1.0,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-    });
-    const inst = new THREE.InstancedMesh(geo, mat, POOL);
-    inst.position.set(0, 0.014, 0);
-    inst.frustumCulled = false;
-    harborGroup.add(inst);
-
-    const dummy = new THREE.Object3D();
-    const fadeColor = new THREE.Color();
-    const state = [];
-    for (let i = 0; i < POOL; i++) {
-      const active = i < 76;
-      const inArenaCenter = i < 48;
-      const rx = inArenaCenter ? (-8 + sr() * 14) : (sr() - 0.5) * 24;
-      const rz = inArenaCenter ? (-6 + sr() * 12) : (sr() - 0.5) * 24;
-      const maxRadius = 0.24 + sr() * 0.11;
-      const life = active ? sr() * 0.34 : 0;
-      const maxLife = 0.46 + sr() * 0.12;
-      const t0 = life / maxLife;
-      const sc0 = active ? (0.11 + (maxRadius - 0.11) * t0) : 0.001;
-      state.push({ active, x: rx, z: rz, life, maxLife, size: maxRadius });
-      dummy.position.set(rx, active ? 0 : -50, rz);
-      dummy.scale.set(sc0, 1, sc0);
-      dummy.updateMatrix();
-      inst.setMatrixAt(i, dummy.matrix);
-      const f0 = active ? Math.min(1, t0 / 0.14) * Math.pow(1 - t0, 1.45) * 0.29 : 0;
-      inst.setColorAt(i, fadeColor.setRGB(0.70 * f0, 0.84 * f0, 0.98 * f0));
-    }
-    inst.instanceMatrix.needsUpdate = true;
-    if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
-
-    let next = 0;
-    return {
-      emit(x, z) {
-        const s = state[next++ % POOL];
-        s.active = true;
-        s.x = x;
-        s.z = z;
-        s.life = 0;
-        s.maxLife = rnd(0.46, 0.58);
-        s.size = rnd(0.24, 0.35);
-      },
-      upd(dt) {
-        for (let i = 0; i < POOL; i++) {
-          const s = state[i];
-          if (!s.active) continue;
-          s.life += dt;
-          const t = s.life / s.maxLife;
-          if (t >= 1) {
-            s.active = false;
-            dummy.position.set(0, -50, 0);
-            dummy.scale.setScalar(0.001);
-            dummy.updateMatrix();
-            inst.setMatrixAt(i, dummy.matrix);
-            continue;
-          }
-          const sc = 0.11 + (s.size - 0.11) * t;
-          dummy.position.set(s.x, 0, s.z);
-          dummy.scale.set(sc, 1, sc);
-          dummy.updateMatrix();
-          inst.setMatrixAt(i, dummy.matrix);
-          const fade = Math.min(1, t / 0.14) * Math.pow(1 - t, 1.45) * 0.29;
-          inst.setColorAt(i, fadeColor.setRGB(0.70 * fade, 0.84 * fade, 0.98 * fade));
-        }
-        inst.instanceMatrix.needsUpdate = true;
-        if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
-      },
-    };
-  })();
 
   function burst(pt, n, spd, dir) {
     for (let k = 0; k < n; k++) {
@@ -759,19 +852,6 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       );
     }
   }
-
-  const ND2 = 3000, rd = new Float32Array(ND2 * 4), rp2 = new Float32Array(ND2 * 6), rc2 = new Float32Array(ND2 * 6);
-  for (let i = 0; i < ND2; i++) {
-    rd.set([rnd(-24, 24), rnd(0, 26), rnd(-24, 24), rnd(0.6, 1.4)], i * 4);
-    const b = rd[i * 4 + 3] * 0.27;
-    rc2.set([0, 0, 0, b * 0.55, b * 0.68, b * 0.82], i * 6);
-  }
-  const rg2 = new THREE.BufferGeometry();
-  rg2.setAttribute("position", new THREE.BufferAttribute(rp2, 3));
-  rg2.setAttribute("color", new THREE.BufferAttribute(rc2, 3));
-  const rain2 = new THREE.LineSegments(rg2, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
-  rain2.frustumCulled = false;
-  harborGroup.add(rain2);
 
   const tr = [];
   for (let i = 0; i < 14; i++) {
@@ -795,7 +875,93 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
   }
 
   let AC = null, NB = null, REV = null;
-  let ambFilter = null, ambGain = null;
+  let ambFilter = null, ambGain = null, ambStarted = false;
+  const PRECOMPUTED_AUDIO_SR = 48000;
+  let precomputedNoise = null;
+  let precomputedRevL = null;
+  let precomputedRevR = null;
+
+  async function precomputeAudioBuffersAsync() {
+    if (!precomputedNoise) {
+      const nLen = PRECOMPUTED_AUDIO_SR * 2;
+      const noise = new Float32Array(nLen);
+      for (let i = 0; i < nLen; i++) noise[i] = Math.random() * 2 - 1;
+      precomputedNoise = noise;
+      await yieldToUI();
+
+      const revLen = Math.floor(PRECOMPUTED_AUDIO_SR * 1.3);
+      const revL = new Float32Array(revLen);
+      const revR = new Float32Array(revLen);
+      for (let i = 0; i < revLen; i++) {
+        const env = Math.pow(1 - i / revLen, 3.2);
+        revL[i] = (Math.random() * 2 - 1) * env;
+        revR[i] = (Math.random() * 2 - 1) * env;
+      }
+      precomputedRevL = revL;
+      precomputedRevR = revR;
+      await yieldToUI();
+    }
+
+    // Pre-create suspended AudioContext + Convolver FFT during Loading Screen so first-click startSolo() avoids ~100ms WASAPI/FFT stall
+    if (!AC) {
+      try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (typeof AudioCtx === "function") {
+          AC = new AudioCtx();
+          await yieldToUI();
+          buildAudioGraph();
+          await yieldToUI();
+        }
+      } catch {
+        AC = null;
+      }
+    }
+  }
+
+  function buildAudioGraph() {
+    if (!AC || NB) return;
+    const n = AC.sampleRate * 2;
+    NB = AC.createBuffer(1, n, AC.sampleRate);
+    const d = NB.getChannelData(0);
+    if (precomputedNoise && precomputedNoise.length === n) {
+      d.set(precomputedNoise);
+    } else {
+      for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+    }
+    const revLen = Math.floor(AC.sampleRate * 1.3);
+    const rb = AC.createBuffer(2, revLen, AC.sampleRate);
+    if (precomputedRevL && precomputedRevR && precomputedRevL.length === revLen) {
+      rb.getChannelData(0).set(precomputedRevL);
+      rb.getChannelData(1).set(precomputedRevR);
+    } else {
+      for (let c = 0; c < 2; c++) {
+        const ch = rb.getChannelData(c);
+        for (let i = 0; i < revLen; i++) ch[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / revLen, 3.2);
+      }
+    }
+    REV = AC.createConvolver();
+    REV.buffer = rb;
+    const g = AC.createGain();
+    g.gain.value = 0.45;
+    REV.connect(g).connect(AC.destination);
+    ambFilter = AC.createBiquadFilter();
+    ambFilter.type = "lowpass";
+    ambFilter.frequency.value = 420;
+    ambGain = AC.createGain();
+    ambGain.gain.value = 0.09;
+    ambFilter.connect(ambGain).connect(AC.destination);
+  }
+
+  function startAmbientLoopOnce() {
+    if (!AC || !NB || !ambFilter || ambStarted) return;
+    ambStarted = true;
+    const r = AC.createBufferSource();
+    r.buffer = NB;
+    r.loop = true;
+    r.connect(ambFilter);
+    r.start();
+  }
+
   function syncAmbientAudio() {
     if (!AC || !ambFilter || !ambGain) return;
     const t = AC.currentTime;
@@ -812,34 +978,13 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     }
   }
   function initAudio() {
-    if (AC) { AC.resume().catch(() => {}); syncAmbientAudio(); return; }
     try {
-      AC = new (window.AudioContext || window.webkitAudioContext)();
-      const n = AC.sampleRate * 2;
-      NB = AC.createBuffer(1, n, AC.sampleRate);
-      const d = NB.getChannelData(0);
-      for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
-      const revLen = AC.sampleRate * 1.3;
-      const rb = AC.createBuffer(2, revLen, AC.sampleRate);
-      for (let c = 0; c < 2; c++) {
-        const ch = rb.getChannelData(c);
-        for (let i = 0; i < revLen; i++) ch[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / revLen, 3.2);
+      if (!AC) {
+        AC = new (window.AudioContext || window.webkitAudioContext)();
       }
-      REV = AC.createConvolver();
-      REV.buffer = rb;
-      const g = AC.createGain();
-      g.gain.value = 0.45;
-      REV.connect(g).connect(AC.destination);
-      const r = AC.createBufferSource();
-      r.buffer = NB;
-      r.loop = true;
-      ambFilter = AC.createBiquadFilter();
-      ambFilter.type = "lowpass";
-      ambFilter.frequency.value = 420;
-      ambGain = AC.createGain();
-      ambGain.gain.value = 0.09;
-      r.connect(ambFilter).connect(ambGain).connect(AC.destination);
-      r.start();
+      if (!NB) buildAudioGraph();
+      startAmbientLoopOnce();
+      AC.resume().catch(() => {});
       syncAmbientAudio();
     } catch {
       // Audio blocked until gesture
@@ -1171,22 +1316,32 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
   }
   initTeamMaterials(null);
 
-  function loadModelAsset(key, glbPath, onLoaded) {
-    if (typeof THREE.GLTFLoader !== "function") return;
-    const loader = new THREE.GLTFLoader();
-    const b64 = window.FPS_MODELS && window.FPS_MODELS[key];
-    if (b64) {
-      loader.parse(decodeBase64ToArrayBuffer(b64), "", onLoaded, (e) => console.error(key, e));
-      return;
-    }
-    loader.load(glbPath, onLoaded, undefined, (e) => console.error(key, e));
+  function loadModelAssetAsync(key, glbPath) {
+    return new Promise((resolve, reject) => {
+      if (typeof THREE.GLTFLoader !== "function") {
+        reject(new Error(`THREE.GLTFLoader unavailable for ${key}`));
+        return;
+      }
+      const loader = new THREE.GLTFLoader();
+      const b64 = window.FPS_MODELS && window.FPS_MODELS[key];
+      if (b64) {
+        try {
+          loader.parse(decodeBase64ToArrayBuffer(b64), "", resolve, reject);
+        } catch (err) {
+          reject(err);
+        }
+        return;
+      }
+      loader.load(glbPath, resolve, undefined, reject);
+    });
   }
 
   const CH_REST_Z = 0.118, MAG_REST = new Vec(0, -0.042, -0.064);
   let armsCtrl = null;
   let armsRoot = null;
+  let sharedModelsLoaded = false;
 
-  loadModelAsset("m416", "/model/dist/m416.glb", (gltf) => {
+  function mountM416Gltf(gltf) {
     const root = gltf.scene, matCache = new Map();
     root.traverse((obj) => {
       obj.layers.set(VIEW_LAYER);
@@ -1216,9 +1371,9 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     upgradeRemoteWeapons();
     gunAnim(0, 0);
     window.__m416Loaded = true;
-  });
+  }
 
-  loadModelAsset("pistol", "/model/dist/pistol.glb", (gltf) => {
+  function mountPistolGltf(gltf) {
     const root = gltf.scene, matCache = new Map();
     root.traverse((obj) => {
       obj.layers.set(VIEW_LAYER);
@@ -1246,9 +1401,9 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     upgradeRemoteWeapons();
     gunAnim(0, 0);
     window.__pistolLoaded = true;
-  });
+  }
 
-  loadModelAsset("awm", "/model/dist/awm.glb", (gltf) => {
+  function mountAwmGltf(gltf) {
     const root = gltf.scene, matCache = new Map();
     root.traverse((obj) => {
       obj.layers.set(VIEW_LAYER);
@@ -1278,9 +1433,9 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     upgradeRemoteWeapons();
     gunAnim(0, 0);
     window.__awmLoaded = true;
-  });
+  }
 
-  loadModelAsset("fps_arms", "/model/dist/fps_arms.glb", (gltf) => {
+  function mountFpsArmsGltf(gltf) {
     const root = gltf.scene, matCache = new Map();
     root.traverse((obj) => {
       obj.layers.set(VIEW_LAYER);
@@ -1309,9 +1464,9 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     vmCam.add(root);
     gunAnim(0, 0);
     window.__armsLoaded = true;
-  });
+  }
 
-  loadModelAsset("soldier", "/model/dist/soldier.glb", (gltf) => {
+  function mountSoldierGltf(gltf) {
     const root = gltf.scene, matCache = new Map();
     let teamTemplate = null;
     root.traverse((obj) => {
@@ -1328,7 +1483,34 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     soldierProto = root;
     upgradeRemoteSoldiers();
     window.__soldierLoaded = true;
-  });
+  }
+
+  async function loadAllSharedModelsAsync(onProgress = null) {
+    if (sharedModelsLoaded) return;
+    const specs = [
+      { key: "m416", path: "/model/dist/m416.glb", label: "M416 Tactical", mount: mountM416Gltf },
+      { key: "pistol", path: "/model/dist/pistol.glb", label: "Glock-17", mount: mountPistolGltf },
+      { key: "awm", path: "/model/dist/awm.glb", label: "AWM Sniper", mount: mountAwmGltf },
+      { key: "fps_arms", path: "/model/dist/fps_arms.glb", label: "Tay nhân vật FPP", mount: mountFpsArmsGltf },
+      { key: "soldier", path: "/model/dist/soldier.glb", label: "Chiến binh LAN", mount: mountSoldierGltf },
+    ];
+    for (let i = 0; i < specs.length; i++) {
+      const sp = specs[i];
+      if (typeof onProgress === "function") {
+        onProgress(i / specs.length, `Nạp mô hình (${i + 1}/${specs.length}): ${sp.label}...`);
+      }
+      await yieldToUI();
+      try {
+        const gltf = await loadModelAssetAsync(sp.key, sp.path);
+        sp.mount(gltf);
+      } catch (err) {
+        console.error(`Failed to load model ${sp.key}:`, err);
+      }
+      await yieldToUI();
+    }
+    sharedModelsLoaded = true;
+    if (typeof onProgress === "function") onProgress(1, "Đã nạp toàn bộ mô hình 3D");
+  }
 
   // ---------- Remote Soldiers (100ms interpolation + hitbox tags) ----------
   const remotePlayers = new Map();
@@ -1753,13 +1935,25 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     return kBack < 0.4 ? "bolt" : "support";
   }
 
-  // ---------- Multi-Map State & Loader (harbor / military) ----------
+  // ---------- Multi-Map State, Cache & GPU Warmup (harbor / military) ----------
   const militaryLoader = createMilitaryMapLoader({ renderer: R, THREE });
-  let activeMapId = "military";
+  let initialDefaultMap = "military";
+  try {
+    if (new URLSearchParams(location.search).get("map") === "harbor") initialDefaultMap = "harbor";
+  } catch {}
+  let activeMapId = initialDefaultMap;
+  let currentActiveMapId = null;
   let militaryData = null;
   let militaryBuildPromise = null;
   let activeCollision = null;
-  let activeEnvMap = envMap;
+  let activeEnvMap = null;
+  const uploadedTextures = new Set();
+  const warmedMaps = new Set();
+  let sharedGpuWarmed = false;
+  let suspendRenderLoop = true;
+  let loopStarted = false;
+  let isBootstrapped = false;
+  let lastWarmupStats = null;
 
   let gt = 0, activeState = "menu", meAlive = true, hp = 100;
   let shadowDirty = true;
@@ -1864,16 +2058,23 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
   function applySceneEnvMap(targetEnv, isMilitary = false) {
     activeEnvMap = targetEnv;
     S.environment = targetEnv || null;
+    if (dMat.envMap !== targetEnv) {
+      dMat.envMap = targetEnv;
+      dMat.needsUpdate = true;
+    }
     for (const root of [gun, armsRoot, m416WorldProto, pistolWorldProto, awmWorldProto, soldierProto]) {
       if (!root) continue;
       root.traverse((o) => {
         if (o.isMesh && o.material && "envMap" in o.material && o.name !== "reticle_group") {
-          o.material.envMap = targetEnv;
+          const envChanged = o.material.envMap !== targetEnv;
+          if (envChanged) {
+            o.material.envMap = targetEnv;
+            o.material.needsUpdate = true;
+          }
           const mName = o.material.name || "";
           if (mName.includes("GunMetal") || mName.includes("Slide") || mName.includes("ScopePBR")) {
             o.material.envMapIntensity = isMilitary ? 1.18 : 1.05;
           }
-          o.material.needsUpdate = true;
         }
       });
     }
@@ -1894,7 +2095,7 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     }
     for (const av of remotePlayers.values()) {
       av.container.traverse((o) => {
-        if (o.isMesh && o.material && "envMap" in o.material) {
+        if (o.isMesh && o.material && "envMap" in o.material && o.material.envMap !== targetEnv) {
           o.material.envMap = targetEnv;
           o.material.needsUpdate = true;
         }
@@ -1902,103 +2103,464 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     }
   }
 
-  function activateHarborMap() {
-    activeMapId = "harbor";
-    activeCollision = null;
-    harborGroup.visible = true;
-    hemi.visible = moon.visible = warmFill.visible = true;
-    if (militaryData && militaryData.group) militaryData.group.visible = false;
-    R.outputEncoding = THREE.LinearEncoding;
-    R.toneMappingExposure = 1.08;
-    const vig = $("vignette");
-    if (vig) vig.style.opacity = "0";
-    cam.far = Math.max(200, activeQuality.preset.cameraFar);
-    cam.updateProjectionMatrix();
-    S.background = new THREE.Color(0x050a11);
-    S.fog = new THREE.FogExp2(0x050a11, 0.025);
-    applySceneEnvMap(envMap, false);
-    updateCanvasPostGrade(gt);
-    syncAmbientAudio();
-    shadowDirty = true;
+  function isMapCached(mapId) {
+    const target = normalizeMapId(mapId);
+    return target === "harbor" ? Boolean(harborData) : Boolean(militaryData);
   }
 
-  function ensureMapActive(mapId = "military") {
-    const target = mapId === "harbor" ? "harbor" : "military";
-    if (target === "harbor") {
-      activateHarborMap();
-      return Promise.resolve(null);
+  function getCachedMapData(mapId) {
+    const target = normalizeMapId(mapId);
+    return target === "harbor" ? harborData : militaryData;
+  }
+
+  function setLobbyBackdropCamera(targetMapId) {
+    if (engineMode !== "idle") return;
+    if (targetMapId === "military") {
+      cam.position.set(0, EYE_STAND, -40);
+      cam.rotation.set(0, Math.PI, 0);
+    } else {
+      cam.position.set(0, EYE_STAND, 0);
+      cam.rotation.set(0, 0, 0);
     }
-    activeMapId = "military";
-    if (militaryData) {
-      harborGroup.visible = false;
-      hemi.visible = moon.visible = warmFill.visible = false;
-      militaryData.group.visible = true;
-      activeCollision = militaryData.collision;
-      R.outputEncoding = THREE.sRGBEncoding || THREE.LinearEncoding;
-      R.toneMappingExposure = 0.86;
-      militaryData.applyQualityPreset(activeQuality.preset);
+    cam.updateMatrixWorld(true);
+    vmCam.position.copy(cam.position);
+    vmCam.quaternion.copy(cam.quaternion);
+    vmCam.updateMatrixWorld(true);
+  }
+
+  function activateCachedMap(mapId) {
+    const target = normalizeMapId(mapId);
+    if (target === "harbor") {
+      if (!harborData) return false;
+      activeMapId = "harbor";
+      currentActiveMapId = "harbor";
+      activeCollision = null;
+      harborGroup.visible = true;
+      hemi.visible = moon.visible = warmFill.visible = true;
+      if (militaryData && militaryData.group) militaryData.group.visible = false;
+      R.outputEncoding = THREE.LinearEncoding;
+      R.toneMappingExposure = 1.08;
       const vig = $("vignette");
-      if (vig) vig.style.opacity = activeQuality.preset.vignetteEnabled ? "1" : "0";
-      cam.far = activeQuality.preset.cameraFar;
+      if (vig) vig.style.opacity = "0";
+      cam.far = Math.max(200, activeQuality.preset.cameraFar);
       cam.updateProjectionMatrix();
-      S.background = new THREE.Color(militaryData.fogColor);
-      S.fog = new THREE.FogExp2(militaryData.fogColor, militaryData.fogDensity);
-      applySceneEnvMap(militaryData.envMap, true);
+      S.background = new THREE.Color(0x050a11);
+      S.fog = new THREE.FogExp2(0x050a11, 0.025);
+      applySceneEnvMap(harborData.envMap, false);
+      setLobbyBackdropCamera("harbor");
       updateCanvasPostGrade(gt);
       syncAmbientAudio();
       shadowDirty = true;
-      window.__militaryMapLoaded = true;
-      return Promise.resolve(militaryData);
+      return true;
     }
+
+    if (!militaryData) return false;
+    activeMapId = "military";
+    currentActiveMapId = "military";
+    harborGroup.visible = false;
+    hemi.visible = moon.visible = warmFill.visible = false;
+    militaryData.group.visible = true;
+    activeCollision = militaryData.collision;
+    R.outputEncoding = THREE.sRGBEncoding || THREE.LinearEncoding;
+    R.toneMappingExposure = 0.86;
+    militaryData.applyQualityPreset(activeQuality.preset);
+    const vig = $("vignette");
+    if (vig) vig.style.opacity = activeQuality.preset.vignetteEnabled ? "1" : "0";
+    cam.far = activeQuality.preset.cameraFar;
+    cam.updateProjectionMatrix();
+    S.background = new THREE.Color(militaryData.fogColor);
+    S.fog = new THREE.FogExp2(militaryData.fogColor, militaryData.fogDensity);
+    applySceneEnvMap(militaryData.envMap, true);
+    setLobbyBackdropCamera("military");
+    if (militaryData.updateAtmosphere) {
+      militaryData.updateAtmosphere(gt, cam.position, activeQuality.preset);
+    }
+    updateCanvasPostGrade(gt);
+    syncAmbientAudio();
+    shadowDirty = true;
+    window.__militaryMapLoaded = true;
+    return true;
+  }
+
+  async function buildMapAssetsAsync(mapId, onProgress = null) {
+    const target = normalizeMapId(mapId);
+    if (target === "harbor") {
+      return buildHarborSceneAsync(onProgress);
+    }
+    if (militaryData) return militaryData;
     if (!militaryBuildPromise) {
       militaryBuildPromise = militaryLoader
         .buildMilitaryScene({
           scene: S,
-          envMapTargetList: [gun, armsRoot, m416WorldProto, pistolWorldProto, awmWorldProto, soldierProto],
+          envMapTargetList: [],
           initialPreset: activeQuality.preset,
+          onProgress,
+          yieldFn: yieldToUI,
+          deferActivate: true,
         })
         .then((res) => {
           militaryData = res;
           window.__militaryMapLoaded = true;
-          if (activeMapId === "military") {
-            harborGroup.visible = false;
-            hemi.visible = moon.visible = warmFill.visible = false;
-            res.group.visible = true;
-            activeCollision = res.collision;
-            R.outputEncoding = THREE.sRGBEncoding || THREE.LinearEncoding;
-            R.toneMappingExposure = 0.86;
-            res.applyQualityPreset(activeQuality.preset);
-            const vig = $("vignette");
-            if (vig) vig.style.opacity = activeQuality.preset.vignetteEnabled ? "1" : "0";
-            cam.far = activeQuality.preset.cameraFar;
-            cam.updateProjectionMatrix();
-            S.background = new THREE.Color(res.fogColor);
-            S.fog = new THREE.FogExp2(res.fogColor, res.fogDensity);
-            applySceneEnvMap(res.envMap, true);
-            updateCanvasPostGrade(gt);
-            syncAmbientAudio();
-            shadowDirty = true;
-          } else {
-            res.group.visible = false;
-          }
           return res;
         })
         .catch((err) => {
           console.error("Failed to build military map:", err);
           militaryBuildPromise = null;
-          activateHarborMap();
-          return null;
+          throw err;
         });
     }
     return militaryBuildPromise;
   }
 
-  // Start preloading default Khu Quân Sự Cũ immediately unless ?map=harbor is requested
-  let initialDefaultMap = "military";
-  try {
-    if (new URLSearchParams(location.search).get("map") === "harbor") initialDefaultMap = "harbor";
-  } catch {}
-  ensureMapActive(initialDefaultMap);
+  function createWarmupDroneGroup() {
+    const g = new THREE.Group();
+    const mat = dMat.clone();
+    const body = new THREE.Mesh(droneBodyGeo, mat);
+    body.scale.y = 0.6;
+    body.castShadow = true;
+    const eye = new THREE.Mesh(droneEyeGeo, droneEyeMat);
+    eye.position.z = 0.42;
+    const ring = new THREE.Mesh(droneRingGeo, dMat);
+    ring.rotation.x = Math.PI / 2;
+    g.add(body, eye, ring);
+    return {
+      group: g,
+      dispose() {
+        S.remove(g);
+        mat.dispose();
+      },
+    };
+  }
+
+  function createWarmupSoldierGroup() {
+    const container = new THREE.Group();
+    const rig = buildSoldierVisual("A", "__warmup__");
+    container.add(rig.root);
+    const shieldGeo = new THREE.SphereGeometry(0.95, 16, 12);
+    const shieldMat = new THREE.MeshBasicMaterial({
+      color: TEAM_META.A.colorNum,
+      transparent: true,
+      opacity: 0.16,
+      wireframe: true,
+    });
+    const shieldDome = new THREE.Mesh(shieldGeo, shieldMat);
+    shieldDome.position.set(0, 0.92, 0);
+    container.add(shieldDome);
+
+    const flashGeo = new THREE.SphereGeometry(0.08, 6, 6);
+    const flashMat = new THREE.MeshBasicMaterial({ color: 0xffd584 });
+    const muzFlash = new THREE.Mesh(flashGeo, flashMat);
+    muzFlash.position.set(0.11, 1.3, -0.78);
+    container.add(muzFlash);
+
+    const avDummy = { rig, weaponId: "m416" };
+    attachWeaponToRig(avDummy);
+    if (avDummy.m416Mesh) avDummy.m416Mesh.visible = true;
+    if (avDummy.pistolMesh) avDummy.pistolMesh.visible = true;
+    if (avDummy.awmMesh) avDummy.awmMesh.visible = true;
+
+    return {
+      group: container,
+      dispose() {
+        S.remove(container);
+        shieldGeo.dispose();
+        shieldMat.dispose();
+        flashGeo.dispose();
+        flashMat.dispose();
+      },
+    };
+  }
+
+  async function warmupGpuForMap(mapId, { includeShared = false, onProgress = null, isStale = null } = {}) {
+    const target = normalizeMapId(mapId);
+    const mapData = getCachedMapData(target);
+    if (!mapData) return null;
+
+    const emit = (frac, detail = "") => {
+      if (typeof onProgress === "function") onProgress(frac, detail);
+    };
+
+    const tStart = performance.now();
+    const prevSuspend = suspendRenderLoop;
+    suspendRenderLoop = true;
+
+    // 1. Batched VRAM texture upload via renderer.initTexture(tex)
+    emit(0.04, "Tải texture lên bộ nhớ GPU (VRAM)...");
+    const textureRoots = [mapData.group, mapData.extraTextures];
+    if (includeShared || !sharedGpuWarmed) {
+      textureRoots.push(gun, armsRoot, m416WorldProto, pistolWorldProto, awmWorldProto, soldierProto, glowTex);
+    }
+    const textures = collectSceneTextures(textureRoots);
+    const texResult = await warmupTexturesChunked({
+      renderer: R,
+      textures,
+      batchSize: 3,
+      yieldFn: yieldToUI,
+      uploadedSet: uploadedTextures,
+      onProgress: (f, info) => {
+        emit(0.05 + f * 0.40, `Tải VRAM (${info.uploaded}/${info.total} texture)...`);
+      },
+    });
+    await yieldToUI();
+
+    // 2. Temporarily activate map + all 3 weapons + arms + Drone + Soldier + muzzle flash behind Loading Screen
+    const prevMapId = currentActiveMapId;
+    const prevHarborVis = harborGroup.visible;
+    const prevMilVis = militaryData && militaryData.group ? militaryData.group.visible : false;
+    const prevHemiVis = hemi.visible;
+    const prevMoonVis = moon.visible;
+    const prevWarmVis = warmFill.visible;
+    const prevEncoding = R.outputEncoding;
+    const prevExposure = R.toneMappingExposure;
+    const prevBg = S.background;
+    const prevFog = S.fog;
+    const prevEnv = activeEnvMap;
+
+    const prevGunVis = gun.visible;
+    const prevArmsVis = armsRoot ? armsRoot.visible : false;
+    const prevMfVis = mf.visible;
+    const prevPMfVis = pistolMuzzleFlash.visible;
+    const prevPMfOp = pistolFlashMat.opacity;
+    const prevFlashInt = flashL.intensity;
+    const prevLaserVis = laserBeam.visible;
+    const prevDotVis = laserDot.visible;
+    const prevTr0Op = tr[0] ? tr[0].material.opacity : 0;
+    const prevCamPos = cam.position.clone();
+    const prevCamRot = cam.rotation.clone();
+
+    let warmupDrone = null;
+    let warmupSoldier = null;
+    let worldCompileMode = "noop";
+    let vmCompileMode = "noop";
+
+    try {
+      // Mount target map visibly while hidden behind opaque Loading Screen
+      if (target === "military") {
+        harborGroup.visible = false;
+        hemi.visible = moon.visible = warmFill.visible = false;
+        mapData.group.visible = true;
+        R.outputEncoding = THREE.sRGBEncoding || THREE.LinearEncoding;
+        R.toneMappingExposure = 0.86;
+        S.background = new THREE.Color(mapData.fogColor);
+        S.fog = new THREE.FogExp2(mapData.fogColor, mapData.fogDensity);
+        applySceneEnvMap(mapData.envMap, true);
+        cam.position.set(0, EYE_STAND, -40);
+        cam.rotation.set(0, Math.PI, 0);
+        if (mapData.updateAtmosphere) mapData.updateAtmosphere(gt, cam.position, activeQuality.preset);
+      } else {
+        if (militaryData && militaryData.group) militaryData.group.visible = false;
+        harborGroup.visible = true;
+        hemi.visible = moon.visible = warmFill.visible = true;
+        R.outputEncoding = THREE.LinearEncoding;
+        R.toneMappingExposure = 1.08;
+        S.background = new THREE.Color(0x050a11);
+        S.fog = new THREE.FogExp2(0x050a11, 0.025);
+        applySceneEnvMap(mapData.envMap, false);
+        cam.position.set(0, EYE_STAND, 0);
+        cam.rotation.set(0, 0, 0);
+      }
+      cam.updateMatrixWorld(true);
+      vmCam.position.copy(cam.position);
+      vmCam.quaternion.copy(cam.quaternion);
+      vmCam.updateMatrixWorld(true);
+
+      // Place temporary Drone & Soldier in front of camera so shaders + shadow depth compile
+      const fwdZ = target === "military" ? 7.5 : -7.5;
+      warmupDrone = createWarmupDroneGroup();
+      warmupDrone.group.position.set(0, 2.2, cam.position.z + fwdZ);
+      S.add(warmupDrone.group);
+
+      if (includeShared || !sharedGpuWarmed) {
+        warmupSoldier = createWarmupSoldierGroup();
+        warmupSoldier.group.position.set(2.2, 0, cam.position.z + fwdZ);
+        S.add(warmupSoldier.group);
+      }
+
+      laserBeam.visible = true;
+      laserDot.visible = true;
+      laserDot.position.set(0, 1.7, cam.position.z + fwdZ);
+      if (tr[0]) tr[0].material.opacity = 1;
+
+      emit(0.52, "Biên dịch Shader bản đồ & Drone...");
+      cam.layers.set(0);
+      worldCompileMode = await compileScenePass({ renderer: R, scene: S, camera: cam });
+      await yieldToUI();
+
+      // Compile Viewmodel weapons (M416, Glock-17, AWM) + SkinnedMesh arms + muzzle flash
+      if (includeShared || !sharedGpuWarmed) {
+        gun.visible = true;
+        if (armsRoot) armsRoot.visible = true;
+        mf.visible = true;
+        pistolMuzzleFlash.visible = true;
+        pistolFlashMat.opacity = 0.92;
+        flashL.intensity = 5;
+        gunAnim(0, 0);
+        vmCam.layers.set(VIEW_LAYER);
+
+        const weaponWarmPasses = [
+          { id: "m416", pct: 0.64, msg: "Biên dịch Shader M416, tay cầm & chớp lửa..." },
+          { id: "pistol", pct: 0.74, msg: "Biên dịch Shader Glock-17 & chớp lửa..." },
+          { id: "sniper", pct: 0.84, msg: "Biên dịch Shader AWM Sniper..." },
+        ];
+        for (const wp of weaponWarmPasses) {
+          emit(wp.pct, wp.msg);
+          m416ViewGroup.visible = wp.id === "m416";
+          pistolViewGroup.visible = wp.id === "pistol";
+          sniperViewGroup.visible = wp.id === "sniper";
+          vmCompileMode = await compileScenePass({ renderer: R, scene: S, camera: vmCam });
+          await yieldToUI();
+        }
+        // Turn all 3 guns visible together for the 1 hidden warmup frame
+        m416ViewGroup.visible = true;
+        pistolViewGroup.visible = true;
+        sniperViewGroup.visible = true;
+      }
+
+      emit(0.92, "Render nháp 1 khung hình làm nóng GPU...");
+      if (activeQuality.preset.shadowsEnabled) {
+        R.shadowMap.needsUpdate = true;
+      }
+      cam.layers.set(0);
+      R.clear();
+      R.render(S, cam);
+
+      const savedBgForVm = S.background;
+      S.background = null;
+      R.clearDepth();
+      vmCam.layers.set(VIEW_LAYER);
+      R.render(S, vmCam);
+      S.background = savedBgForVm;
+
+      await yieldToUI();
+      warmedMaps.add(target);
+      if (includeShared) sharedGpuWarmed = true;
+    } finally {
+      if (warmupDrone) warmupDrone.dispose();
+      if (warmupSoldier) warmupSoldier.dispose();
+
+      applyViewmodelWeapon(SLOT_TO_WEAPON_ID[activeSlot] || "m416");
+      gun.visible = prevGunVis;
+      if (armsRoot) armsRoot.visible = prevArmsVis;
+      mf.visible = prevMfVis;
+      pistolMuzzleFlash.visible = prevPMfVis;
+      pistolFlashMat.opacity = prevPMfOp;
+      flashL.intensity = prevFlashInt;
+      laserBeam.visible = prevLaserVis;
+      laserDot.visible = prevDotVis;
+      if (tr[0]) tr[0].material.opacity = prevTr0Op;
+
+      const superseded = typeof isStale === "function" && isStale();
+      if (superseded && prevMapId && prevMapId !== target) {
+        harborGroup.visible = prevHarborVis;
+        if (militaryData && militaryData.group) militaryData.group.visible = prevMilVis;
+        hemi.visible = prevHemiVis;
+        moon.visible = prevMoonVis;
+        warmFill.visible = prevWarmVis;
+        R.outputEncoding = prevEncoding;
+        R.toneMappingExposure = prevExposure;
+        S.background = prevBg;
+        S.fog = prevFog;
+        if (prevEnv) applySceneEnvMap(prevEnv, prevMapId === "military");
+        cam.position.copy(prevCamPos);
+        cam.rotation.copy(prevCamRot);
+        cam.updateMatrixWorld(true);
+        vmCam.position.copy(cam.position);
+        vmCam.quaternion.copy(cam.quaternion);
+        vmCam.updateMatrixWorld(true);
+      }
+
+      shadowDirty = false;
+      suspendRenderLoop = prevSuspend;
+    }
+
+    lastWarmupStats = {
+      mapId: target,
+      texturesUploaded: texResult.uploaded,
+      texturesSkipped: texResult.skipped,
+      texturesFailed: texResult.failed,
+      worldCompileMode,
+      vmCompileMode,
+      elapsedMs: Math.round(performance.now() - tStart),
+    };
+    emit(1.0, "Hoàn tất làm nóng GPU");
+    return lastWarmupStats;
+  }
+
+  const mapGuard = createMapSwitchGuard({
+    isMapReady: (id) => isMapCached(id) && warmedMaps.has(id),
+    getActiveMapId: () => currentActiveMapId,
+    activateCached: (id) => activateCachedMap(id),
+    buildAndWarmup: async (id, opts) => {
+      const report = typeof opts.onProgress === "function" ? opts.onProgress : null;
+      await buildMapAssetsAsync(id, (f, detail) => {
+        if (report) report(f * 0.65, detail);
+      });
+      await warmupGpuForMap(id, {
+        includeShared: !sharedGpuWarmed,
+        isStale: opts.isStale,
+        onProgress: (f, detail) => {
+          if (report) report(0.65 + f * 0.35, detail);
+        },
+      });
+    },
+  });
+
+  function emitLoading(payload) {
+    if (typeof onLoadingUpdate === "function") {
+      try {
+        onLoadingUpdate(payload);
+      } catch (err) {
+        console.warn("onLoadingUpdate callback error:", err);
+      }
+    }
+  }
+
+  async function prepareMap(mapId, { showOverlay = true } = {}) {
+    const target = normalizeMapId(mapId);
+    const t0 = performance.now();
+
+    // Fast path (0ms synchronous cache hit — never flashes loading overlay!)
+    const syncRes = mapGuard.activateSyncIfCached(target);
+    if (syncRes.ok) {
+      return { ...syncRes, sync: true, elapsedMs: 0 };
+    }
+
+    const mapLabel = target === "harbor" ? "Bến Cảng Mưa" : "Khu Quân Sự Cũ";
+    const tracker = createLoadingTracker((st) => {
+      if (showOverlay) {
+        emitLoading({
+          visible: true,
+          mode: "map-switch",
+          title: `Đang tải bản đồ ${mapLabel}...`,
+          percent: st.percent,
+          label: st.label,
+          detail: st.detail,
+        });
+      }
+    });
+    tracker.reset(`Đang chuyển sang ${mapLabel}...`, "Chuẩn bị tài nguyên bản đồ");
+    await yieldToUI();
+
+    try {
+      const res = await mapGuard.ensureMapReady(target, {
+        onProgress: tracker.subProgress(5, 98, `Đang nạp ${mapLabel}...`),
+      });
+      tracker.report(100, `Đã sẵn sàng: ${mapLabel}`, "");
+      await yieldToUI();
+      return { ...res, elapsedMs: Math.round(performance.now() - t0) };
+    } finally {
+      if (showOverlay && !mapGuard.isBusy()) {
+        emitLoading({ visible: false, done: true, mode: "map-switch", percent: 100 });
+      }
+    }
+  }
+
+  function ensureMapActive(mapId = "military") {
+    const target = normalizeMapId(mapId);
+    const syncRes = mapGuard.activateSyncIfCached(target);
+    if (syncRes.ok) return Promise.resolve(getCachedMapData(target));
+    return prepareMap(target, { showOverlay: true }).then(() => getCachedMapData(target));
+  }
 
   // ---------- Gameplay State ----------
   const P = new Vec();
@@ -2419,16 +2981,29 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     $("sbTitle").textContent = `${currentMode === "FFA" ? "Đấu Đơn (FFA)" : "Đấu Đội (TDM)"} — Mục tiêu ${killLimit} mạng (Còn ${formatClock(timeLeftSec)})`;
   }
 
-  // ---------- Solo Offline Drone mode ----------
+  // ---------- Solo Offline Drone mode (shared geometries avoid Wave-1 allocation & GPU leaks) ----------
   const dMat = new THREE.MeshStandardMaterial({ color: 0x2a3138, metalness: 0.8, roughness: 0.35 });
+  const droneEyeMat = new THREE.MeshBasicMaterial({ color: 0xff2a2a });
+  const droneBodyGeo = new THREE.SphereGeometry(0.5, 16, 12);
+  const droneEyeGeo = new THREE.SphereGeometry(0.14, 10, 8);
+  const droneRingGeo = new THREE.TorusGeometry(0.72, 0.04, 6, 20);
+  function disposeDroneEntity(d) {
+    S.remove(d.g);
+    if (d.body && d.body.material && d.body.material !== dMat) {
+      d.body.material.dispose();
+    }
+  }
+  function clearAllDrones() {
+    drones.splice(0).forEach(disposeDroneEntity);
+  }
   function spawnDrone() {
     const g = new THREE.Group(), m = dMat.clone();
-    const body = new THREE.Mesh(new THREE.SphereGeometry(0.5, 16, 12), m);
+    const body = new THREE.Mesh(droneBodyGeo, m);
     body.scale.y = 0.6;
     body.castShadow = true;
-    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.14, 10, 8), new THREE.MeshBasicMaterial({ color: 0xff2a2a }));
+    const eye = new THREE.Mesh(droneEyeGeo, droneEyeMat);
     eye.position.z = 0.42;
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.72, 0.04, 6, 20), dMat);
+    const ring = new THREE.Mesh(droneRingGeo, dMat);
     ring.rotation.x = Math.PI / 2;
     g.add(body, eye, ring);
     const a = rnd(0, 6.28);
@@ -2622,7 +3197,8 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
         hit = targetHit || null;
       }
     } else {
-      hit = ray.intersectObjects([ground, ...solid, ...candidates], false)[0] || null;
+      const targets = ground ? [ground, ...solid, ...candidates] : [...solid, ...candidates];
+      hit = ray.intersectObjects(targets, false)[0] || null;
     }
     const from = getViewmodelWorldPoint(muz, new Vec());
     const end = hit ? hit.point : ray.ray.at(75, new Vec());
@@ -2654,7 +3230,7 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
         if (d.hp <= 0) {
           burst(d.g.position, 45, 6);
           snd.boom();
-          S.remove(d.g);
+          disposeDroneEntity(d);
           drones.splice(drones.indexOf(d), 1);
           soloScore += 100;
           hud();
@@ -2954,19 +3530,9 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       return;
     }
 
-    const wind = Math.sin(gt * 0.23) * 0.6 + Math.sin(gt * 0.71) * 0.25;
-    const px = P.x, pz = P.z;
-    for (let i = 0; i < ND2; i++) {
-      const k = i * 4, v = rd[k + 3], sp = 24 + 16 * v;
-      let x = rd[k] + wind * 3 * dt, y = rd[k + 1] - sp * dt, z = rd[k + 2];
-      if (x - px > 24) x -= 48; else if (x - px < -24) x += 48;
-      if (z - pz > 24) z -= 48; else if (z - pz < -24) z += 48;
-      if (y < 0) { y += 26; if (i % 3 !== 0 && Math.abs(x - px) < 11 && Math.abs(z - pz) < 11) rainRipples.emit(x, z); }
-      rd[k] = x; rd[k + 1] = y; rd[k + 2] = z;
-      rp2.set([x - wind * 0.07, y + sp * 0.022, z, x, y, z], i * 6);
+    if (harborData) {
+      harborData.updateRain(dt, gt, P.x, P.z);
     }
-    rg2.attributes.position.needsUpdate = true;
-    rainRipples.upd(dt);
 
     ltn -= dt;
     if (ltn <= 0) { ltn = rnd(12, 26); lt = 0.4; setTimeout(() => snd.thunder(), rnd(500, 2200)); }
@@ -3022,7 +3588,8 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
         hover = targetHit;
       }
     } else {
-      hover = ray.intersectObjects([ground, ...solid, ...enemyMeshes], false)[0];
+      const targets = ground ? [ground, ...solid, ...enemyMeshes] : [...solid, ...enemyMeshes];
+      hover = ray.intersectObjects(targets, false)[0];
     }
     $("cross").classList.toggle("targetEnemy", Boolean(hover && hover.object.userData.hitTarget));
 
@@ -3366,8 +3933,9 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     }
   }
 
-  (function loop() {
+  function loop() {
     requestAnimationFrame(loop);
+    if (suspendRenderLoop) return;
     const dt = Math.min(clock.getDelta(), 0.05);
     if (activeState === "play") updateGameplay(dt);
     if (engineMode === "lan") updateRemotePlayers(dt);
@@ -3390,7 +3958,8 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       } else {
         laserRay.set(_ls, _ld);
         laserRay.far = 81;
-        hit = laserRay.intersectObjects([ground, ...solid], false)[0] || null;
+        const targets = ground ? [ground, ...solid] : solid;
+        hit = laserRay.intersectObjects(targets, false)[0] || null;
       }
       const end = hit ? hit.point : _lp.clone().addScaledVector(_ld, 80);
       const bp = laserBeam.geometry.attributes.position;
@@ -3404,12 +3973,22 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       laserDot.visible = false;
     }
     renderFrame();
-  })();
+  }
+
+  function startRenderLoop() {
+    if (loopStarted) return;
+    loopStarted = true;
+    clock.getDelta();
+    requestAnimationFrame(loop);
+  }
 
   function startLanMatch(room, initialSnapshot) {
     initAudio();
-    ensureMapActive(room && room.map ? room.map : "military");
-    drones.splice(0).forEach((d) => S.remove(d.g));
+    const targetMap = normalizeMapId(room && room.map ? room.map : "military");
+    if (!mapGuard.activateSyncIfCached(targetMap).ok) {
+      ensureMapActive(targetMap);
+    }
+    clearAllDrones();
     clearRemotePlayers();
     engineMode = "lan";
     activeState = "play";
@@ -3456,10 +4035,14 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
   }
 
   function startSolo(mapId = activeMapId || initialDefaultMap) {
+    const targetMap = normalizeMapId(mapId);
+    // Step 2: Zero-ms synchronous cache fast-path so requestPointerLock() runs directly in click gesture!
+    if (!mapGuard.activateSyncIfCached(targetMap).ok) {
+      ensureMapActive(targetMap);
+    }
     initAudio();
-    ensureMapActive(mapId);
     clearRemotePlayers();
-    drones.splice(0).forEach((d) => S.remove(d.g));
+    clearAllDrones();
     engineMode = "solo";
     activeState = "play";
     hp = 100;
@@ -3469,7 +4052,7 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     prevSlot = 2;
     resetAllWeapons();
     applyViewmodelWeapon("m416");
-    if (mapId === "military") {
+    if (targetMap === "military") {
       P.set(0, 0, -40);
       yaw = Math.PI;
     } else {
@@ -3502,11 +4085,77 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     updateCanvasPostGrade(gt);
     if (document.pointerLockElement === R.domElement) document.exitPointerLock();
     clearRemotePlayers();
-    drones.splice(0).forEach((d) => S.remove(d.g));
+    clearAllDrones();
   }
 
-  window.__fpsReady = true;
+  async function bootstrapInitialScene(defaultMapId = initialDefaultMap) {
+    const target = normalizeMapId(defaultMapId);
+    const mapLabel = target === "harbor" ? "Bến Cảng Mưa" : "Khu Quân Sự Cũ";
+    const tracker = createLoadingTracker((st) => {
+      emitLoading({
+        visible: true,
+        mode: "startup",
+        title: "Đang khởi tạo chiến trường 3D",
+        percent: st.percent,
+        label: st.label,
+        detail: st.detail,
+      });
+    });
+
+    tracker.reset("Đang chuẩn bị hệ thống đồ họa WebGL...", `Bản đồ mặc định: ${mapLabel}`);
+    await yieldToUI();
+
+    try {
+      // Phase 1: Build default map async with yieldToUI()
+      const mapStage = tracker.subProgress(4, 44, `Đang dựng bản đồ ${mapLabel}...`);
+      const mapData = await buildMapAssetsAsync(target, mapStage);
+      if (mapData && mapData.envMap) {
+        activeEnvMap = mapData.envMap;
+      }
+
+      // Phase 2: Load all 5 shared GLB models sequentially with yieldToUI()
+      const modelStage = tracker.subProgress(44, 70, "Đang nạp mô hình vũ khí & nhân vật...");
+      await loadAllSharedModelsAsync(modelStage);
+
+      // Phase 3: Precompute audio noise/reverb buffers so first-click initAudio() is 0ms
+      tracker.report(72, "Đang chuẩn bị bộ đệm âm thanh...", "Tạo sẵn buffer tiếng súng & vang môi trường");
+      await precomputeAudioBuffersAsync();
+      await yieldToUI();
+
+      // Phase 4: Activate map, upload all textures to VRAM & pre-compile shaders + 1 hidden warmup frame
+      activateCachedMap(target);
+      const gpuStage = tracker.subProgress(74, 98, "Đang nạp VRAM & biên dịch Shader...");
+      await warmupGpuForMap(target, { includeShared: true, onProgress: gpuStage });
+
+      tracker.report(100, "Sẵn sàng chiến đấu!", `Đã tối ưu ${mapLabel} & 3 vũ khí`);
+      await yieldToUI();
+    } catch (err) {
+      console.error("Startup bootstrap encountered an error, applying fallback:", err);
+      // Unhappy-path fallback: ensure at least Harbor loads if Military failed
+      if (target === "military" && !militaryData) {
+        try {
+          await buildHarborSceneAsync();
+          activateCachedMap("harbor");
+        } catch (fbErr) {
+          console.error("Fallback harbor build also failed:", fbErr);
+        }
+      }
+    } finally {
+      isBootstrapped = true;
+      suspendRenderLoop = false;
+      startRenderLoop();
+      emitLoading({ visible: false, done: true, mode: "startup", percent: 100 });
+      window.__fpsReady = true;
+    }
+  }
+
+  const readyPromise = bootstrapInitialScene(initialDefaultMap);
+
   return {
+    readyPromise,
+    prepareMap,
+    isMapCached,
+    isMapActiveAndReady: (mapId) => mapGuard.isActiveAndReady(mapId),
     startLanMatch,
     startSolo,
     stopEngine,
@@ -3523,6 +4172,19 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       engineMode,
       activeState,
       P,
+      isBootstrapped,
+      getLoadingStats: () => ({
+        isBootstrapped,
+        currentActiveMapId,
+        cachedMaps: [
+          ...(militaryData ? ["military"] : []),
+          ...(harborData ? ["harbor"] : []),
+        ],
+        warmedMaps: Array.from(warmedMaps),
+        uploadedTextureCount: uploadedTextures.size,
+        sharedGpuWarmed,
+        lastWarmupStats,
+      }),
       getYaw: () => yaw,
       setPose: (nx, ny, nz, nyaw, npitch) => {
         P.set(nx, ny, nz);
@@ -3595,7 +4257,9 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       getTeamMaterials: () => teamAccentMats,
       getMapInfo: () => ({
         mapId: activeMapId,
-        ready: activeMapId === "harbor" || Boolean(militaryData),
+        currentActiveMapId,
+        ready: isMapCached(activeMapId),
+        warmed: warmedMaps.has(activeMapId),
         onLadder,
         bounds: activeCollision ? activeCollision.bounds : { minX: -48, maxX: 48, minZ: -48, maxZ: 48 },
         raycastShot: activeCollision ? activeCollision.raycastShot : null,

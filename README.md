@@ -20,23 +20,27 @@ Trò chơi bắn súng góc nhìn thứ nhất (FPS) trên nền WebGL sử dụ
 │   │   ├── TDM.js          # Đấu Đội (▲ Đặc Nhiệm #2F80FF vs ● Nổi Loạn #FF4D2E): khóa lệch >=2, cấm bắn đồng đội
 │   │   └── FFA.js          # Đấu Đơn (màu trung tính #8A8F98): xếp theo killLimit/hết giờ, spawn khuất LoS
 │   ├── tests/
-│   │   ├── test_lan_v2.js     # Bộ kiểm thử Node.js (5 test, gồm 6 edge case + reload/switch/TOL/posture hitbox)
-│   │   ├── test_arm_rig.mjs   # Unit test AAA cho IK 2 xương & controller tay SkinnedMesh (6 test, gồm m416 + awm sockets)
-│   │   └── test_military_map.mjs # Unit & integration test cho Triangle-BVH, thang tháp canh 4m & đồng bộ map Khu Quân Sự Cũ
+│   │   ├── test_lan_v2.js           # Bộ kiểm thử Node.js (5 test, gồm 6 edge case + reload/switch/TOL/posture hitbox)
+│   │   ├── test_arm_rig.mjs         # Unit test AAA cho IK 2 xương & controller tay SkinnedMesh (6 test, gồm m416 + awm sockets)
+│   │   ├── test_military_map.mjs    # Unit & integration test cho Triangle-BVH, thang tháp canh 4m & đồng bộ map Khu Quân Sự Cũ
+│   │   ├── test_graphics_quality.mjs # Unit test AAA cho 3 mức đồ họa Thấp/Vừa/Cao & tự động nhận diện máy yếu
+│   │   └── test_loading_manager.mjs # Unit test AAA cho yieldToUI, tracker tiến độ, nạp VRAM theo lô & cache chuyển map 0ms
 ├── shared/
 │   └── maps/               # military_layout.json & military_colliders.json dùng chung Client/Server
 ├── public/                 # Giao diện & Engine phía Client (ES Modules)
-│   ├── FPS.html            # HUD vô hạn đạn, chọn map (Khu Quân Sự Cũ mặc định / Bến Cảng Mưa), Radar & Modal Cài đặt
+│   ├── FPS.html            # Màn hình Loading 4 bước, HUD vô hạn đạn, chọn map (Khu Quân Sự Cũ / Bến Cảng Mưa), Radar & Cài đặt
 │   └── js/
 │       ├── net.js          # Tự suy ra ws(s)://${location.host}/ws, tự nối lại & sessionStorage 30s
-│       ├── lobby.js        # Danh sách phòng thời gian thực, tạo phòng theo tên/map nhập, Vào nhanh, Mật khẩu
+│       ├── lobby.js        # Danh sách phòng thời gian thực, tiền tải & cache map ngay khi đổi dropdown Solo, Vào nhanh, Mật khẩu
 │       ├── room.js         # Phòng chờ 2 cột TDM / FFA, Sẵn sàng, Đổi phe, Kick, Chat & Cài đặt Host (có đổi map)
-│       ├── settings.js     # Lưu cấu hình chuột, FOV, Hold/Toggle, gán lại phím BIND qua localStorage
+│       ├── settings.js     # Lưu cấu hình chuột, FOV, Hold/Toggle, chất lượng đồ họa & gán phím BIND qua localStorage
+│       ├── graphics_quality.js # Preset Thấp/Vừa/Cao + detectHardwareTier() tự tối ưu cho máy yếu
+│       ├── loading_manager.js  # yieldToUI(), tracker tiến độ 0–100%, nạp VRAM theo lô initTexture, biên dịch shader & guard đổi map 0ms
 │       ├── input.js        # Input 3 lớp dùng e.code, Alt+Tab reset(), chặn cuộn trang & click khóa chuột đầu
 │       ├── arm_rig.js      # Bộ giải IK 2 xương giải tích, SKINNED_ARM_POSES (M416/Pistol/Sniper+Bolt) & gập ngón bóp cò
 │       ├── map_collision.js # Triangle-BVH raycast, trượt tường AABB/OBB, sàn nâng 4m & leo thang tháp canh
-│       ├── map_loader.js   # Nạp map Khu Quân Sự Cũ (Sky Dome overcast + God-Rays, vũng nước PBR, InstancedMesh, cây/núi hậu cảnh & FogExp2)
-│       └── game.js         # Engine Three.js r128 hỗ trợ đa bản đồ (Khu Quân Sự Cũ / Bến Cảng Mưa), vật lý 60Hz & vũ khí PBR
+│       ├── map_loader.js   # Nạp bất đồng bộ map Khu Quân Sự Cũ (yieldToUI, Sky Dome, vũng nước PBR, InstancedMesh, cây/núi & FogExp2)
+│       └── game.js         # Engine Three.js r128 hỗ trợ đa bản đồ cache theo ID, warmup Shader/VRAM ẩn, vật lý 60Hz & vũ khí PBR
 ├── FPS.html                # Trang chuyển hướng trỏ về public/FPS.html
 ├── GEMINI.md               # Quy chuẩn kỹ thuật và quy trình làm việc của dự án
 ├── README.md               # Tài liệu hướng dẫn dự án
@@ -110,14 +114,17 @@ Server mặc định lắng nghe `0.0.0.0:8090` (tự động chuyển sang cổ
 - **Server Authority toàn phần (`server/weapons.js`, `server/Match.js`):**
   - Nguồn cấu hình vũ khí duy nhất (`M416`, `Glock-17`, `AWM Sniper`) chia sẻ giữa server và client. Server chỉ dùng `Date.now()` phía server, kiểm tra lười `tickWeapon` với `RELOAD_TOLERANCE_MS = 80ms`, chặn bắn khi đang nạp / chạy nước rút / hết đạn, tự nạp khi bắn viên cuối, gửi `AMMO` chỉnh lệch nếu console client bị sửa, hủy nạp khi chết hoặc đổi súng, và nạp đầy mọi súng khi hồi sinh.
   - Bắn dùng **client raycast + server validate**: kiểm tra tốc độ di chuyển theo tư thế (`flags` bitmask), tầm bắn từng súng, đường ngắm `hasLineOfSight` tính cả độ cao cúi ngồi trên `MAP_SEED = 11042026`.
+- **Màn hình Loading 4 bước & Khởi động không khựng (`public/js/loading_manager.js`, `map_loader.js`, `game.js`, `lobby.js`, `FPS.html`):**
+  - Toàn bộ tác vụ nặng lúc mở trang (dựng bản đồ mặc định, nạp 5 model GLB, tiền tạo bộ đệm `AudioContext`/Convolver, upload VRAM theo lô `renderer.initTexture(tex)`, biên dịch shader tách pha cho world + 3 súng + tay `SkinnedMesh` + Drone + Soldier + chớp lửa và render nháp 1 frame ẩn) đều chạy sau `#loadingOverlay` xen kẽ `yieldToUI()` (`requestAnimationFrame` kèm fallback cho tab nền) giúp thanh tiến độ mượt và không treo trình duyệt.
+  - Cache bản đồ theo ID (`currentActiveMapId` + `mapGuard`): bấm **Luyện tập Offline (Drone)** khi trùng map đang hiển thị vào trận ngay lập tức (gọi `requestPointerLock()` đồng bộ trong sự kiện click). Đổi dropdown `#soloMapSelect` (hoặc vào phòng LAN có map khác) sẽ tải, làm nóng GPU và cache ngay lúc chọn; lần đổi lại bản đồ đã cache đạt `0ms`.
 - **Phân biệt Hai Đội thân thiện Mù Màu (`model/characters/soldier.py` & `public/js/game.js`):**
   - Vật liệu `TeamColor` phủ lên mảng mũ FAST, giáp vai rộng, ngực và lưng dùng đúng 3 material dùng chung (`▲ Đặc Nhiệm #2F80FF`, `● Nổi Loạn #FF4D2E`, `◆ Đấu Đơn #8A8F98`) kèm `emissiveIntensity` nổi rõ từ `30m` trong mưa và an toàn dưới `protanopia`/`deuteranopia`.
   - Bổ sung nhận diện đa tầng: nameplate chỉ hiện cho đồng đội TDM, tâm ngắm đổi đỏ khi trỏ vào hitbox kẻ địch, killfeed/bảng điểm đồng bộ màu + ký hiệu hình học, và Radar góc trên-trái lộ chấm địch trong `2s` khi nổ súng.
 
 ## Kiểm thử
 
-- **Python Unit Tests (`python3 -m unittest discover -s model/tests -v`):** **25/25 PASS** (kiểm tra geometry, textures PBR, chuyển đổi Spec-Gloss → Metallic-Roughness `fps_arms.glb` & `awm.glb` và chuẩn nhị phân glTF 2.0 `.glb` + `.bundle.js`).
-- **Node.js Server & Arm Rig Tests (`node --test server/tests/test_lan_v2.js server/tests/test_arm_rig.mjs`):** **12/12 PASS** (gồm `5` test LAN server và `7` test `arm_rig`: IK 2 xương giải tích, sockets `m416.glb` & `awm.glb` + bolt-handle phải, edge cases không `NaN`, biến đổi `arms_root` cm/`rotY=π` và gập ngón bóp cò).
+- **Python Unit Tests (`python3 -m unittest discover -s model/tests -v`):** **28/28 PASS** (kiểm tra geometry, textures PBR, chuyển đổi Spec-Gloss → Metallic-Roughness `fps_arms.glb` & `awm.glb`, 12 model bản đồ Khu Quân Sự Cũ và chuẩn nhị phân glTF 2.0 `.glb` + `.bundle.js`).
+- **Node.js Server, Arm Rig, Graphics Quality & Loading Tests (`node --test server/tests/test_*.js server/tests/test_*.mjs`):** **24/24 PASS** (gồm LAN server, `arm_rig`, `military_map`, `graphics_quality` và `loading_manager`).
 - **Trình duyệt Headless (Chrome/Playwright):**
   - `verify_lan_v2_e2e.py` (**PASS**): 3-tab Lobby → Phòng chờ → Mật khẩu → Chat → Kick → Host Cài đặt → `STARTING` → `PLAYING` → Headshot → `ENDING` → `"Về phòng ngay"` → Reconnect tab → Solo Drone (`0` console/pageerror).
   - `verify_lan_v2_1_e2e.py` (**PASS**): Lưu cài đặt & gán phím `localStorage` qua reload, chuyển súng `1/2/3`, đổi súng hủy nạp giữ nguyên mag, `Alt+Tab`/`blur` không kẹt phím, `Shift+R` nạp khi chạy nhưng chặn bắn, phân biệt đội `30m` trong mưa + giả lập mù màu Chromium `protanopia`, nameplate chỉ hiện đồng đội, tư thế ngồi đồng bộ & hoạt ảnh nạp người chơi khác, Radar chấm địch khi bắn, chặn cheat `w.mag=99` trên console, khôi phục đúng `m416.mag = 26` khi reconnect giữa trận, ống ngắm AWM Sniper & tâm ngắm đổi đỏ (`0` console/pageerror).

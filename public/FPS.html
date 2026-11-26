@@ -214,9 +214,69 @@
       }
       #scoreboard h2 { margin: 0 0 8px; font-size: 16px; color: var(--amber); }
       #scoreboard th, #scoreboard td { padding: 6px 8px; text-align: left; border-bottom: 1px solid rgba(255, 255, 255, 0.08); font-size: 13px; }
+
+      /* Startup & Map-Switch Loading Overlay */
+      #loadingOverlay {
+        position: fixed; inset: 0; z-index: 100;
+        display: grid; place-items: center; padding: 20px;
+        background: radial-gradient(circle at 50% 34%, #132230 0%, #070c11 72%);
+      }
+      .loadingCard {
+        width: min(500px, 92vw);
+        background: rgba(11, 18, 26, 0.96);
+        border-left: 5px solid var(--amber);
+        border-top: 1px solid rgba(130, 155, 175, 0.22);
+        border-right: 1px solid rgba(130, 155, 175, 0.14);
+        border-bottom: 1px solid rgba(130, 155, 175, 0.14);
+        padding: 24px 26px;
+        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.65);
+      }
+      .loadingTag {
+        font-size: 11px; letter-spacing: 1.4px; font-weight: 700;
+        color: var(--amber); margin-bottom: 6px;
+      }
+      #loadingTitle {
+        margin: 0 0 14px; font-size: 22px; color: var(--ink);
+      }
+      .loadingMetaRow {
+        display: flex; justify-content: space-between; align-items: baseline;
+        gap: 12px; font-size: 13.5px; margin-bottom: 8px;
+      }
+      #loadingStatus { color: var(--ink); font-weight: 600; }
+      #loadingPercent { color: var(--amber); font-size: 15px; font-variant-numeric: tabular-nums; }
+      .loadingTrack {
+        width: 100%; height: 9px; border-radius: 999px; overflow: hidden;
+        background: rgba(130, 155, 175, 0.2);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+      }
+      #loadingBarFill {
+        height: 100%; width: 4%;
+        background: linear-gradient(90deg, #d9971a 0%, #f5c242 60%, #ffe08a 100%);
+        transition: width 0.12s ease-out;
+      }
+      #loadingDetail {
+        margin-top: 10px; font-size: 12.5px; color: var(--sub);
+        min-height: 18px;
+      }
     </style>
   </head>
   <body>
+    <!-- Màn hình Loading khởi động & chuyển bản đồ (hiển thị ngay từ 0ms) -->
+    <div id="loadingOverlay" role="status" aria-live="polite">
+      <div class="loadingCard">
+        <div class="loadingTag">CHIẾN TRƯỜNG 3D • WEBGL PBR</div>
+        <h2 id="loadingTitle">Đang khởi tạo chiến trường 3D</h2>
+        <div class="loadingMetaRow">
+          <span id="loadingStatus">Đang tải gói mô hình 3D...</span>
+          <b id="loadingPercent">0%</b>
+        </div>
+        <div class="loadingTrack">
+          <div id="loadingBarFill"></div>
+        </div>
+        <div id="loadingDetail">Đang giải mã tài nguyên — vui lòng chờ trong giây lát...</div>
+      </div>
+    </div>
+
     <!-- HUD trong trận -->
     <div id="hud">
       <div id="vignette"></div>
@@ -517,6 +577,27 @@
       const screenRoom = document.getElementById("screenRoom");
       const screenEnding = document.getElementById("screenEnding");
       const statusBadge = document.getElementById("netStatusBadge");
+      const loadingOverlay = document.getElementById("loadingOverlay");
+      const loadingTitle = document.getElementById("loadingTitle");
+      const loadingStatus = document.getElementById("loadingStatus");
+      const loadingPercent = document.getElementById("loadingPercent");
+      const loadingBarFill = document.getElementById("loadingBarFill");
+      const loadingDetail = document.getElementById("loadingDetail");
+
+      function updateLoadingOverlay(st) {
+        if (!loadingOverlay || !st) return;
+        if (st.done || st.visible === false) {
+          loadingOverlay.style.display = "none";
+          return;
+        }
+        loadingOverlay.style.display = "grid";
+        if (typeof st.title === "string" && st.title) loadingTitle.textContent = st.title;
+        if (typeof st.label === "string" && st.label) loadingStatus.textContent = st.label;
+        if (typeof st.detail === "string") loadingDetail.textContent = st.detail;
+        const pct = Math.max(0, Math.min(100, Number(st.percent) || 0));
+        loadingPercent.textContent = `${Math.round(pct)}%`;
+        loadingBarFill.style.width = `${pct.toFixed(1)}%`;
+      }
 
       function showScreen(name) {
         screenLobby.style.display = name === "lobby" ? "grid" : "none";
@@ -575,9 +656,27 @@
       const lobby = createLobbyController({
         net,
         getNickFn: getNick,
+        onSelectSoloMap: (mapId) => {
+          if (!game) return Promise.resolve();
+          return game.prepareMap(mapId, { showOverlay: true });
+        },
         onEnterSolo: (mapId) => {
-          showScreen("none");
-          game.startSolo(mapId);
+          // Step 2 & 4: Selected map is already cached & active -> 0ms synchronous start preserving Pointer Lock gesture!
+          if (game.isMapCached(mapId)) {
+            showScreen("none");
+            game.startSolo(mapId);
+            return;
+          }
+          game
+            .prepareMap(mapId, { showOverlay: true })
+            .then(() => {
+              showScreen("none");
+              game.startSolo(mapId);
+            })
+            .catch((err) => {
+              console.error("Failed to prepare solo map:", err);
+              showErrorBanner("Không thể tải bản đồ đã chọn, vui lòng thử lại.");
+            });
         },
         onError: showErrorBanner,
       });
@@ -591,6 +690,7 @@
         net,
         settings,
         input,
+        onLoadingUpdate: updateLoadingOverlay,
         onRequestExitToRoom: () => {
           game.stopEngine();
           showScreen("room");
@@ -629,6 +729,19 @@
           roomCtrl.stopEndTimer();
           game.stopEngine();
           showScreen("room");
+          // Preload & cache room's selected map while in WAITING/STARTING so MATCH_START enters in 0ms
+          if (room.map) {
+            const preloadRoomMap = () => {
+              const cur = roomCtrl.getRoom();
+              if (cur && cur.map && !game.isMapActiveAndReady(cur.map)) {
+                game.prepareMap(cur.map, { showOverlay: true }).catch((err) => {
+                  console.warn("Room map preload skipped:", err);
+                });
+              }
+            };
+            if (game.getState().isBootstrapped) preloadRoomMap();
+            else game.readyPromise.then(preloadRoomMap);
+          }
         }
       }
 

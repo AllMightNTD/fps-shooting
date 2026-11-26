@@ -9,6 +9,7 @@
 import { buildTriangleBVH, createMapCollision } from "/js/map_collision.js";
 import { MILITARY_COLLIDERS, MILITARY_LAYOUT } from "/js/military_map_data.js";
 import { QUALITY_PRESETS } from "/js/graphics_quality.js";
+import { yieldToUI } from "/js/loading_manager.js";
 
 // Rich weathered military tones (deep saturation without pastel washout or crushed blacks)
 const CONTAINER_PALETTE = [0x86382b, 0x47573d, 0x384e5e];
@@ -84,10 +85,11 @@ function sampleMilitaryPuddle(x, z) {
 const WORLD_MASK_HALF_X = 72.0;
 const WORLD_MASK_HALF_Z = 82.0;
 
-function buildWorldGroundMask(THREE) {
+async function buildWorldGroundMaskAsync(THREE, yieldFn) {
   const size = 512;
   const data = new Uint8Array(size * size * 4);
   for (let py = 0; py < size; py++) {
+    if (py > 0 && py % 128 === 0 && yieldFn) await yieldFn();
     const wz = ((py / (size - 1)) * 2 - 1) * WORLD_MASK_HALF_Z;
     for (let px = 0; px < size; px++) {
       const wx = ((px / (size - 1)) * 2 - 1) * WORLD_MASK_HALF_X;
@@ -189,8 +191,8 @@ function applyMilitaryHeightFog(mat, fogUniforms, extraHook = null, cacheTag = "
   };
 }
 
-function buildSkyDomeAndEnvMap(renderer, THREE) {
-  // 512x256 sculpted volumetric sky dome (4x faster synchronous load, visually smooth with linear filtering)
+async function buildSkyDomeAndEnvMapAsync(renderer, THREE, yieldFn) {
+  // 512x256 sculpted volumetric sky dome (4x faster load, visually smooth with linear filtering)
   const w = 512, h = 256;
   const canvas = document.createElement("canvas");
   canvas.width = w;
@@ -203,6 +205,7 @@ function buildSkyDomeAndEnvMap(renderer, THREE) {
   const sx = SUN_POS.x / sl, sy = SUN_POS.y / sl, sz = SUN_POS.z / sl;
 
   for (let py = 0; py < h; py++) {
+    if (py === 128 && yieldFn) await yieldFn();
     const v = py / (h - 1);
     const phi = v * Math.PI;
     const sinP = Math.sin(phi), cosP = Math.cos(phi);
@@ -272,6 +275,8 @@ function buildSkyDomeAndEnvMap(renderer, THREE) {
   const skyMesh = new THREE.Mesh(skyGeo, skyMat);
   skyMesh.name = "military_sky_dome";
 
+  if (yieldFn) await yieldFn();
+
   // Slow-drifting upper wispy cloud deck
   const cw = 256, ch = 128;
   const cCanvas = document.createElement("canvas");
@@ -313,6 +318,8 @@ function buildSkyDomeAndEnvMap(renderer, THREE) {
   );
   cloudMesh.name = "military_drifting_clouds";
 
+  if (yieldFn) await yieldFn();
+
   // Balanced PMREM IBL
   const es = new THREE.Scene();
   const envSphere = new THREE.Mesh(
@@ -332,7 +339,7 @@ function buildSkyDomeAndEnvMap(renderer, THREE) {
   envSphere.geometry.dispose();
   sunBounce.geometry.dispose();
 
-  return { skyMesh, cloudMesh, envMap: rt.texture };
+  return { skyMesh, cloudMesh, envMap: rt.texture, skyTex, driftTex };
 }
 
 function buildGodRaysDustAndFlare(THREE) {
@@ -465,7 +472,7 @@ function buildGodRaysDustAndFlare(THREE) {
   };
 }
 
-function buildConcreteGroundTextures(THREE, maxAniso) {
+async function buildConcreteGroundTexturesAsync(THREE, maxAniso, yieldFn) {
   // 512x512 crisp seamless aggregate tile (2.3x faster load than 768x768, crisp up close via detailNormalMap)
   const size = 512;
   const makeTex = (fn, repX, repY, isColor = false) => {
@@ -486,6 +493,7 @@ function buildConcreteGroundTextures(THREE, maxAniso) {
   const gravelTint = new Float32Array(size * size);
 
   for (let y = 0; y < size; y++) {
+    if (y === 256 && yieldFn) await yieldFn();
     const v = y / size;
     for (let x = 0; x < size; x++) {
       const u = x / size;
@@ -512,6 +520,7 @@ function buildConcreteGroundTextures(THREE, maxAniso) {
       heights[idx] = 0.24 * n1 + 0.26 * n2 + 0.28 * n3 + 0.22 * n4 + pebble * 0.12 - jSeam * 0.22;
     }
   }
+  if (yieldFn) await yieldFn();
 
   const albedo = makeTex((g, w, h) => {
     const im = g.createImageData(w, h);
@@ -532,6 +541,7 @@ function buildConcreteGroundTextures(THREE, maxAniso) {
     }
     g.putImageData(im, 0, 0);
   }, 16, 20, true);
+  if (yieldFn) await yieldFn();
 
   const normal = makeTex((g, w, h) => {
     const im = g.createImageData(w, h);
@@ -551,6 +561,7 @@ function buildConcreteGroundTextures(THREE, maxAniso) {
     }
     g.putImageData(im, 0, 0);
   }, 16, 20, false);
+  if (yieldFn) await yieldFn();
 
   const roughness = makeTex((g, w, h) => {
     const im = g.createImageData(w, h);
@@ -565,8 +576,9 @@ function buildConcreteGroundTextures(THREE, maxAniso) {
     }
     g.putImageData(im, 0, 0);
   }, 16, 20, false);
+  if (yieldFn) await yieldFn();
 
-  const worldMask = buildWorldGroundMask(THREE);
+  const worldMask = await buildWorldGroundMaskAsync(THREE, yieldFn);
   return { albedo, normal, roughness, worldMask };
 }
 
@@ -995,7 +1007,7 @@ function buildTacticalClutter(THREE, layout, envMap, fogUniforms, windUniform, w
   return clutterGroup;
 }
 
-function buildBackgroundTreesAndMountains(THREE, layout, envMap, fogUniforms, windUniform, windScaleUniform) {
+async function buildBackgroundTreesAndMountainsAsync(THREE, layout, envMap, fogUniforms, windUniform, windScaleUniform, yieldFn) {
   const bgGroup = new THREE.Group();
   bgGroup.name = "military_background_horizon";
   bgGroup.matrixAutoUpdate = false;
@@ -1239,7 +1251,9 @@ function buildBackgroundTreesAndMountains(THREE, layout, envMap, fogUniforms, wi
   applyMilitaryHeightFog(trunkMat, fogUniforms, null, "mil_hfog_std");
 
   const broadleafTex = buildBroadleafTex();
+  if (yieldFn) await yieldFn();
   const pineTex = buildPineTex();
+  if (yieldFn) await yieldFn();
 
   const makeFoliageMat = (mapTex) => {
     const m = new THREE.MeshStandardMaterial({
@@ -1645,11 +1659,29 @@ export function createMilitaryMapLoader({ renderer, THREE }) {
     return prom;
   }
 
-  async function buildMilitaryScene({ scene, envMapTargetList = [], initialPreset = QUALITY_PRESETS.high }) {
+  async function buildMilitaryScene({
+    scene,
+    envMapTargetList = [],
+    initialPreset = QUALITY_PRESETS.high,
+    onProgress = null,
+    yieldFn = yieldToUI,
+    deferActivate = false,
+  }) {
+    const stepYield = typeof yieldFn === "function" ? yieldFn : yieldToUI;
+    const emit = (fraction, detail = "") => {
+      if (typeof onProgress === "function") onProgress(fraction, detail);
+    };
+
     const hwMaxAniso = Math.min(16, renderer.capabilities.getMaxAnisotropy ? renderer.capabilities.getMaxAnisotropy() : 16);
     const startAniso = Math.min(hwMaxAniso, initialPreset.maxAnisotropy || 16);
-    if (!concreteTexCache) concreteTexCache = buildConcreteGroundTextures(THREE, startAniso);
-    if (!skyEnvCache) skyEnvCache = buildSkyDomeAndEnvMap(renderer, THREE);
+
+    emit(0.02, "Sinh kết cấu mặt đất & vũng nước Khu Quân Sự...");
+    if (!concreteTexCache) concreteTexCache = await buildConcreteGroundTexturesAsync(THREE, startAniso, stepYield);
+    await stepYield();
+
+    emit(0.18, "Dựng bầu trời & bản đồ ánh sáng PMREM...");
+    if (!skyEnvCache) skyEnvCache = await buildSkyDomeAndEnvMapAsync(renderer, THREE, stepYield);
+    await stepYield();
 
     const assetNames = [
       "container",
@@ -1666,21 +1698,26 @@ export function createMilitaryMapLoader({ renderer, THREE }) {
       "barbed_wire",
     ];
 
-    const [{ layout, colliders }, protos] = await Promise.all([
-      loadSharedJson(),
-      Promise.all(assetNames.map(loadAssetProto)).then((arr) => {
-        const map = {};
-        assetNames.forEach((n, idx) => { map[n] = arr[idx]; });
-        return map;
-      }),
-    ]);
+    const { layout, colliders } = await loadSharedJson();
+    const protos = {};
+    for (let i = 0; i < assetNames.length; i++) {
+      const name = assetNames[i];
+      emit(
+        0.24 + (i / assetNames.length) * 0.46,
+        `Nạp mô hình bản đồ (${i + 1}/${assetNames.length}): ${name}`,
+      );
+      protos[name] = await loadAssetProto(name);
+      await stepYield();
+    }
 
+    emit(0.72, "Dựng khí quyển & mặt sân chiến đấu...");
     const fogUniforms = createHeightFogUniforms(THREE);
     const windUniform = { value: 0.0 };
     const windScaleUniform = { value: 1.0 };
 
     const group = new THREE.Group();
     group.name = "MilitaryMapGroup";
+    if (deferActivate) group.visible = false;
     group.add(skyEnvCache.skyMesh, skyEnvCache.cloudMesh);
 
     const { rayGroup, shaftGroup, sunFlare, dustPoints, update: updateDust } = buildGodRaysDustAndFlare(THREE);
@@ -1697,6 +1734,7 @@ export function createMilitaryMapLoader({ renderer, THREE }) {
       envMap: skyEnvCache.envMap,
       envMapIntensity: 0.46,
     });
+    groundMat.userData.extraTextures = [concreteTexCache.worldMask];
     applyMilitaryHeightFog(
       groundMat,
       fogUniforms,
@@ -1772,7 +1810,9 @@ export function createMilitaryMapLoader({ renderer, THREE }) {
     groundMesh.receiveShadow = true;
     groundMesh.name = "military_ground";
     group.add(groundMesh);
+    await stepYield();
 
+    emit(0.78, "Bố trí cỏ dại, gạch vụn & bóng tiếp xúc...");
     const { grassInst, maxGrassCount, debInst, maxDebrisCount } = buildPerimeterGrassAndDebris(
       THREE,
       layout,
@@ -1782,16 +1822,25 @@ export function createMilitaryMapLoader({ renderer, THREE }) {
     );
     group.add(grassInst, debInst);
     group.add(buildContactShadows(THREE, layout));
+    await stepYield();
+
+    emit(0.83, "Dựng đạo cụ chiến thuật & rừng núi hậu cảnh...");
     group.add(buildTacticalClutter(THREE, layout, skyEnvCache.envMap, fogUniforms, windUniform, windScaleUniform));
-    const { bgGroup, treeControls } = buildBackgroundTreesAndMountains(
+    await stepYield();
+
+    const { bgGroup, treeControls } = await buildBackgroundTreesAndMountainsAsync(
       THREE,
       layout,
       skyEnvCache.envMap,
       fogUniforms,
       windUniform,
       windScaleUniform,
+      stepYield,
     );
     group.add(bgGroup);
+    await stepYield();
+
+    emit(0.92, "Ghép InstancedMesh & cấu trúc va chạm BVH...");
 
     // Hydrate prototype materials sharing ONE compiled shader key ("mil_hfog_std") -> ~7x fewer WebGL programs!
     const hydratedMats = new Map();
@@ -2079,19 +2128,33 @@ export function createMilitaryMapLoader({ renderer, THREE }) {
     groundMesh.matrixAutoUpdate = false;
     groundMesh.updateMatrix();
     scene.add(group);
-    scene.background = new THREE.Color(FOG_HORIZON_HEX);
-    scene.fog = new THREE.FogExp2(FOG_HORIZON_HEX, curFogDensity);
+    if (!deferActivate) {
+      scene.background = new THREE.Color(FOG_HORIZON_HEX);
+      scene.fog = new THREE.FogExp2(FOG_HORIZON_HEX, curFogDensity);
 
-    for (const target of envMapTargetList) {
-      if (target) {
-        target.traverse((o) => {
-          if (o.isMesh && o.material && "envMap" in o.material) {
-            o.material.envMap = skyEnvCache.envMap;
-            o.material.needsUpdate = true;
-          }
-        });
+      for (const target of envMapTargetList) {
+        if (target) {
+          target.traverse((o) => {
+            if (o.isMesh && o.material && "envMap" in o.material) {
+              o.material.envMap = skyEnvCache.envMap;
+              o.material.needsUpdate = true;
+            }
+          });
+        }
       }
     }
+
+    const extraTextures = [
+      concreteTexCache.albedo,
+      concreteTexCache.normal,
+      concreteTexCache.roughness,
+      concreteTexCache.worldMask,
+      skyEnvCache.envMap,
+      skyEnvCache.skyTex,
+      skyEnvCache.driftTex,
+      ...managedTextures,
+    ];
+    emit(1.0, "Hoàn tất dựng bản đồ Khu Quân Sự Cũ");
 
     return {
       mapId: "military",
@@ -2102,6 +2165,7 @@ export function createMilitaryMapLoader({ renderer, THREE }) {
       colliders,
       collision,
       envMap: skyEnvCache.envMap,
+      extraTextures,
       fogColor: FOG_HORIZON_HEX,
       get fogDensity() { return curFogDensity; },
       applyQualityPreset,
