@@ -27,6 +27,16 @@ export function createLobbyController({ net, getNickFn, onEnterSolo, onError }) 
   const shareBanner = document.getElementById("lanShare");
   const shareText = document.getElementById("lanShareText");
   const copyBtn = document.getElementById("btnCopyUrl");
+  const soloMapEl = document.getElementById("soloMapSelect");
+  const createMapEl = document.getElementById("createMap");
+
+  try {
+    const qpMap = new URLSearchParams(location.search).get("map");
+    if (qpMap === "harbor" || qpMap === "military") {
+      if (soloMapEl) soloMapEl.value = qpMap;
+      if (createMapEl) createMapEl.value = qpMap;
+    }
+  } catch {}
 
   let pendingJoinRoomId = null;
   let currentRooms = [];
@@ -58,7 +68,7 @@ export function createLobbyController({ net, getNickFn, onEnterSolo, onError }) 
       const tr = document.createElement("tr");
       const nameTd = makeEl("td", "", (r.hasPassword ? "[Khóa] " : "") + r.name);
       const modeTd = makeEl("td", "", r.mode === "FFA" ? "Đấu Đơn (FFA)" : "Đấu Đội (TDM)");
-      const mapTd = makeEl("td", "", r.map === "harbor" ? "Bến Cảng Mưa" : r.map);
+      const mapTd = makeEl("td", "", r.map === "harbor" ? "Bến Cảng Mưa" : r.map === "military" ? "Khu Quân Sự Cũ" : r.map);
       const countTd = makeEl("td", "", `${r.playerCount}/${r.maxPlayers}`);
       const stTd = makeEl("td", "", STATE_LABEL[r.state] || r.state);
       stTd.style.color = r.state === "WAITING" ? "#4ec3b0" : "#f0b429";
@@ -94,7 +104,8 @@ export function createLobbyController({ net, getNickFn, onEnterSolo, onError }) 
       onError("Chưa kết nối được tới máy chủ LAN.");
       return;
     }
-    const roomName = document.getElementById("createRoomName").value.trim() || "Phòng Bến Cảng";
+    const roomName = document.getElementById("createRoomName").value.trim() || "Phòng Khu Quân Sự";
+    const mapId = createMapEl ? createMapEl.value : "military";
     const mode = document.getElementById("createMode").value;
     const killLimit = Number(document.getElementById("createKills").value) || 30;
     const timeLimit = Number(document.getElementById("createTime").value) || 600;
@@ -106,7 +117,7 @@ export function createLobbyController({ net, getNickFn, onEnterSolo, onError }) 
       playerName: getNickFn(),
       name: roomName,
       mode,
-      map: "harbor",
+      map: mapId,
       killLimit,
       timeLimit,
       maxPlayers,
@@ -146,7 +157,7 @@ export function createLobbyController({ net, getNickFn, onEnterSolo, onError }) 
     pwBox.style.display = "none";
   };
 
-  document.getElementById("btnSoloMode").onclick = () => onEnterSolo();
+  document.getElementById("btnSoloMode").onclick = () => onEnterSolo(soloMapEl ? soloMapEl.value : "military");
 
   net.on(MSG.WELCOME, (msg) => renderRooms(msg.rooms));
   net.on(MSG.ROOM_LIST, (msg) => renderRooms(msg.rooms));

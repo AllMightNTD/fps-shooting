@@ -7,6 +7,7 @@
  */
 
 import { MSG, sanitizeText } from "/js/protocol.js";
+import { createMilitaryMapLoader } from "/js/map_loader.js";
 import {
   buildSocketPose,
   createSkinnedArmsController,
@@ -68,15 +69,16 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
   R.setPixelRatio(Math.min(devicePixelRatio, 2));
   R.setSize(innerWidth, innerHeight);
   R.shadowMap.enabled = true;
+  R.shadowMap.type = THREE.PCFSoftShadowMap;
   R.toneMapping = THREE.ACESFilmicToneMapping;
   R.toneMappingExposure = 1.08;
   document.body.prepend(R.domElement);
 
   const S = new THREE.Scene();
-  S.background = new THREE.Color(0x070d14);
-  S.fog = new THREE.FogExp2(0x070d14, 0.03);
+  S.background = new THREE.Color(0x050a11);
+  S.fog = new THREE.FogExp2(0x050a11, 0.025);
 
-  const cam = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.03, 200);
+  const cam = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.03, 380);
   cam.rotation.order = "YXZ";
   S.add(cam);
 
@@ -97,17 +99,21 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
   });
 
   // ---------- Lights & Lamp halos ----------
-  // R3: Warm-vs-cool night contrast (amber streetlamp tint vs cool moonlight & deep wet ground bounce)
-  const hemi = new THREE.HemisphereLight(0x364d68, 0x04070b, 0.34);
+  const harborGroup = new THREE.Group();
+  harborGroup.name = "HarborMapGroup";
+  S.add(harborGroup);
+
+  // R3: Warm-vs-cool night contrast (deep cold midnight ambient vs rich warm sodium streetlamps)
+  const hemi = new THREE.HemisphereLight(0x28456b, 0x030509, 0.28);
   S.add(hemi);
-  const moon = new THREE.DirectionalLight(0x6c8eb4, 0.38);
+  const moon = new THREE.DirectionalLight(0x5b82b8, 0.38);
   moon.position.set(-30, 50, 20);
   moon.castShadow = true;
   moon.shadow.mapSize.set(2048, 2048);
   Object.assign(moon.shadow.camera, { left: -50, right: 50, top: 50, bottom: -50, far: 140 });
   S.add(moon);
   // Warm amber fill from lamp height to separate foreground gun/arms from the cool night backdrop
-  const warmFill = new THREE.DirectionalLight(0xffbd68, 0.22);
+  const warmFill = new THREE.DirectionalLight(0xffb45c, 0.20);
   warmFill.position.set(12, 8, -6);
   S.add(warmFill);
 
@@ -117,21 +123,21 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     c.width = c.height = 128;
     const g = c.getContext("2d");
     const gr = g.createRadialGradient(64, 64, 0, 64, 64, 64);
-    gr.addColorStop(0, "rgba(255,218,152,.95)");
-    gr.addColorStop(0.18, "rgba(255,196,110,.45)");
-    gr.addColorStop(0.55, "rgba(200,145,65,.12)");
+    gr.addColorStop(0, "rgba(255,208,132,.95)");
+    gr.addColorStop(0.20, "rgba(255,176,84,.48)");
+    gr.addColorStop(0.55, "rgba(195,120,40,.14)");
     gr.addColorStop(1, "rgba(0,0,0,0)");
     g.fillStyle = gr;
     g.fillRect(0, 0, 128, 128);
     return new THREE.CanvasTexture(c);
   })();
 
-  // R3: Warm amber harbor lamps (sodium streetlamp feel) vs cool ambient
+  // R3: Warm amber harbor lamps (sodium streetlamp feel) vs deep cold night shadows
   const lamps = [];
   for (const [x, z] of [[-6.5, -6.5], [6.5, -6.5], [-6.5, 6.5], [6.5, 6.5]]) {
-    const L = new THREE.PointLight(0xffd494, 1.85, 36, 1.45);
+    const L = new THREE.PointLight(0xffa94d, 1.55, 30, 1.75);
     L.position.set(x, 6.2, z);
-    S.add(L);
+    harborGroup.add(L);
     lamps.push(L);
     const pole = new THREE.Mesh(
       new THREE.CylinderGeometry(0.07, 0.09, 6.2, 8),
@@ -140,7 +146,7 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     pole.position.set(x, 3.1, z);
     const bulb = new THREE.Mesh(
       new THREE.SphereGeometry(0.14, 8, 6),
-      new THREE.MeshBasicMaterial({ color: 0xffe8c8 }),
+      new THREE.MeshBasicMaterial({ color: 0xffe4be }),
     );
     bulb.position.set(x, 6.2, z);
     const halo = new THREE.Sprite(
@@ -149,14 +155,15 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
         blending: THREE.AdditiveBlending,
         depthWrite: false,
         transparent: true,
-        opacity: 0.85,
+        opacity: 0.90,
       }),
     );
     halo.position.set(x, 6.2, z);
-    halo.scale.set(7.5, 7.5, 1);
-    S.add(pole, bulb, halo);
+    halo.scale.set(7.8, 7.8, 1);
+    harborGroup.add(pole, bulb, halo);
   }
 
+  const maxAniso = Math.min(16, R.capabilities.getMaxAnisotropy ? R.capabilities.getMaxAnisotropy() : 16);
   function tex(w, h, fn, rep) {
     const c = document.createElement("canvas");
     c.width = w;
@@ -165,13 +172,13 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     const t = new THREE.CanvasTexture(c);
     t.wrapS = t.wrapT = THREE.RepeatWrapping;
     if (rep) t.repeat.set(rep, rep);
-    t.anisotropy = 4;
+    t.anisotropy = maxAniso;
     return t;
   }
 
-  // ---------- R3: Seamless wet asphalt harbor floor (2x2 wide organic puddles + 36x36 close-up pebble detail normal) ----------
+  // ---------- R3: Crisp wet asphalt harbor floor (organic puddles + 5mm aggregate & hairline cracks via onBeforeCompile) ----------
   const GROUND_TEX_SIZE = 512;
-  const GROUND_REPEAT = 2;
+  const GROUND_REPEAT = 4;
   const puddleMask = new Float32Array(GROUND_TEX_SIZE * GROUND_TEX_SIZE);
   // Exact periodic toroidal value noise in [0, 1] (zero seam at x=0/w-1 or y=0/h-1)
   function tileNoise(nx, ny, period, seedOff) {
@@ -189,25 +196,28 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     return (a * (1 - ux) + b * ux) * (1 - uy) + (c * (1 - ux) + d * ux) * uy;
   }
 
-  // Generate organic puddles via exact toroidal rotated-ellipse smoothstep fields (zero hard edges or wrap jumps)
+  // Generate irregular multi-lobe organic puddles with natural wet-to-damp shorelines (kept clear of tile wrap boundary)
   const puddleDefs = [];
-  for (let i = 0; i < 16; i++) {
+  for (let i = 0; i < 18; i++) {
     const a = sr() * Math.PI;
     puddleDefs.push({
-      cx: sr(),
-      cy: sr(),
-      rx: 0.08 + sr() * 0.14,
-      ry: 0.05 + sr() * 0.09,
+      cx: 0.22 + sr() * 0.56,
+      cy: 0.22 + sr() * 0.56,
+      rx: 0.06 + sr() * 0.07,
+      ry: 0.04 + sr() * 0.05,
       cs: Math.cos(a),
       sn: Math.sin(a),
-      strength: 0.65 + sr() * 0.35,
+      strength: 0.80 + sr() * 0.20,
     });
   }
   for (let y = 0; y < GROUND_TEX_SIZE; y++) {
     const py = y / GROUND_TEX_SIZE;
     for (let x = 0; x < GROUND_TEX_SIZE; x++) {
       const px = x / GROUND_TEX_SIZE;
-      const edgeWarp = (tileNoise(px * 10, py * 10, 10, 17) - 0.5) * 0.16;
+      const edgeWarp =
+        (tileNoise(px * 8, py * 8, 8, 17) - 0.5) * 0.42 +
+        (tileNoise(px * 22, py * 22, 22, 43) - 0.5) * 0.18 +
+        (tileNoise(px * 52, py * 52, 52, 79) - 0.5) * 0.07;
       let wMax = 0;
       for (let i = 0; i < puddleDefs.length; i++) {
         const p = puddleDefs[i];
@@ -218,13 +228,13 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
         const u = (dx * p.cs + dy * p.sn) / p.rx;
         const v = (-dx * p.sn + dy * p.cs) / p.ry;
         const d = Math.sqrt(u * u + v * v) + edgeWarp;
-        if (d < 1.0) {
-          const t = 1 - Math.max(0, d);
-          const s = t * t * (3 - 2 * t) * p.strength;
+        if (d < 0.96) {
+          const tShore = Math.max(0, Math.min(1, (0.96 - d) / 0.20));
+          const s = tShore * tShore * (3 - 2 * tShore) * p.strength;
           if (s > wMax) wMax = s;
         }
       }
-      puddleMask[y * GROUND_TEX_SIZE + x] = Math.max(0, Math.min(1, wMax));
+      puddleMask[y * GROUND_TEX_SIZE + x] = wMax;
     }
   }
 
@@ -235,16 +245,16 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       for (let x = 0; x < w; x++) {
         const v = x / w;
         const idx = y * w + x;
-        const nMacro = tileNoise(v * 6, u * 6, 6, 31);
-        const nMid = tileNoise(v * 24, u * 24, 24, 73);
-        const nFine = tileNoise(v * 96, u * 96, 96, 137);
+        const nMacro = tileNoise(v * 8, u * 8, 8, 31);
+        const nMid = tileNoise(v * 32, u * 32, 32, 73);
+        const nFine = tileNoise(v * 128, u * 128, 128, 137);
         const wet = puddleMask[idx];
-        const pebble = 0.5 * nMid + 0.5 * nFine;
-        // Dark wet harbor asphalt (#090c11..#161b23) with deeper mirror puddles (#04060a)
-        const base = (8 + nMacro * 8 + pebble * 11) * (1 - wet * 0.62);
-        d[idx * 4] = Math.max(3, Math.min(255, Math.round(base * 0.92)));
-        d[idx * 4 + 1] = Math.max(4, Math.min(255, Math.round(base * 1.02)));
-        d[idx * 4 + 2] = Math.max(6, Math.min(255, Math.round(base * 1.16)));
+        const pebble = 0.40 * nMid + 0.60 * nFine;
+        // Deep charcoal wet asphalt (#080a0e..#11151b) subtly darker in mirror puddles (#040609)
+        const base = (7.5 + nMacro * 4.5 + pebble * 8.5) * (1 - wet * 0.42);
+        d[idx * 4] = Math.max(2, Math.min(255, Math.round(base * 0.90)));
+        d[idx * 4 + 1] = Math.max(3, Math.min(255, Math.round(base * 0.98)));
+        d[idx * 4 + 2] = Math.max(4, Math.min(255, Math.round(base * 1.12)));
         d[idx * 4 + 3] = 255;
       }
     }
@@ -259,10 +269,10 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       for (let x = 0; x < w; x++) {
         const v = x / w;
         const idx = y * w + x;
-        const nFine = tileNoise(v * 48, u * 48, 48, 211);
-        const nMid = tileNoise(v * 20, u * 20, 20, 97);
-        const smoothCalm = 1 - Math.min(1, puddleMask[idx] * 1.5);
-        hMap[idx] = (0.60 * nFine + 0.40 * nMid) * smoothCalm;
+        const nFine = tileNoise(v * 96, u * 96, 96, 211);
+        const nMid = tileNoise(v * 32, u * 32, 32, 97);
+        const smoothCalm = 1 - Math.min(1, puddleMask[idx] * 1.15);
+        hMap[idx] = (0.62 * nFine + 0.38 * nMid) * smoothCalm;
       }
     }
     for (let y = 0; y < h; y++) {
@@ -270,10 +280,10 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       for (let x = 0; x < w; x++) {
         const xm = (x - 1 + w) % w, xp = (x + 1) % w;
         const idx = y * w + x;
-        const dx = (hMap[y * w + xp] - hMap[y * w + xm]) * 1.1;
-        const dy = (hMap[yp * w + x] - hMap[ym * w + x]) * 1.1;
-        d[idx * 4] = Math.max(0, Math.min(255, Math.round(128 - dx * 45)));
-        d[idx * 4 + 1] = Math.max(0, Math.min(255, Math.round(128 - dy * 45)));
+        const dx = (hMap[y * w + xp] - hMap[y * w + xm]) * 1.15;
+        const dy = (hMap[yp * w + x] - hMap[ym * w + x]) * 1.15;
+        d[idx * 4] = Math.max(0, Math.min(255, Math.round(128 - dx * 48)));
+        d[idx * 4 + 1] = Math.max(0, Math.min(255, Math.round(128 - dy * 48)));
         d[idx * 4 + 2] = 255;
         d[idx * 4 + 3] = 255;
       }
@@ -288,11 +298,11 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       for (let x = 0; x < w; x++) {
         const v = x / w;
         const idx = y * w + x;
-        const dampVar = tileNoise(v * 12, u * 12, 12, 313);
-        const wet = Math.pow(Math.min(1, puddleMask[idx] * 1.35), 1.35);
-        // Mirror-smooth puddles (~0.06) vs textured damp asphalt (~0.68..0.84) with soft transition
-        const rough = (0.68 + 0.16 * dampVar) * (1 - wet) + 0.06 * wet;
-        const r = Math.max(10, Math.min(235, Math.round(rough * 255)));
+        const dampVar = tileNoise(v * 18, u * 18, 18, 313);
+        const wet = puddleMask[idx];
+        // Textured damp asphalt (~0.56..0.78) that sparkles on stone chips vs mirror puddles (~0.035)
+        const rough = (0.56 + 0.22 * dampVar) * (1 - wet) + 0.035 * wet;
+        const r = Math.max(8, Math.min(225, Math.round(rough * 255)));
         d[idx * 4] = d[idx * 4 + 1] = d[idx * 4 + 2] = r;
         d[idx * 4 + 3] = 255;
       }
@@ -300,17 +310,28 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     g.putImageData(im, 0, 0);
   }, GROUND_REPEAT);
 
-  // Seamless 512x512 high-frequency asphalt pebble normal map (tiled 18x -> 36x36 over floor via onBeforeCompile; min_dimension=512 & edge diff <= 5)
+  // Seamless 512x512 crisp asphalt stone-chip & hairline crack detail map (100% periodic mod w/h; R/G=normal, B=grit/crack)
   const asphaltDetailNormal = tex(512, 512, (g, w, h) => {
     const im = g.createImageData(w, h), d = im.data;
     const hMap = new Float32Array(w * h);
+    const detCrack = new Float32Array(w * h);
     for (let y = 0; y < h; y++) {
       const u = y / h;
       for (let x = 0; x < w; x++) {
         const v = x / w;
-        const g1 = tileNoise(v * 48, u * 48, 48, 509);
-        const g2 = tileNoise(v * 24, u * 24, 24, 617);
-        hMap[y * w + x] = 0.65 * g1 + 0.35 * g2;
+        const g1 = tileNoise(v * 64, u * 64, 64, 509);
+        const g2 = tileNoise(v * 32, u * 32, 32, 617);
+        const g3 = tileNoise(v * 16, u * 16, 16, 733);
+        hMap[y * w + x] = Math.pow(g1, 1.35) * 0.55 + g2 * 0.30 + g3 * 0.15;
+
+        // Exact periodic ridged-noise hairline cracks (smoothly continuous across x=0/511 and y=0/511)
+        const wx = (tileNoise(v * 4, u * 4, 4, 811) - 0.5) * 0.32;
+        const wy = (tileNoise(v * 4, u * 4, 4, 823) - 0.5) * 0.32;
+        const r1 = Math.abs(tileNoise((v + wx) * 3, (u + wy) * 3, 3, 911) - 0.5);
+        const r2 = Math.abs(tileNoise((v - wy * 0.8) * 4, (u + wx * 0.8) * 4, 4, 977) - 0.5);
+        const c1 = Math.max(0, 1 - r1 / 0.032);
+        const c2 = Math.max(0, 1 - r2 / 0.028);
+        detCrack[y * w + x] = Math.max(c1, c2);
       }
     }
     for (let y = 0; y < h; y++) {
@@ -318,11 +339,16 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       for (let x = 0; x < w; x++) {
         const xm = (x - 1 + w) % w, xp = (x + 1) % w;
         const idx = y * w + x;
-        const dx = (hMap[y * w + xp] - hMap[y * w + xm]) * 1.1;
-        const dy = (hMap[yp * w + x] - hMap[ym * w + x]) * 1.1;
-        d[idx * 4] = Math.max(0, Math.min(255, Math.round(128 - dx * 52)));
-        d[idx * 4 + 1] = Math.max(0, Math.min(255, Math.round(128 - dy * 52)));
-        d[idx * 4 + 2] = 255;
+        const hL = hMap[y * w + xm] - detCrack[y * w + xm] * 0.28;
+        const hR = hMap[y * w + xp] - detCrack[y * w + xp] * 0.28;
+        const hD = hMap[ym * w + x] - detCrack[ym * w + x] * 0.28;
+        const hU = hMap[yp * w + x] - detCrack[yp * w + x] * 0.28;
+        const dx = (hR - hL) * 1.85;
+        const dy = (hU - hD) * 1.85;
+        d[idx * 4] = Math.max(0, Math.min(255, Math.round(128 - dx * 60)));
+        d[idx * 4 + 1] = Math.max(0, Math.min(255, Math.round(128 - dy * 60)));
+        const gritVal = 150 + (hMap[idx] - 0.45) * 165 - detCrack[idx] * 95;
+        d[idx * 4 + 2] = Math.max(24, Math.min(255, Math.round(gritVal)));
         d[idx * 4 + 3] = 255;
       }
     }
@@ -332,13 +358,13 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
   const groundMat = new THREE.MeshStandardMaterial({
     map: gtex,
     normalMap: gNormTex,
-    normalScale: new THREE.Vector2(0.45, 0.45),
+    normalScale: new THREE.Vector2(0.65, 0.65),
     roughnessMap: gRoughTex,
     roughness: 1,
     metalness: 0.04,
-    envMapIntensity: 0.78,
+    envMapIntensity: 0.88,
   });
-  // Inject 36x36 detail pebble normal & micro-sparkle into Three.js r128 MeshStandardMaterial (single GPU pass)
+  // Inject multi-octave crisp stone-chip aggregate & hairline cracks into albedo, normal, and roughness on Three.js r128
   groundMat.onBeforeCompile = (shader) => {
     shader.uniforms.detailNormalMap = { value: asphaltDetailNormal };
     shader.fragmentShader = shader.fragmentShader
@@ -347,12 +373,16 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
         "#include <normalmap_pars_fragment>\nuniform sampler2D detailNormalMap;"
       )
       .replace(
+        "#include <map_fragment>",
+        "#include <map_fragment>\n\tfloat gritA = texture2D( detailNormalMap, vUv * 22.0 ).z;\n\tfloat gritB = texture2D( detailNormalMap, vUv * 57.0 ).z;\n\tfloat gritMix = mix(gritA, gritB, 0.48);\n\tdiffuseColor.rgb *= (0.62 + 0.68 * gritMix);"
+      )
+      .replace(
         "vec3 mapN = texture2D( normalMap, vUv ).xyz * 2.0 - 1.0;\n\tmapN.xy *= normalScale;",
-        "vec3 mapN = texture2D( normalMap, vUv ).xyz * 2.0 - 1.0;\n\tmapN.xy *= normalScale;\n\tvec3 detN = texture2D( detailNormalMap, vUv * 18.0 ).xyz * 2.0 - 1.0;\n\tfloat puddleCalm = clamp((0.36 - roughnessFactor) * 3.5, 0.0, 1.0);\n\tmapN.xy += detN.xy * 0.75 * (1.0 - puddleCalm);\n\tmapN = normalize(mapN);"
+        "vec3 mapN = texture2D( normalMap, vUv ).xyz * 2.0 - 1.0;\n\tmapN.xy *= normalScale;\n\tvec3 detN1 = texture2D( detailNormalMap, vUv * 22.0 ).xyz * 2.0 - 1.0;\n\tvec3 detN2 = texture2D( detailNormalMap, vUv * 57.0 ).xyz * 2.0 - 1.0;\n\tfloat puddleCalm = clamp((0.32 - roughnessFactor) * 4.5, 0.0, 1.0);\n\tmapN.xy += (detN1.xy * 1.75 + detN2.xy * 1.35) * (1.0 - puddleCalm);\n\tmapN = normalize(mapN);"
       )
       .replace(
         "#include <roughnessmap_fragment>",
-        "#include <roughnessmap_fragment>\n\tvec3 detR = texture2D( detailNormalMap, vUv * 18.0 ).xyz * 2.0 - 1.0;\n\tfloat rCalm = clamp((0.36 - roughnessFactor) * 3.5, 0.0, 1.0);\n\troughnessFactor = clamp(roughnessFactor - abs(detR.x + detR.y) * 0.14 * (1.0 - rCalm), 0.04, 0.96);"
+        "#include <roughnessmap_fragment>\n\tvec3 detR = texture2D( detailNormalMap, vUv * 22.0 ).xyz * 2.0 - 1.0;\n\tfloat rCalm = clamp((0.32 - roughnessFactor) * 4.5, 0.0, 1.0);\n\troughnessFactor = clamp(roughnessFactor - abs(detR.x + detR.y) * 0.24 * (1.0 - rCalm), 0.035, 0.94);"
       );
   };
 
@@ -362,7 +392,7 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
   );
   ground.rotation.x = -Math.PI / 2;
   ground.receiveShadow = true;
-  S.add(ground);
+  harborGroup.add(ground);
 
   const solid = [];
   const cols = [];
@@ -413,7 +443,8 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     });
   }
 
-  const cMats = [0x8c3a2b, 0x2c5878, 0x3b6a4a, 0xb08428, 0x6a7077, 0x6e3f55].map((c) => {
+  const cPalette = [0x8c3a2b, 0x2c5878, 0x3b6a4a, 0xb08428, 0x6a7077, 0x6e3f55];
+  const cMats = cPalette.map((c) => {
     const col = "#" + c.toString(16).padStart(6, "0");
     const mk = (k) => {
       const t = cTex(col, k);
@@ -429,18 +460,18 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     return [mk(1), mk(2), mk(3), new THREE.MeshStandardMaterial({ color: 0x1b1d1f, roughness: 0.9 }), side, side];
   });
 
-  // R3: soft contact-shadow decal under each container foot (blurred dark rectangle)
+  // R3: soft contact-shadow decal + blurred wet-asphalt reflection under each container foot
   const contactShadowTex = (() => {
     const c = document.createElement("canvas");
     c.width = 256;
     c.height = 128;
     const g = c.getContext("2d");
-    g.filter = "blur(8px)";
-    g.fillStyle = "rgba(0,0,0,0.98)";
+    g.filter = "blur(9px)";
+    g.fillStyle = "rgba(0,0,0,0.92)";
     g.fillRect(14, 12, 228, 104);
     g.filter = "blur(2px)";
     g.fillStyle = "rgba(0,0,0,1.0)";
-    g.fillRect(20, 18, 216, 92);
+    g.fillRect(26, 22, 204, 84);
     return new THREE.CanvasTexture(c);
   })();
   const contactShadowGeo = new THREE.PlaneGeometry(8.8, 5.0);
@@ -454,6 +485,31 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     polygonOffsetUnits: -2,
   });
 
+  // Soft wet-asphalt reflection streak under containers (single InstancedMesh draw call)
+  const containerReflTex = (() => {
+    const c = document.createElement("canvas");
+    c.width = 128;
+    c.height = 128;
+    const g = c.getContext("2d");
+    const gr = g.createRadialGradient(64, 64, 12, 64, 64, 62);
+    gr.addColorStop(0.0, "rgba(255,255,255,0.0)");
+    gr.addColorStop(0.42, "rgba(255,255,255,0.34)");
+    gr.addColorStop(0.75, "rgba(255,255,255,0.16)");
+    gr.addColorStop(1.0, "rgba(255,255,255,0.0)");
+    g.fillStyle = gr;
+    g.fillRect(0, 0, 128, 128);
+    return new THREE.CanvasTexture(c);
+  })();
+  const containerReflGeo = new THREE.PlaneGeometry(8.2, 5.2);
+  containerReflGeo.rotateX(-Math.PI / 2);
+  const containerReflMat = new THREE.MeshBasicMaterial({
+    map: containerReflTex,
+    transparent: true,
+    opacity: 0.44,
+    depthWrite: false,
+  });
+  const containerReflItems = [];
+
   const cGeo = new THREE.BoxGeometry(6.1, 2.6, 2.44);
   let mapSeed = 11042026;
   const msr = () => (mapSeed = (mapSeed * 16807) % 2147483647) / 2147483647;
@@ -463,18 +519,19 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       const x = gx * 13 + (msr() - 0.5) * 3;
       const z = gz * 13 + (msr() - 0.5) * 3;
       const rot = msr() < 0.5;
-      const mat = cMats[(msr() * cMats.length) | 0];
+      const cIdx = (msr() * cMats.length) | 0;
+      const mat = cMats[cIdx];
       const stacked = msr() < 0.3;
       const m = new THREE.Mesh(cGeo, mat);
-      m.position.set(x, 1.29, z);
+      m.position.set(x, 1.285, z);
       m.rotation.y = rot ? Math.PI / 2 : 0;
       m.castShadow = m.receiveShadow = true;
-      S.add(m);
+      harborGroup.add(m);
       solid.push(m);
       if (stacked) {
         const t = m.clone();
-        t.position.y = 3.89;
-        S.add(t);
+        t.position.y = 3.885;
+        harborGroup.add(t);
         solid.push(t);
       }
       const hx = rot ? 1.22 : 3.05, hz = rot ? 3.05 : 1.22;
@@ -484,15 +541,34 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       contactShadow.rotation.z = rot ? Math.PI / 2 : 0;
       contactShadow.position.set(x, 0.007, z);
       contactShadow.renderOrder = 1;
-      S.add(contactShadow);
+      harborGroup.add(contactShadow);
+      containerReflItems.push({ x, z, rot, hex: cPalette[cIdx] });
     }
+  }
+  if (containerReflItems.length > 0) {
+    const reflInst = new THREE.InstancedMesh(containerReflGeo, containerReflMat, containerReflItems.length);
+    reflInst.position.set(0, 0.005, 0);
+    const dummy = new THREE.Object3D();
+    const colTmp = new THREE.Color();
+    containerReflItems.forEach((it, idx) => {
+      dummy.position.set(it.x, 0, it.z);
+      dummy.rotation.set(0, it.rot ? Math.PI / 2 : 0, 0);
+      dummy.scale.set(1, 1, 1);
+      dummy.updateMatrix();
+      reflInst.setMatrixAt(idx, dummy.matrix);
+      colTmp.setHex(it.hex).multiplyScalar(0.55);
+      reflInst.setColorAt(idx, colTmp);
+    });
+    reflInst.instanceMatrix.needsUpdate = true;
+    if (reflInst.instanceColor) reflInst.instanceColor.needsUpdate = true;
+    harborGroup.add(reflInst);
   }
 
   const wallMat = new THREE.MeshStandardMaterial({ color: 0x1a2128, roughness: 0.9 });
   for (const [x, z, w, d] of [[0, -52, 100, 1], [0, 52, 100, 1], [-52, 0, 1, 100], [52, 0, 1, 100]]) {
     const m = new THREE.Mesh(new THREE.BoxGeometry(w, 10, d), wallMat);
     m.position.set(x, 5, z);
-    S.add(m);
+    harborGroup.add(m);
     solid.push(m);
   }
 
@@ -511,12 +587,12 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       m.lookAt(0, 0, 0);
       es.add(m);
     };
-    // Cool overcast moonlight canopy + warm amber harbor streetlamp reflections without harsh white overhead glare
-    panel(1.3, 1.8, 2.5, 14, 5, 0, 15, -4);
+    // Cool night overcast sky + warm amber harbor streetlamp reflections
+    panel(0.9, 1.35, 2.0, 14, 5, 0, 15, -4);
     for (const [x, y, z] of [[-9, 6.2, -9], [9, 6.2, -9], [-9, 6.2, 9], [9, 6.2, 9]]) {
-      panel(7.4, 4.7, 1.9, 1.8, 1.8, x, y, z);
+      panel(8.8, 4.9, 1.7, 2.0, 2.0, x, y, z);
     }
-    panel(2.4, 3.1, 4.2, 2.2, 2.2, 0, 14, -11);
+    panel(1.9, 2.5, 3.6, 2.2, 2.2, 0, 14, -11);
     const pm = new THREE.PMREMGenerator(R), rt = pm.fromScene(es, 0.025);
     pm.dispose();
     return rt.texture;
@@ -526,17 +602,17 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
 
   const mistTex = tex(128, 128, (g, w, h) => {
     const gr = g.createRadialGradient(64, 64, 4, 64, 64, 64);
-    gr.addColorStop(0, "rgba(170,200,225,.35)");
-    gr.addColorStop(0.5, "rgba(120,155,185,.12)");
+    gr.addColorStop(0, "rgba(105,138,172,.22)");
+    gr.addColorStop(0.5, "rgba(65,92,124,.08)");
     gr.addColorStop(1, "rgba(0,0,0,0)");
     g.fillStyle = gr;
     g.fillRect(0, 0, w, h);
   });
   for (const [x, y, z] of [[-7, 1.8, -14], [8, 1.9, -18], [0, 2.1, -24], [-15, 2.0, -22], [14, 1.8, -12]]) {
-    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: mistTex, transparent: true, opacity: 0.42, depthWrite: false }));
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: mistTex, transparent: true, opacity: 0.16, depthWrite: false }));
     sp.position.set(x, y, z);
     sp.scale.set(16, 6, 1);
-    S.add(sp);
+    harborGroup.add(sp);
   }
 
   // ---------- Particles, Rain, Tracers, Audio ----------
@@ -574,7 +650,7 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
   const rainRipples = (() => {
     const geo = new THREE.RingGeometry(0.86, 1.0, 24);
     geo.rotateX(-Math.PI / 2);
-    const POOL = 80;
+    const POOL = 112;
     const mat = new THREE.MeshBasicMaterial({
       color: 0xffffff,
       transparent: true,
@@ -586,27 +662,27 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     const inst = new THREE.InstancedMesh(geo, mat, POOL);
     inst.position.set(0, 0.014, 0);
     inst.frustumCulled = false;
-    S.add(inst);
+    harborGroup.add(inst);
 
     const dummy = new THREE.Object3D();
     const fadeColor = new THREE.Color();
     const state = [];
     for (let i = 0; i < POOL; i++) {
-      const active = i < 56;
-      const inArenaCenter = i < 34;
+      const active = i < 76;
+      const inArenaCenter = i < 48;
       const rx = inArenaCenter ? (-8 + sr() * 14) : (sr() - 0.5) * 24;
       const rz = inArenaCenter ? (-6 + sr() * 12) : (sr() - 0.5) * 24;
-      const maxRadius = 0.22 + sr() * 0.12;
-      const life = active ? sr() * 0.30 : 0;
-      const maxLife = 0.42 + sr() * 0.12;
+      const maxRadius = 0.24 + sr() * 0.11;
+      const life = active ? sr() * 0.34 : 0;
+      const maxLife = 0.46 + sr() * 0.12;
       const t0 = life / maxLife;
-      const sc0 = active ? (0.03 + (maxRadius - 0.03) * t0) : 0.001;
+      const sc0 = active ? (0.11 + (maxRadius - 0.11) * t0) : 0.001;
       state.push({ active, x: rx, z: rz, life, maxLife, size: maxRadius });
       dummy.position.set(rx, active ? 0 : -50, rz);
       dummy.scale.set(sc0, 1, sc0);
       dummy.updateMatrix();
       inst.setMatrixAt(i, dummy.matrix);
-      const f0 = active ? Math.pow(1 - t0, 1.8) * 0.40 : 0;
+      const f0 = active ? Math.min(1, t0 / 0.14) * Math.pow(1 - t0, 1.45) * 0.29 : 0;
       inst.setColorAt(i, fadeColor.setRGB(0.70 * f0, 0.84 * f0, 0.98 * f0));
     }
     inst.instanceMatrix.needsUpdate = true;
@@ -620,8 +696,8 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
         s.x = x;
         s.z = z;
         s.life = 0;
-        s.maxLife = rnd(0.40, 0.52);
-        s.size = rnd(0.22, 0.34);
+        s.maxLife = rnd(0.46, 0.58);
+        s.size = rnd(0.24, 0.35);
       },
       upd(dt) {
         for (let i = 0; i < POOL; i++) {
@@ -637,12 +713,12 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
             inst.setMatrixAt(i, dummy.matrix);
             continue;
           }
-          const sc = 0.03 + (s.size - 0.03) * t;
+          const sc = 0.11 + (s.size - 0.11) * t;
           dummy.position.set(s.x, 0, s.z);
           dummy.scale.set(sc, 1, sc);
           dummy.updateMatrix();
           inst.setMatrixAt(i, dummy.matrix);
-          const fade = Math.pow(1 - t, 1.8) * 0.40;
+          const fade = Math.min(1, t / 0.14) * Math.pow(1 - t, 1.45) * 0.29;
           inst.setColorAt(i, fadeColor.setRGB(0.70 * fade, 0.84 * fade, 0.98 * fade));
         }
         inst.instanceMatrix.needsUpdate = true;
@@ -667,7 +743,7 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
   const ND2 = 3000, rd = new Float32Array(ND2 * 4), rp2 = new Float32Array(ND2 * 6), rc2 = new Float32Array(ND2 * 6);
   for (let i = 0; i < ND2; i++) {
     rd.set([rnd(-24, 24), rnd(0, 26), rnd(-24, 24), rnd(0.6, 1.4)], i * 4);
-    const b = rd[i * 4 + 3] * 0.36;
+    const b = rd[i * 4 + 3] * 0.27;
     rc2.set([0, 0, 0, b * 0.55, b * 0.68, b * 0.82], i * 6);
   }
   const rg2 = new THREE.BufferGeometry();
@@ -675,7 +751,7 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
   rg2.setAttribute("color", new THREE.BufferAttribute(rc2, 3));
   const rain2 = new THREE.LineSegments(rg2, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
   rain2.frustumCulled = false;
-  S.add(rain2);
+  harborGroup.add(rain2);
 
   const tr = [];
   for (let i = 0; i < 14; i++) {
@@ -699,8 +775,24 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
   }
 
   let AC = null, NB = null, REV = null;
+  let ambFilter = null, ambGain = null;
+  function syncAmbientAudio() {
+    if (!AC || !ambFilter || !ambGain) return;
+    const t = AC.currentTime;
+    if (activeMapId === "military") {
+      ambFilter.type = "bandpass";
+      ambFilter.frequency.setTargetAtTime(280, t, 0.25);
+      ambFilter.Q.setTargetAtTime(0.85, t, 0.25);
+      ambGain.gain.setTargetAtTime(0.055, t, 0.25);
+    } else {
+      ambFilter.type = "lowpass";
+      ambFilter.frequency.setTargetAtTime(420, t, 0.25);
+      ambFilter.Q.setTargetAtTime(0.7, t, 0.25);
+      ambGain.gain.setTargetAtTime(0.09, t, 0.25);
+    }
+  }
   function initAudio() {
-    if (AC) { AC.resume().catch(() => {}); return; }
+    if (AC) { AC.resume().catch(() => {}); syncAmbientAudio(); return; }
     try {
       AC = new (window.AudioContext || window.webkitAudioContext)();
       const n = AC.sampleRate * 2;
@@ -721,13 +813,14 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       const r = AC.createBufferSource();
       r.buffer = NB;
       r.loop = true;
-      const f = AC.createBiquadFilter();
-      f.type = "lowpass";
-      f.frequency.value = 420;
-      const gg = AC.createGain();
-      gg.gain.value = 0.09;
-      r.connect(f).connect(gg).connect(AC.destination);
+      ambFilter = AC.createBiquadFilter();
+      ambFilter.type = "lowpass";
+      ambFilter.frequency.value = 420;
+      ambGain = AC.createGain();
+      ambGain.gain.value = 0.09;
+      r.connect(ambFilter).connect(ambGain).connect(AC.destination);
       r.start();
+      syncAmbientAudio();
     } catch {
       // Audio blocked until gesture
     }
@@ -776,6 +869,29 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     click(f) { tone(f, f * 0.5, 0.04, 0.1, "square"); },
     shell() { tone(4300, 3200, 0.06, 0.06, "triangle"); },
     thunder() { nz(2.8, 480, 30, 0.8, 0.7); },
+    heartbeat(intensity = 0.7) {
+      const vol = 0.16 * Math.max(0.25, Math.min(1.0, intensity));
+      tone(64, 34, 0.13, vol, "sine");
+      setTimeout(() => tone(54, 30, 0.14, vol * 0.75, "sine"), 165);
+    },
+    footstep(surface = "concrete") {
+      if (surface === "puddle") {
+        nz(0.09, 2600, 640, 0.13, 0.08);
+        tone(380, 170, 0.055, 0.04, "sine");
+      } else if (surface === "metal") {
+        tone(310, 140, 0.075, 0.095, "triangle");
+        nz(0.045, 3200, 1100, 0.08, 0.10);
+      } else {
+        // Compacted concrete/gravel crunch
+        nz(0.068, 2100, 480, 0.10, 0.04);
+        tone(112, 56, 0.052, 0.08, "sine");
+      }
+    },
+    distantBird() {
+      const f = 2200 + Math.random() * 900;
+      tone(f, f * 0.76, 0.09, 0.022, "sine");
+      setTimeout(() => tone(f * 1.06, f * 0.82, 0.11, 0.018, "sine"), 120);
+    },
   };
 
   // ---------- PBR Asset Loading & Viewmodel Setup ----------
@@ -815,11 +931,11 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
   gun.add(mf);
 
   // R1/R3: cool key + warm amber fill/rim separates arms & gun from the cold night background without blowing out thumb skin
-  const vmKey = new THREE.PointLight(0xbcd0ea, 0.44, 2.4, 1.1);
+  const vmKey = new THREE.PointLight(0xbcd0ea, 0.42, 2.4, 1.1);
   vmKey.position.set(-0.35, 0.55, 0.25);
-  const vmFill = new THREE.PointLight(0xffb36a, 0.18, 2.0, 1.2);
+  const vmFill = new THREE.PointLight(0xffb36a, 0.14, 2.0, 1.2);
   vmFill.position.set(0.45, -0.2, -0.1);
-  const vmRim = new THREE.PointLight(0xffc27a, 0.40, 2.2, 1.3);
+  const vmRim = new THREE.PointLight(0xffc27a, 0.26, 2.2, 1.3);
   vmRim.position.set(0.32, 0.38, -0.65);
   vmCam.add(vmKey, vmFill, vmRim, gun);
 
@@ -874,7 +990,7 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       metalnessMap: src.metalnessMap || null,
       normalMap: src.normalMap || null,
       normalScale: src.normalScale ? src.normalScale.clone() : new THREE.Vector2(1, 1),
-      envMap,
+      envMap: activeEnvMap,
       envMapIntensity: isHoloLens ? 0.5 : isGlass ? 1.8 : isSkin ? 0.42 : isGlove ? 0.36 : envScale,
       clearcoat: src.name === "AWM_RiflePBR" ? 0.04 : (phys.clearcoat || 0),
       clearcoatRoughness: phys.clearcoatRoughness || 0,
@@ -943,23 +1059,23 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
 
   const sniperSockHandguard = makeSocketNode(
     "socket_handguard",
-    [-0.026, -0.036, -0.275],
-    [-0.20, -0.12, -0.972],
-    [0.50, 0.86, -0.04],
+    [-0.028, -0.044, -0.275],
+    [-0.20, -0.18, -0.963],
+    [0.64, 0.77, -0.04],
     false,
   );
   const sniperSockGrip = makeSocketNode(
     "socket_grip",
-    [0.024, -0.056, 0.070],
-    [0.18, -0.04, -0.983],
-    [-0.96, 0.08, 0.26],
+    [0.036, -0.062, 0.065],
+    [0.14, -0.06, -0.988],
+    [-0.95, 0.14, 0.28],
     true,
   );
   const sniperSockMag = makeSocketNode(
     "socket_mag",
-    [-0.016, -0.060, -0.085],
-    [0.54, -0.18, -0.82],
-    [0.80, 0.24, 0.55],
+    [-0.038, -0.080, -0.090],
+    [0.36, -0.16, -0.919],
+    [0.88, 0.28, 0.38],
     false,
   );
   const sniperSockBolt = makeSocketNode(
@@ -976,9 +1092,9 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
   // Fallback attachment sockets before async GLB models finish parsing
   const weaponSockets = {
     m416: {
-      handguard: makeSocketNode("socket_handguard", [-0.030, -0.026, -0.252], [-0.22, -0.14, -0.965], [0.52, 0.85, -0.05], false),
+      handguard: makeSocketNode("socket_handguard", [-0.031, -0.033, -0.252], [-0.22, -0.20, -0.954], [0.64, 0.77, -0.04], false),
       grip: makeSocketNode("socket_grip", [0.024, -0.058, 0.082], [0.18, -0.04, -0.983], [-0.96, 0.08, 0.26], true),
-      mag: makeSocketNode("socket_mag", [-0.016, -0.106, -0.072], [0.56, -0.18, -0.81], [0.82, 0.22, 0.53], false),
+      mag: makeSocketNode("socket_mag", [-0.036, -0.130, -0.070], [0.36, -0.16, -0.919], [0.90, 0.28, 0.33], false),
       bolt: makeSocketNode("socket_charging", [-0.026, 0.035, 0.130], [0.68, 0.08, -0.73], [0.24, -0.94, 0.23], false),
     },
     pistol: {
@@ -1617,10 +1733,177 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     return kBack < 0.4 ? "bolt" : "support";
   }
 
+  // ---------- Multi-Map State & Loader (harbor / military) ----------
+  const militaryLoader = createMilitaryMapLoader({ renderer: R, THREE });
+  let activeMapId = "military";
+  let militaryData = null;
+  let militaryBuildPromise = null;
+  let activeCollision = null;
+  let activeEnvMap = envMap;
+
+  let gt = 0, activeState = "menu", meAlive = true, hp = 100;
+  let lastCanvasFilter = "";
+  function updateCanvasPostGrade(nowSec = 0) {
+    const inPlayLowHp = activeState === "play" && meAlive && hp < 35;
+    const lowHpFactor = inPlayLowHp ? Math.max(0, Math.min(1, (35 - hp) / 25)) : 0;
+
+    let nextFilter = "";
+    if (activeMapId === "military") {
+      const sat = (1.09 - 0.54 * lowHpFactor).toFixed(2);
+      const contrast = (1.10 + 0.04 * lowHpFactor).toFixed(2);
+      nextFilter = lowHpFactor > 0.05
+        ? `contrast(${contrast}) saturate(${sat}) blur(${(lowHpFactor * 1.15).toFixed(2)}px)`
+        : "contrast(1.10) saturate(1.09)";
+    } else if (lowHpFactor > 0.05) {
+      nextFilter = `saturate(${(1.0 - 0.50 * lowHpFactor).toFixed(2)}) blur(${(lowHpFactor * 1.1).toFixed(2)}px)`;
+    }
+
+    if (nextFilter !== lastCanvasFilter) {
+      lastCanvasFilter = nextFilter;
+      R.domElement.style.filter = nextFilter;
+    }
+
+    const lowOv = $("lowHpOverlay");
+    if (lowOv) {
+      if (lowHpFactor > 0.01) {
+        const pulse = 0.45 + 0.55 * Math.pow(0.5 + 0.5 * Math.sin(nowSec * (4.2 + lowHpFactor * 2.6)), 3);
+        lowOv.style.opacity = (lowHpFactor * pulse).toFixed(3);
+      } else if (lowOv.style.opacity !== "0") {
+        lowOv.style.opacity = "0";
+      }
+    }
+  }
+
+  function applySceneEnvMap(targetEnv, isMilitary = false) {
+    activeEnvMap = targetEnv;
+    S.environment = targetEnv || null;
+    for (const root of [gun, armsRoot, m416WorldProto, pistolWorldProto, awmWorldProto, soldierProto]) {
+      if (!root) continue;
+      root.traverse((o) => {
+        if (o.isMesh && o.material && "envMap" in o.material && o.name !== "reticle_group") {
+          o.material.envMap = targetEnv;
+          const mName = o.material.name || "";
+          if (mName.includes("GunMetal") || mName.includes("Slide") || mName.includes("ScopePBR")) {
+            o.material.envMapIntensity = isMilitary ? 1.18 : 1.05;
+          }
+          o.material.needsUpdate = true;
+        }
+      });
+    }
+    if (isMilitary) {
+      vmKey.color.setHex(0xffe9c4);
+      vmKey.intensity = 0.82;
+      vmFill.color.setHex(0x88aacb);
+      vmFill.intensity = 0.20;
+      vmRim.color.setHex(0xffce84);
+      vmRim.intensity = 0.42;
+    } else {
+      vmKey.color.setHex(0xbcd0ea);
+      vmKey.intensity = 0.42;
+      vmFill.color.setHex(0xffb36a);
+      vmFill.intensity = 0.14;
+      vmRim.color.setHex(0xffc27a);
+      vmRim.intensity = 0.26;
+    }
+    for (const av of remotePlayers.values()) {
+      av.container.traverse((o) => {
+        if (o.isMesh && o.material && "envMap" in o.material) {
+          o.material.envMap = targetEnv;
+          o.material.needsUpdate = true;
+        }
+      });
+    }
+  }
+
+  function activateHarborMap() {
+    activeMapId = "harbor";
+    activeCollision = null;
+    harborGroup.visible = true;
+    hemi.visible = moon.visible = warmFill.visible = true;
+    if (militaryData && militaryData.group) militaryData.group.visible = false;
+    R.outputEncoding = THREE.LinearEncoding;
+    R.toneMappingExposure = 1.08;
+    const vig = $("vignette");
+    if (vig) vig.style.opacity = "0";
+    S.background = new THREE.Color(0x050a11);
+    S.fog = new THREE.FogExp2(0x050a11, 0.025);
+    applySceneEnvMap(envMap, false);
+    updateCanvasPostGrade(gt);
+    syncAmbientAudio();
+  }
+
+  function ensureMapActive(mapId = "military") {
+    const target = mapId === "harbor" ? "harbor" : "military";
+    if (target === "harbor") {
+      activateHarborMap();
+      return Promise.resolve(null);
+    }
+    activeMapId = "military";
+    if (militaryData) {
+      harborGroup.visible = false;
+      hemi.visible = moon.visible = warmFill.visible = false;
+      militaryData.group.visible = true;
+      activeCollision = militaryData.collision;
+      R.outputEncoding = THREE.sRGBEncoding || THREE.LinearEncoding;
+      R.toneMappingExposure = 0.86;
+      const vig = $("vignette");
+      if (vig) vig.style.opacity = "1";
+      S.background = new THREE.Color(militaryData.fogColor);
+      S.fog = new THREE.FogExp2(militaryData.fogColor, militaryData.fogDensity);
+      applySceneEnvMap(militaryData.envMap, true);
+      updateCanvasPostGrade(gt);
+      syncAmbientAudio();
+      window.__militaryMapLoaded = true;
+      return Promise.resolve(militaryData);
+    }
+    if (!militaryBuildPromise) {
+      militaryBuildPromise = militaryLoader
+        .buildMilitaryScene({
+          scene: S,
+          envMapTargetList: [gun, armsRoot, m416WorldProto, pistolWorldProto, awmWorldProto, soldierProto],
+        })
+        .then((res) => {
+          militaryData = res;
+          window.__militaryMapLoaded = true;
+          if (activeMapId === "military") {
+            harborGroup.visible = false;
+            hemi.visible = moon.visible = warmFill.visible = false;
+            res.group.visible = true;
+            activeCollision = res.collision;
+            R.outputEncoding = THREE.sRGBEncoding || THREE.LinearEncoding;
+            R.toneMappingExposure = 0.78;
+            const vig = $("vignette");
+            if (vig) vig.style.opacity = "1";
+            S.background = new THREE.Color(res.fogColor);
+            S.fog = new THREE.FogExp2(res.fogColor, res.fogDensity);
+            applySceneEnvMap(res.envMap, true);
+            updateCanvasPostGrade(gt);
+            syncAmbientAudio();
+          } else {
+            res.group.visible = false;
+          }
+          return res;
+        })
+        .catch((err) => {
+          console.error("Failed to build military map:", err);
+          militaryBuildPromise = null;
+          activateHarborMap();
+          return null;
+        });
+    }
+    return militaryBuildPromise;
+  }
+
+  // Start preloading default Khu Quân Sự Cũ immediately unless ?map=harbor is requested
+  let initialDefaultMap = "military";
+  try {
+    if (new URLSearchParams(location.search).get("map") === "harbor") initialDefaultMap = "harbor";
+  } catch {}
+  ensureMapActive(initialDefaultMap);
+
   // ---------- Gameplay State ----------
   const P = new Vec();
   let engineMode = "idle"; // "idle" | "lan" | "solo"
-  let activeState = "menu"; // "menu" | "play" | "over"
   let testLocked = false;
   let currentMode = "TDM";
   let killLimit = 30;
@@ -1628,7 +1911,6 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
   let teamScores = { A: 0, B: 0 };
   let lastPlayers = [];
   let meTeam = "A";
-  let meAlive = true;
   let meInvuln = false;
   let respawnMs = 0;
 
@@ -1658,14 +1940,13 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     return { cfg: WEAPONS[wid], st: weapons[wid] };
   }
 
-  let hp = 100;
   let yaw = 0, pitch = 0, vy = 0, velX = 0, velZ = 0, eyeHeight = EYE_STAND;
-  let crouched = false, grounded = true, isSprinting = false, sprintBrokenUntilShiftUp = false;
+  let crouched = false, grounded = true, onLadder = false, isSprinting = false, sprintBrokenUntilShiftUp = false;
   let lastGroundedAt = 0, jumpBufferedUntil = 0, nextJumpAllowedAt = 0, physicsAccum = 0;
   let bob = 0, lyaw = 0, lpit = 0, swx = 0, swy = 0, spr = 0;
   let recoil = 0, kick = 0, flash = 0, bolt = 0, rlp = 0, ads = 0, trigPull = 0;
   let hm = 0, dmgV = 0, shake = 0, killAlertT = 0, soloScore = 0, soloWave = 0, soloWaveCd = 0;
-  let laserOn = true, chatOpen = false, curFlags = 0, testAimHeld = false;
+  let laserOn = false, chatOpen = false, curFlags = 0, testAimHeld = false;
   let lastInputSentAt = 0;
   const drones = [], ray = new THREE.Raycaster(), lr = new THREE.Raycaster(), laserRay = new THREE.Raycaster(), upRay = new THREE.Raycaster();
   const _lp = new Vec(), _ls = new Vec(), _ld = new Vec();
@@ -1720,13 +2001,15 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     const tl = rl > 0 ? Math.min(1, rl / 0.1, (1 - rl) / 0.1) : 0;
 
     mag.position.copy(MAG_REST);
+    mag.rotation.set(0, 0, 0);
     awmMagGroup.position.set(0, 0, 0);
     if (rl > 0.24 && rl < 0.72) {
       const magArc = Math.sin(((rl - 0.24) / 0.48) * Math.PI);
       if (cfg.id === "m416") {
-        mag.position.set(-0.042 * magArc, MAG_REST.y - 0.088 * magArc, MAG_REST.z + 0.028 * magArc);
+        mag.position.set(-0.020 * magArc, MAG_REST.y - 0.116 * magArc, MAG_REST.z - 0.014 * magArc);
+        mag.rotation.set(0.14 * magArc, 0, -0.08 * magArc);
       } else if (isSniper) {
-        awmMagGroup.position.y = -14.0 * magArc;
+        awmMagGroup.position.set(0, -11.5 * magArc, 2.0 * magArc);
       }
     }
 
@@ -1893,6 +2176,8 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
 
     $("hpb").style.width = Math.max(0, hp) + "%";
     $("hpb").style.background = meInvuln ? "#64c8ff" : hp > 35 ? "#4ec3b0" : "#e85445";
+    const hpLbl = $("hpLabel");
+    if (hpLbl) hpLbl.textContent = `MÁU ${Math.max(0, Math.round(hp))} / 100`;
 
     const isLow = st.mag <= Math.ceil(cfg.magSize * 0.3);
     $("am").textContent = isReloading ? "Nạp đạn…" : `${st.mag} / ∞`;
@@ -2023,15 +2308,23 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     ring.rotation.x = Math.PI / 2;
     g.add(body, eye, ring);
     const a = rnd(0, 6.28);
-    g.position.set(Math.cos(a) * 42, 6.5, Math.sin(a) * 42);
+    const spawnRad = activeMapId === "military" ? 24 : 42;
+    const patBound = activeMapId === "military" ? 26 : 35;
+    g.position.set(Math.cos(a) * spawnRad, 6.5, Math.sin(a) * spawnRad);
     S.add(g);
-    const d = { g, body, ring, hp: 3, st: "patrol", tgt: new Vec(rnd(-35, 35), 6.5, rnd(-35, 35)), cd: rnd(1, 2), los: false, losT: 0, hitT: 0, sd: Math.random() < 0.5 ? 1 : -1 };
+    const d = { g, body, ring, hp: 3, st: "patrol", tgt: new Vec(rnd(-patBound, patBound), 6.5, rnd(-patBound, patBound)), cd: rnd(1, 2), los: false, losT: 0, hitT: 0, sd: Math.random() < 0.5 ? 1 : -1 };
     body.userData.drone = d;
     drones.push(d);
   }
   function canSee(a, b) {
     const d = b.clone().sub(a), L = d.length();
-    lr.set(a, d.normalize());
+    if (L < 1e-4) return true;
+    d.divideScalar(L);
+    if (activeCollision) {
+      const hit = activeCollision.raycastShot(a.x, a.y, a.z, d.x, d.y, d.z, L - 0.05);
+      return !hit;
+    }
+    lr.set(a, d);
     lr.far = L;
     return lr.intersectObjects(solid, false).length === 0;
   }
@@ -2182,8 +2475,31 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
         enemyMeshes.push(...av.hitMeshes);
       }
     }
-    const candidates = engineMode === "solo" ? [ground, ...solid, ...drones.map((d) => d.body)] : [ground, ...solid, ...enemyMeshes];
-    const hit = ray.intersectObjects(candidates, false)[0];
+    const candidates = engineMode === "solo" ? drones.map((d) => d.body) : enemyMeshes;
+    let hit = null;
+    if (activeCollision) {
+      const targetHit = candidates.length ? ray.intersectObjects(candidates, false)[0] : null;
+      const worldHit = activeCollision.raycastShot(
+        ray.ray.origin.x,
+        ray.ray.origin.y,
+        ray.ray.origin.z,
+        ray.ray.direction.x,
+        ray.ray.direction.y,
+        ray.ray.direction.z,
+        ray.far,
+      );
+      if (worldHit && (!targetHit || worldHit.dist < targetHit.distance)) {
+        hit = {
+          distance: worldHit.dist,
+          point: new Vec(worldHit.x, worldHit.y, worldHit.z),
+          object: { userData: {} },
+        };
+      } else {
+        hit = targetHit || null;
+      }
+    } else {
+      hit = ray.intersectObjects([ground, ...solid, ...candidates], false)[0] || null;
+    }
     const from = getViewmodelWorldPoint(muz, new Vec());
     const end = hit ? hit.point : ray.ray.at(75, new Vec());
     tracer(from, end, cfg.id === "sniper" ? 0xfff5cc : 0xffe2a0);
@@ -2486,11 +2802,30 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
   });
 
   // ---------- Main Frame Loop ----------
-  let gt = 0, ltn = rnd(8, 16), lt = 0;
+  let ltn = rnd(8, 16), lt = 0;
+  let nextBirdAt = rnd(7, 15), nextHeartbeatAt = 0, lastStepIdx = 0;
   const clock = new THREE.Clock();
 
   function updateWeatherAndRain(dt) {
     gt += dt;
+    sparks.upd(dt);
+    if (activeMapId !== "harbor") {
+      if (militaryData && militaryData.updateAtmosphere) militaryData.updateAtmosphere(gt, cam.position);
+      if (AC && ambFilter && ambGain) {
+        const gust = 0.5 + 0.5 * Math.sin(gt * 0.27) * Math.cos(gt * 0.13);
+        ambFilter.frequency.setTargetAtTime(210 + gust * 250, AC.currentTime, 0.2);
+        ambGain.gain.setTargetAtTime(0.042 + gust * 0.032, AC.currentTime, 0.2);
+      }
+      if (activeState === "play" && AC) {
+        nextBirdAt -= dt;
+        if (nextBirdAt <= 0) {
+          nextBirdAt = rnd(10, 22);
+          snd.distantBird();
+        }
+      }
+      return;
+    }
+
     const wind = Math.sin(gt * 0.23) * 0.6 + Math.sin(gt * 0.71) * 0.25;
     const px = P.x, pz = P.z;
     for (let i = 0; i < ND2; i++) {
@@ -2498,25 +2833,27 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       let x = rd[k] + wind * 3 * dt, y = rd[k + 1] - sp * dt, z = rd[k + 2];
       if (x - px > 24) x -= 48; else if (x - px < -24) x += 48;
       if (z - pz > 24) z -= 48; else if (z - pz < -24) z += 48;
-      if (y < 0) { y += 26; if (i % 2 === 0 && Math.abs(x - px) < 11 && Math.abs(z - pz) < 11) rainRipples.emit(x, z); }
+      if (y < 0) { y += 26; if (i % 3 !== 0 && Math.abs(x - px) < 11 && Math.abs(z - pz) < 11) rainRipples.emit(x, z); }
       rd[k] = x; rd[k + 1] = y; rd[k + 2] = z;
       rp2.set([x - wind * 0.07, y + sp * 0.022, z, x, y, z], i * 6);
     }
     rg2.attributes.position.needsUpdate = true;
     rainRipples.upd(dt);
-    sparks.upd(dt);
 
     ltn -= dt;
     if (ltn <= 0) { ltn = rnd(12, 26); lt = 0.4; setTimeout(() => snd.thunder(), rnd(500, 2200)); }
     lt = Math.max(0, lt - dt);
     const b = lt > 0.28 || (lt < 0.2 && lt > 0.1) ? 1 : lt > 0 ? 0.3 : 0;
-    hemi.intensity = 0.55 + b * 2.1;
-    moon.intensity = 0.55 + b * 1.8;
-    S.fog.color.setRGB(0.027 + b * 0.25, 0.051 + b * 0.28, 0.078 + b * 0.34);
+    hemi.intensity = 0.28 + b * 2.0;
+    moon.intensity = 0.38 + b * 1.7;
+    S.fog.color.setRGB(0.020 + b * 0.24, 0.039 + b * 0.27, 0.067 + b * 0.33);
     S.background.copy(S.fog.color);
   }
 
   function canStandUp() {
+    if (activeCollision) {
+      return activeCollision.canStandUp(P.x, P.y, P.z);
+    }
     for (const c of cols) {
       if (P.x >= c.x0 - 0.42 && P.x <= c.x1 + 0.42 && P.z >= c.z0 - 0.42 && P.z <= c.z1 + 0.42) {
         const baseY = c.y0 || 0;
@@ -2541,7 +2878,24 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     }
     ray.far = 160;
     ray.setFromCamera({ x: 0, y: 0 }, cam);
-    const hover = ray.intersectObjects([ground, ...solid, ...enemyMeshes], false)[0];
+    let hover = null;
+    if (activeCollision) {
+      const targetHit = enemyMeshes.length ? ray.intersectObjects(enemyMeshes, false)[0] : null;
+      const worldHit = activeCollision.raycastShot(
+        ray.ray.origin.x,
+        ray.ray.origin.y,
+        ray.ray.origin.z,
+        ray.ray.direction.x,
+        ray.ray.direction.y,
+        ray.ray.direction.z,
+        ray.far,
+      );
+      if (targetHit && (!worldHit || targetHit.distance <= worldHit.dist)) {
+        hover = targetHit;
+      }
+    } else {
+      hover = ray.intersectObjects([ground, ...solid, ...enemyMeshes], false)[0];
+    }
     $("cross").classList.toggle("targetEnemy", Boolean(hover && hover.object.userData.hitTarget));
 
     const canvas = $("radarCanvas");
@@ -2624,7 +2978,7 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       sprintBrokenUntilShiftUp = true;
     }
 
-    isSprinting = rawShift && !sprintBrokenUntilShiftUp && !crouched && grounded && hasMove;
+    isSprinting = rawShift && !sprintBrokenUntilShiftUp && !crouched && grounded && !onLadder && hasMove;
     if (isSprinting) {
       input.clearAds();
       testAimHeld = false;
@@ -2670,28 +3024,61 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
 
     P.x += velX * dtFixed;
     P.z += velZ * dtFixed;
-    vy -= 22 * dtFixed;
-    P.y += vy * dtFixed;
-    if (P.y <= 0) {
-      P.y = 0;
-      vy = 0;
-      grounded = true;
+    if (activeCollision) {
+      const mState = { x: P.x, y: P.y, z: P.z, vy, grounded, onLadder };
+      activeCollision.stepPlayerMovement(
+        mState,
+        {
+          moveForward: f,
+          jumpHeld: activeInput && !chatOpen && input.isDown("jump"),
+          crouched,
+          radius: 0.45,
+        },
+        dtFixed,
+      );
+      P.set(mState.x, mState.y, mState.z);
+      vy = mState.vy;
+      grounded = mState.grounded;
+      onLadder = mState.onLadder;
     } else {
-      grounded = false;
-    }
+      vy -= 22 * dtFixed;
+      P.y += vy * dtFixed;
+      if (P.y <= 0) {
+        P.y = 0;
+        vy = 0;
+        grounded = true;
+      } else {
+        grounded = false;
+      }
 
-    for (const c of cols) {
-      const dx = P.x - Math.max(c.x0, Math.min(P.x, c.x1)), dz = P.z - Math.max(c.z0, Math.min(P.z, c.z1));
-      const d2 = dx * dx + dz * dz;
-      if (d2 < 0.2025 && P.y < c.y1) {
-        const d = Math.sqrt(d2) || 0.001;
-        P.x += (dx / d) * (0.45 - d);
-        P.z += (dz / d) * (0.45 - d);
+      for (const c of cols) {
+        const dx = P.x - Math.max(c.x0, Math.min(P.x, c.x1)), dz = P.z - Math.max(c.z0, Math.min(P.z, c.z1));
+        const d2 = dx * dx + dz * dz;
+        if (d2 < 0.2025 && P.y < c.y1) {
+          const d = Math.sqrt(d2) || 0.001;
+          P.x += (dx / d) * (0.45 - d);
+          P.z += (dz / d) * (0.45 - d);
+        }
+      }
+      P.x = Math.max(-48, Math.min(48, P.x));
+      P.z = Math.max(-48, Math.min(48, P.z));
+    }
+    if (hasMove && grounded) {
+      bob += speed * dtFixed;
+      const stepIdx = Math.floor(bob / 1.55);
+      if (stepIdx !== lastStepIdx) {
+        lastStepIdx = stepIdx;
+        if (activeState === "play") {
+          let surface = "concrete";
+          if (onLadder || P.y > 2.5) surface = "metal";
+          else if (activeMapId === "harbor") surface = "puddle";
+          else if (militaryData && militaryData.samplePuddle && militaryData.samplePuddle(P.x, P.z) > 0.35) {
+            surface = "puddle";
+          }
+          snd.footstep(surface);
+        }
       }
     }
-    P.x = Math.max(-48, Math.min(48, P.x));
-    P.z = Math.max(-48, Math.min(48, P.z));
-    if (hasMove && grounded) bob += speed * dtFixed;
 
     const targetEye = crouched ? EYE_CROUCH : EYE_STAND;
     eyeHeight += (targetEye - eyeHeight) * Math.min(1, 18 * dtFixed);
@@ -2806,6 +3193,18 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     $("dmg").style.opacity = dmgV;
     if (killAlertT > 0) { killAlertT -= dt; if (killAlertT <= 0) $("killAlert").style.opacity = "0"; }
 
+    updateCanvasPostGrade(gt);
+    if (meAlive && hp <= 30 && activeState === "play") {
+      nextHeartbeatAt -= dt;
+      if (nextHeartbeatAt <= 0) {
+        const distress = Math.max(0, Math.min(1, (32 - hp) / 22));
+        snd.heartbeat(0.45 + 0.55 * distress);
+        nextHeartbeatAt = 0.98 - 0.34 * distress;
+      }
+    } else {
+      nextHeartbeatAt = 0.15;
+    }
+
     updateRadarAndCrosshair(nowMs);
     hud();
   }
@@ -2844,9 +3243,15 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       getViewmodelWorldPoint(laserOrigin, _lp);
       _ld.set(0, 0, -1).transformDirection(gun.matrixWorld);
       _ls.copy(_lp).addScaledVector(_ld, -0.9);
-      laserRay.set(_ls, _ld);
-      laserRay.far = 81;
-      const hit = laserRay.intersectObjects([ground, ...solid], false)[0];
+      let hit = null;
+      if (activeCollision) {
+        const wh = activeCollision.raycastShot(_ls.x, _ls.y, _ls.z, _ld.x, _ld.y, _ld.z, 81);
+        if (wh) hit = { distance: wh.dist, point: new Vec(wh.x, wh.y, wh.z) };
+      } else {
+        laserRay.set(_ls, _ld);
+        laserRay.far = 81;
+        hit = laserRay.intersectObjects([ground, ...solid], false)[0] || null;
+      }
       const end = hit ? hit.point : _lp.clone().addScaledVector(_ld, 80);
       const bp = laserBeam.geometry.attributes.position;
       laserBeam.visible = !(hit && hit.distance < 0.9);
@@ -2863,6 +3268,7 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
 
   function startLanMatch(room, initialSnapshot) {
     initAudio();
+    ensureMapActive(room && room.map ? room.map : "military");
     drones.splice(0).forEach((d) => S.remove(d.g));
     clearRemotePlayers();
     engineMode = "lan";
@@ -2877,6 +3283,7 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     applyViewmodelWeapon("m416");
     crouched = false;
     grounded = true;
+    onLadder = false;
     eyeHeight = EYE_STAND;
     velX = velZ = vy = ads = bolt = rlp = trigPull = 0;
     chatOpen = testAimHeld = isSprinting = false;
@@ -2908,8 +3315,9 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     }, 90);
   }
 
-  function startSolo() {
+  function startSolo(mapId = activeMapId || initialDefaultMap) {
     initAudio();
+    ensureMapActive(mapId);
     clearRemotePlayers();
     drones.splice(0).forEach((d) => S.remove(d.g));
     engineMode = "solo";
@@ -2921,9 +3329,15 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     prevSlot = 2;
     resetAllWeapons();
     applyViewmodelWeapon("m416");
-    P.set(0, 0, 0);
-    yaw = pitch = vy = velX = velZ = ads = bolt = rlp = trigPull = 0;
-    crouched = false; grounded = true; eyeHeight = EYE_STAND;
+    if (mapId === "military") {
+      P.set(0, 0, -40);
+      yaw = Math.PI;
+    } else {
+      P.set(0, 0, 0);
+      yaw = 0;
+    }
+    pitch = vy = velX = velZ = ads = bolt = rlp = trigPull = 0;
+    crouched = false; grounded = true; onLadder = false; eyeHeight = EYE_STAND;
     chatOpen = testAimHeld = isSprinting = false;
     input.reset();
     $("sniperScope").style.display = "none";
@@ -2945,6 +3359,7 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     $("scoreboard").style.display = "none";
     $("pauseOverlay").style.display = "none";
     $("hudChatInput").style.display = "none";
+    updateCanvasPostGrade(gt);
     if (document.pointerLockElement === R.domElement) document.exitPointerLock();
     clearRemotePlayers();
     drones.splice(0).forEach((d) => S.remove(d.g));
@@ -3008,16 +3423,28 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
           crouched = opts.crouched;
           eyeHeight = opts.crouched ? EYE_CROUCH : EYE_STAND;
         }
+        if (typeof opts.hp === "number" && Number.isFinite(opts.hp)) {
+          hp = Math.max(1, Math.min(100, opts.hp));
+          hud();
+          updateCanvasPostGrade(gt);
+        }
         if (opts.adsSteps) for (let i = 0; i < opts.adsSteps; i++) gunAnim(0.02, 0);
       },
       getRemotePlayers: () => remotePlayers,
       getWeapons: () => ({ activeSlot, activeWeaponId: SLOT_TO_WEAPON_ID[activeSlot], weapons }),
       getTeamMaterials: () => teamAccentMats,
+      getMapInfo: () => ({
+        mapId: activeMapId,
+        ready: activeMapId === "harbor" || Boolean(militaryData),
+        onLadder,
+        bounds: activeCollision ? activeCollision.bounds : { minX: -48, maxX: 48, minZ: -48, maxZ: 48 },
+        raycastShot: activeCollision ? activeCollision.raycastShot : null,
+      }),
       getMe: () => ({
         meAlive, meTeam, hp,
         ammo: activeWeapon().st.mag,
         reloading: activeWeapon().st.reloadEndsAt > performance.now(),
-        crouched, grounded, isSprinting, ads, flags: curFlags, eyeHeight,
+        crouched, grounded, onLadder, isSprinting, ads, flags: curFlags, eyeHeight,
       }),
     }),
   };

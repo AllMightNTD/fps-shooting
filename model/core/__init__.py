@@ -2,6 +2,7 @@
 
 from .geometry import (
     MeshData,
+    bake_vertical_foot_ao,
     create_beveled_box,
     create_box,
     create_capsule,
@@ -45,6 +46,7 @@ from .textures import (
 
 __all__ = [
     "MeshData",
+    "bake_vertical_foot_ao",
     "create_beveled_box",
     "create_box",
     "create_capsule",

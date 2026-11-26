@@ -27,13 +27,15 @@ model/
 │   ├── __init__.py
 │   ├── fps_arms.py         # Chuyển đổi fps_arms.glb (Spec-Gloss -> Metallic-Roughness, resize, bọc arms_root cm->m)
 │   └── soldier.py          # Dựng chiến binh toàn thân PBR có rig (mũ giáp + visor hitbox headshot, vest, weapon_mount, chân)
+├── maps/                   # Sinh mô hình PBR & layout/colliders map Khu Quân Sự Cũ 5v5 (container, warehouse, wrecked_truck, watchtower, props)
 ├── tests/
 │   ├── __init__.py
 │   ├── test_m416_model.py     # Unit test chuẩn AAA cho geometry, PBR M416 & GLB exporter (Happy & Unhappy paths)
 │   ├── test_pistol_model.py   # Unit test chuẩn AAA cho geometry, textures PBR & GLB Glock-17
 │   ├── test_awm_model.py      # Unit test chuẩn AAA cho chuyển đổi PBR awm.glb, trục -Z/mét & bolt/mag sockets
 │   ├── test_arms_model.py     # Unit test chuẩn AAA cho chuyển đổi Spec-Gloss -> PBR, bufferView & skinned fps_arms.glb
-│   └── test_soldier_model.py  # Unit test chuẩn AAA cho texture quân phục BDU/Kevlar & rigged soldier.glb
+│   ├── test_soldier_model.py  # Unit test chuẩn AAA cho texture quân phục BDU/Kevlar & rigged soldier.glb
+│   └── test_military_assets.py # Unit test AAA cho 12 model map Khu Quân Sự Cũ, tâm đáy y=0, normals & sightlines
 └── dist/
     ├── m416.glb            # Asset nhị phân glTF 2.0 chuẩn PBR cho súng M416
     ├── m416.bundle.js      # Gói Base64 JS cho M416 chạy không lỗi CORS trên file://
@@ -44,7 +46,8 @@ model/
     ├── fps_arms.glb        # Asset nhị phân glTF 2.0 chuẩn PBR (đã chuẩn hóa arms_root) cho tay nhân vật FPP
     ├── fps_arms.bundle.js  # Gói Base64 JS cho fps_arms chạy không lỗi CORS trên file://
     ├── soldier.glb         # Asset nhị phân glTF 2.0 chuẩn PBR cho chiến binh 3rd-person trên LAN
-    └── soldier.bundle.js   # Gói Base64 JS cho soldier chạy không lỗi CORS trên file://
+    ├── soldier.bundle.js   # Gói Base64 JS cho soldier chạy không lỗi CORS trên file://
+    └── map_*.glb/.bundle.js # 12 model bản đồ Khu Quân Sự Cũ (container, warehouse, wrecked_truck, watchtower & 8 props chiến thuật)
 ```
 
 ## Lệnh build & kiểm thử
@@ -52,13 +55,19 @@ model/
 Chạy từ thư mục gốc dự án:
 
 ```bash
-# Sinh toàn bộ .glb và .bundle.js (m416 + pistol + awm + fps_arms + soldier) trong model/dist/
+# Sinh toàn bộ .glb và .bundle.js (vũ khí + nhân vật) trong model/dist/
 python3 -m model.build
+
+# Sinh riêng bộ asset bản đồ Khu Quân Sự Cũ (map_*.glb/.bundle.js + shared/maps/military_*.json)
+python3 -m model.build --maps
+
+# Sinh toàn bộ vũ khí, nhân vật và bản đồ
+python3 -m model.build --all
 
 # Tùy chọn kích thước texture & thư mục đích (awm / fps_arms tự đọc file ở root nếu có, fallback về model/assets/)
 python3 -m model.build --tex-size 512 --seed 42 --out model/dist
 
-# Chạy bộ kiểm thử đơn vị AAA (25 test cases)
+# Chạy bộ kiểm thử đơn vị AAA (28 test cases)
 python3 -m unittest discover -s model/tests -v
 ```
 

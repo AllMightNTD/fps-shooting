@@ -383,9 +383,10 @@ def _build_static_parts() -> dict[str, list[MeshData]]:
 
 def _build_magazine_node(mats: dict[str, GLBMaterial]) -> GLBNode:
     """Build a gently curved 30-round STANAG steel magazine with smooth curved stamped ribs."""
+    # Rotating by -pi/2 around Y maps extruded +Z [0..depth] to -X [-depth..0], so +depth/2 centers X on 0.
     mag_body = transform_mesh(
         extrude_shape(_MAG_PROFILE, depth=0.024, bevel_size=0.0025, bevel_thickness=0.0025, bevel_segments=3),
-        (-0.012, 0.0, 0.0),
+        (0.012, 0.0, 0.0),
         (0.0, -math.pi * 0.5, 0.0),
     )
     # Two continuous curved stamped ribs conforming strictly to the curved magazine contour
@@ -408,7 +409,7 @@ def _build_magazine_node(mats: dict[str, GLBMaterial]) -> GLBNode:
     ribs = [
         transform_mesh(
             extrude_shape(prof, depth=0.029, bevel_size=0.001, bevel_thickness=0.001, bevel_segments=2),
-            (-0.0145, 0.0, 0.0),
+            (0.0145, 0.0, 0.0),
             (0.0, -math.pi * 0.5, 0.0),
         )
         for prof in (rib_front, rib_rear)
@@ -424,10 +425,10 @@ def _build_magazine_node(mats: dict[str, GLBMaterial]) -> GLBNode:
             GLBNode(name="mag_base", mesh=mag_base, material=mats["steel"]),
             GLBNode(
                 name="socket_mag",
-                translation=(-0.016, -0.064, -0.008),
+                translation=(-0.031, -0.078, -0.008),
                 rotation_xyz=_socket_euler_xyz(
-                    distal=(0.56, -0.18, -0.81),
-                    palm_normal=(0.82, 0.22, 0.53),
+                    distal=(0.38, -0.14, -0.914),
+                    palm_normal=(0.91, 0.24, 0.34),
                     is_right_hand=False,
                 ),
             ),
@@ -525,14 +526,14 @@ def build_m416_nodes(texture_size: int = 512, seed: int = 42) -> list[GLBNode]:
     )
     children.append(GLBNode(name="laser_origin", translation=(0.046, 0.025, -0.350)))
     children.append(GLBNode(name="muzzle_anchor", translation=(0.0, 0.020, -0.615)))
-    # Support-hand socket cradling underneath/lower-left of handguard (thumb forward toward muzzle)
+    # Support-hand socket cradling underneath/lower-left of handguard (thumb tucked along side rail, below top rail)
     children.append(
         GLBNode(
             name="socket_handguard",
-            translation=(-0.030, -0.026, -0.252),
+            translation=(-0.031, -0.033, -0.252),
             rotation_xyz=_socket_euler_xyz(
-                distal=(-0.22, -0.14, -0.965),
-                palm_normal=(0.52, 0.85, -0.05),
+                distal=(-0.22, -0.20, -0.954),
+                palm_normal=(0.64, 0.77, -0.04),
                 is_right_hand=False,
             ),
         )

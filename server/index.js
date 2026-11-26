@@ -21,6 +21,7 @@ export const TICK_MS = 50; // 20 Hz snapshot & room loop
 
 const MODEL_ASSET_RE = /^\/model\/dist\/([a-z0-9_]+)\.(glb|bundle\.js)$/;
 const PUBLIC_JS_RE = /^\/js\/([a-z0-9_]+)\.js$/;
+const SHARED_MAP_RE = /^\/shared\/maps\/([a-z0-9_]+)\.json$/;
 
 export function getLanUrls(port) {
   const ifaces = os.networkInterfaces();
@@ -45,6 +46,7 @@ export function createLanServer(options = {}) {
   const protocolPath = path.join(rootDir, "server", "protocol.js");
   const weaponsPath = path.join(rootDir, "server", "weapons.js");
   const distDir = path.resolve(rootDir, "model", "dist");
+  const sharedMapsDir = path.resolve(rootDir, "shared", "maps");
   const nowFn = options.nowFn || Date.now;
   const tickMs = options.tickMs || TICK_MS;
 
@@ -293,6 +295,15 @@ export function createLanServer(options = {}) {
             ? "model/gltf-binary"
             : "application/javascript; charset=utf-8";
         streamFile(res, req.method, candidate, mime, "public, max-age=60");
+        return;
+      }
+    }
+
+    const mapJsonMatch = SHARED_MAP_RE.exec(pathname);
+    if (mapJsonMatch) {
+      const candidate = path.resolve(sharedMapsDir, `${mapJsonMatch[1]}.json`);
+      if (candidate.startsWith(sharedMapsDir + path.sep)) {
+        streamFile(res, req.method, candidate, "application/json; charset=utf-8", "public, max-age=60");
         return;
       }
     }

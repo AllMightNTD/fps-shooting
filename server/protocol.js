@@ -18,6 +18,7 @@ export const GAME_MODE = Object.freeze({
 });
 
 export const MAP_LIST = Object.freeze([
+  { id: "military", name: "Khu Quân Sự Cũ" },
   { id: "harbor", name: "Bến Cảng Mưa" },
 ]);
 

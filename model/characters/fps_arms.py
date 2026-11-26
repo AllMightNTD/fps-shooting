@@ -332,8 +332,8 @@ def _stylize_fps_arms_textures(
     cuff_t = np.clip((u_grid - 0.562) / 0.020, 0.0, 1.0)
     rib_wave = np.sin(v_grid * (2.0 * np.pi * 76.0))
 
-    olive_base = np.array([46.0, 56.0, 37.0], dtype=np.float32)  # #2E3825 deep matte wet olive
-    cuff_base = np.array([32.0, 38.0, 28.0], dtype=np.float32)   # #20261C ribbed cuff
+    olive_base = np.array([70.0, 86.0, 54.0], dtype=np.float32)  # #465636 deep matte wet olive
+    cuff_base = np.array([34.0, 40.0, 29.0], dtype=np.float32)   # #22281D ribbed cuff
 
     sleeve_factor = (0.56 + 0.38 * crest_t) * (1.0 - 0.09 * rip_grid - rip_fine)
     sleeve_rgb = olive_base[None, None, :] * sleeve_factor[..., None]
@@ -408,17 +408,22 @@ def _stylize_fps_arms_textures(
     mr_out[m_glove, 2] = np.clip(glove_metal[m_glove] * 255.0, 0, 28).astype(np.uint8)
     norm_out = _height_delta_to_normal_rgb(norm_out, 0.14 * carbon_weave * knuck_w, m_glove, strength=1.5)
 
-    # --- F3: Natural Warm Exposed Skin + Micro-Droplets + Strong Contact AO ---
+    # --- F3: Natural Damp Exposed Skin (toned-down orange saturation) + Micro-Droplets + Strong Contact AO ---
     rng = np.random.default_rng(707)
     skin_noise = rng.normal(0.0, 0.025, (size, size)).astype(np.float32)
-    skin_rgb = np.clip(orig_diff * 0.65, 0, 255)
-    # Subtle warm collar shadow right at glove cutout lip
-    collar_lip = np.clip(1.0 - d_sk_collar / 0.022, 0.0, 1.0)
-    skin_rgb *= (1.0 - 0.50 * collar_lip[..., None])
+    skin_luma = (0.299 * orig_diff[..., 0] + 0.587 * orig_diff[..., 1] + 0.114 * orig_diff[..., 2])[..., None]
+    neutral_skin = skin_luma * np.array([1.10, 0.96, 0.85], dtype=np.float32)[None, None, :]
+    skin_balanced = orig_diff * 0.64 + neutral_skin * 0.36
+    skin_rgb = np.clip(skin_balanced * 0.64, 0, 255)
+    # Soft-knee compress hot skin highlights so thumb knuckle never blows out under overhead key light
+    skin_rgb = np.where(skin_rgb > 120.0, 120.0 + (skin_rgb - 120.0) * 0.32, skin_rgb)
+    # Deeper contact shadow right at glove cutout lip so exposed thumb sits naturally inside glove opening
+    collar_lip = np.clip(1.0 - d_sk_collar / 0.028, 0.0, 1.0)
+    skin_rgb *= (1.0 - 0.58 * collar_lip[..., None])
 
-    skin_rough = np.clip(0.61 + skin_noise, 0.54, 0.68)
+    skin_rough = np.clip(0.62 + skin_noise, 0.55, 0.69)
     droplet_dots = rng.random((size, size)) < 0.014
-    skin_rough[droplet_dots] = 0.34
+    skin_rough[droplet_dots] = 0.42
 
     diff_out[m_skin] = skin_rgb[m_skin]
     mr_out[m_skin, 1] = np.clip(skin_rough[m_skin] * 255.0, 82, 180).astype(np.uint8)
@@ -427,9 +432,9 @@ def _stylize_fps_arms_textures(
     # Paint contact AO along wrist-cuff seam (balanced to avoid visual narrowing), 5 finger collars & palmar contact
     wrist_sl_ao = 1.0 - 0.54 * np.exp(-((d_sl_wrist / 0.022) ** 2))
     wrist_gl_ao = 1.0 - 0.58 * np.exp(-((d_gl_wrist / 0.026) ** 2))
-    collar_gl_ao = 1.0 - 0.68 * np.exp(-((d_gl_collar / 0.018) ** 2))
-    collar_sk_ao = 1.0 - 0.84 * np.exp(-((d_sk_collar / 0.030) ** 2))
-    palmar_ao = 1.0 - 0.72 * np.clip((palmar_w - 0.12) / 0.72, 0.0, 1.0)
+    collar_gl_ao = 1.0 - 0.72 * np.exp(-((d_gl_collar / 0.020) ** 2))
+    collar_sk_ao = 1.0 - 0.90 * np.exp(-((d_sk_collar / 0.036) ** 2))
+    palmar_ao = 1.0 - 0.82 * np.clip((palmar_w - 0.10) / 0.70, 0.0, 1.0)
 
     occ_out[m_sleeve] *= wrist_sl_ao[m_sleeve]
     occ_out[m_glove] *= np.minimum(wrist_gl_ao[m_glove], collar_gl_ao[m_glove])

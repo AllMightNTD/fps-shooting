@@ -19,19 +19,24 @@ Trò chơi bắn súng góc nhìn thứ nhất (FPS) trên nền WebGL sử dụ
 │   ├── modes/
 │   │   ├── TDM.js          # Đấu Đội (▲ Đặc Nhiệm #2F80FF vs ● Nổi Loạn #FF4D2E): khóa lệch >=2, cấm bắn đồng đội
 │   │   └── FFA.js          # Đấu Đơn (màu trung tính #8A8F98): xếp theo killLimit/hết giờ, spawn khuất LoS
-│   └── tests/
-│       ├── test_lan_v2.js  # Bộ kiểm thử Node.js (5 test, gồm 6 edge case + reload/switch/TOL/posture hitbox)
-│       └── test_arm_rig.mjs # Unit test AAA cho IK 2 xương & controller tay SkinnedMesh (6 test, gồm m416 + awm sockets)
+│   ├── tests/
+│   │   ├── test_lan_v2.js     # Bộ kiểm thử Node.js (5 test, gồm 6 edge case + reload/switch/TOL/posture hitbox)
+│   │   ├── test_arm_rig.mjs   # Unit test AAA cho IK 2 xương & controller tay SkinnedMesh (6 test, gồm m416 + awm sockets)
+│   │   └── test_military_map.mjs # Unit & integration test cho Triangle-BVH, thang tháp canh 4m & đồng bộ map Khu Quân Sự Cũ
+├── shared/
+│   └── maps/               # military_layout.json & military_colliders.json dùng chung Client/Server
 ├── public/                 # Giao diện & Engine phía Client (ES Modules)
-│   ├── FPS.html            # HUD vô hạn đạn, vòng tiến độ nạp, Radar, ống ngắm Sniper & Modal Cài đặt
+│   ├── FPS.html            # HUD vô hạn đạn, chọn map (Khu Quân Sự Cũ mặc định / Bến Cảng Mưa), Radar & Modal Cài đặt
 │   └── js/
 │       ├── net.js          # Tự suy ra ws(s)://${location.host}/ws, tự nối lại & sessionStorage 30s
-│       ├── lobby.js        # Danh sách phòng thời gian thực, tạo phòng theo tên nhập, Vào nhanh, Mật khẩu
-│       ├── room.js         # Phòng chờ 2 cột TDM / FFA, Sẵn sàng, Đổi phe, Kick, Chat & Cài đặt Host
+│       ├── lobby.js        # Danh sách phòng thời gian thực, tạo phòng theo tên/map nhập, Vào nhanh, Mật khẩu
+│       ├── room.js         # Phòng chờ 2 cột TDM / FFA, Sẵn sàng, Đổi phe, Kick, Chat & Cài đặt Host (có đổi map)
 │       ├── settings.js     # Lưu cấu hình chuột, FOV, Hold/Toggle, gán lại phím BIND qua localStorage
 │       ├── input.js        # Input 3 lớp dùng e.code, Alt+Tab reset(), chặn cuộn trang & click khóa chuột đầu
 │       ├── arm_rig.js      # Bộ giải IK 2 xương giải tích, SKINNED_ARM_POSES (M416/Pistol/Sniper+Bolt) & gập ngón bóp cò
-│       └── game.js         # Engine Three.js r128: vật lý 60Hz, M416/Glock-17/AWM PBR, tay SkinnedMesh, TeamColor & Radar
+│       ├── map_collision.js # Triangle-BVH raycast, trượt tường AABB/OBB, sàn nâng 4m & leo thang tháp canh
+│       ├── map_loader.js   # Nạp map Khu Quân Sự Cũ (Sky Dome overcast + God-Rays, vũng nước PBR, InstancedMesh, cây/núi hậu cảnh & FogExp2)
+│       └── game.js         # Engine Three.js r128 hỗ trợ đa bản đồ (Khu Quân Sự Cũ / Bến Cảng Mưa), vật lý 60Hz & vũ khí PBR
 ├── FPS.html                # Trang chuyển hướng trỏ về public/FPS.html
 ├── GEMINI.md               # Quy chuẩn kỹ thuật và quy trình làm việc của dự án
 ├── README.md               # Tài liệu hướng dẫn dự án

@@ -7,7 +7,7 @@ import crypto from "node:crypto";
 
 import { Room } from "./Room.js";
 import { ERR, GAME_MODE, MSG, ROOM_STATE, sanitizeText } from "./protocol.js";
-import { buildHarborMap, generateSpawnPoints } from "./spawn.js";
+import { buildHarborMap, generateSpawnPoints, loadMilitaryArena } from "./spawn.js";
 
 export const PING_INTERVAL_MS = 5000;
 export const HEARTBEAT_TIMEOUT_MS = 15000;
@@ -16,11 +16,20 @@ export const RECONNECT_GRACE_MS = 30000;
 export class RoomManager {
   constructor(nowFn = Date.now) {
     this.now = nowFn;
-    const arenaBase = buildHarborMap();
-    this.sharedArena = {
-      boxes: arenaBase.boxes,
-      spawns: generateSpawnPoints(arenaBase.boxes),
+    const harborBase = buildHarborMap();
+    this.arenas = {
+      harbor: {
+        mapId: "harbor",
+        bounds: { minX: -48, maxX: 48, minZ: -48, maxZ: 48 },
+        boxes: harborBase.boxes,
+        obbs: [],
+        walkableSlabs: [],
+        ladders: [],
+        spawns: generateSpawnPoints(harborBase.boxes),
+      },
+      military: loadMilitaryArena(),
     };
+    this.sharedArena = this.arenas.military;
     this.rooms = new Map();
     this.sessions = new Map(); // playerId -> session
     this.tokens = new Map(); // token -> playerId
@@ -168,7 +177,7 @@ export class RoomManager {
     }
     this._syncPlayerName(session, msg.playerName);
     const id = `r${this.nextRoomSeq++}`;
-    const room = new Room(id, session, msg, this.sharedArena, this.now);
+    const room = new Room(id, session, msg, this.arenas, this.now);
     const joinRes = room.join(session, room.password, msg.team, this.now());
     if (!joinRes.ok) return joinRes;
 
@@ -221,8 +230,9 @@ export class RoomManager {
       return this.joinRoom(session, best.id);
     }
     return this.createRoom(session, {
-      name: `Bến Cảng TDM #${this.nextRoomSeq}`,
+      name: `Khu Quân Sự TDM #${this.nextRoomSeq}`,
       mode: GAME_MODE.TDM,
+      map: "military",
       killLimit: 30,
       maxPlayers: 10,
     });

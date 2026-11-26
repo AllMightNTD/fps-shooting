@@ -27,10 +27,16 @@ function clampInt(val, min, max, fallback) {
 }
 
 export class Room {
-  constructor(id, hostSession, options = {}, sharedArena, nowFn = Date.now) {
+  constructor(id, hostSession, options = {}, sharedArenaOrArenas, nowFn = Date.now) {
     this.id = id;
     this.now = nowFn;
-    this.arena = sharedArena;
+    if (sharedArenaOrArenas && sharedArenaOrArenas.boxes) {
+      this.arenas = { harbor: sharedArenaOrArenas, military: sharedArenaOrArenas };
+      this.defaultArena = sharedArenaOrArenas;
+    } else {
+      this.arenas = sharedArenaOrArenas || {};
+      this.defaultArena = this.arenas.military || this.arenas.harbor || { boxes: [], spawns: { A: [], B: [], FFA: [] } };
+    }
 
     this.name = sanitizeText(options.name, `Phòng ${id}`, 24);
     this.hostId = hostSession.id;
@@ -39,7 +45,7 @@ export class Room {
         ? options.password.trim().slice(0, 24)
         : null;
     this.mode = MODE_IMPLS[options.mode] ? options.mode : GAME_MODE.TDM;
-    this.map = VALID_MAPS.has(options.map) ? options.map : "harbor";
+    this.map = VALID_MAPS.has(options.map) ? options.map : "military";
     this.killLimit = clampInt(options.killLimit, 1, 100, this.mode === GAME_MODE.TDM ? 30 : 20);
     this.timeLimit = clampInt(options.timeLimit, 60, 1200, 600);
     this.maxPlayers = clampInt(options.maxPlayers, 2, 12, 10);
@@ -56,6 +62,10 @@ export class Room {
     this.endingEndsAt = 0;
     this.lastWinner = null;
     this.match = new Match(this);
+  }
+
+  get arena() {
+    return this.arenas[this.map] || this.defaultArena;
   }
 
   get modeImpl() {

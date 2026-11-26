@@ -17,6 +17,7 @@ class MeshData:
     normals: np.ndarray    # (N, 3) float32
     uvs: np.ndarray        # (N, 2) float32
     indices: np.ndarray    # (M,) uint32
+    colors: np.ndarray | None = None  # (N, 3) linear float32 RGB optional vertex AO/tint
 
     def __post_init__(self) -> None:
         if self.positions.ndim != 2 or self.positions.shape[1] != 3:
@@ -27,6 +28,8 @@ class MeshData:
             raise ValueError("uvs must have shape (N, 2)")
         if self.indices.ndim != 1 or len(self.indices) % 3 != 0:
             raise ValueError("indices must be a 1D triangle list")
+        if self.colors is not None and self.colors.shape != self.positions.shape:
+            raise ValueError("colors must match positions shape")
 
 
 def _rotation_matrix_xyz(rx: float, ry: float, rz: float) -> np.ndarray:
@@ -81,6 +84,33 @@ def transform_mesh(
         normals=new_norm.astype(np.float32),
         uvs=mesh.uvs.copy(),
         indices=indices,
+        colors=mesh.colors.copy() if mesh.colors is not None else None,
+    )
+
+
+def bake_vertical_foot_ao(
+    mesh: MeshData,
+    height: float = 0.35,
+    min_factor: float = 0.45,
+) -> MeshData:
+    """Bake zero-cost vertical ground-contact grime/AO into vertex COLOR_0 near y = 0."""
+    if height <= 0.0:
+        raise ValueError("height must be positive")
+    y = mesh.positions[:, 1]
+    t = np.clip(y / float(height), 0.0, 1.0)
+    smooth = t * t * (3.0 - 2.0 * t)
+    # Slightly warmer earth bias near y=0 so dirt grime blends into ground
+    base = mesh.colors if mesh.colors is not None else np.ones_like(mesh.positions, dtype=np.float32)
+    ao_r = (min_factor + (1.0 - min_factor) * smooth).astype(np.float32)
+    ao_g = (min_factor * 0.96 + (1.0 - min_factor * 0.96) * smooth).astype(np.float32)
+    ao_b = (min_factor * 0.88 + (1.0 - min_factor * 0.88) * smooth).astype(np.float32)
+    ao = np.column_stack((ao_r, ao_g, ao_b)).astype(np.float32)
+    return MeshData(
+        positions=mesh.positions,
+        normals=mesh.normals,
+        uvs=mesh.uvs,
+        indices=mesh.indices,
+        colors=np.clip(base * ao, 0.0, 1.0).astype(np.float32),
     )
 
 
@@ -90,12 +120,20 @@ def merge_meshes(meshes: Sequence[MeshData]) -> MeshData:
         raise ValueError("meshes must not be empty")
     if len(meshes) == 1:
         m = meshes[0]
-        return MeshData(m.positions.copy(), m.normals.copy(), m.uvs.copy(), m.indices.copy())
+        return MeshData(
+            m.positions.copy(),
+            m.normals.copy(),
+            m.uvs.copy(),
+            m.indices.copy(),
+            m.colors.copy() if m.colors is not None else None,
+        )
 
     pos_list: list[np.ndarray] = []
     norm_list: list[np.ndarray] = []
     uv_list: list[np.ndarray] = []
     idx_list: list[np.ndarray] = []
+    has_colors = any(m.colors is not None for m in meshes)
+    col_list: list[np.ndarray] = []
     offset = 0
 
     for m in meshes:
@@ -103,6 +141,8 @@ def merge_meshes(meshes: Sequence[MeshData]) -> MeshData:
         norm_list.append(m.normals)
         uv_list.append(m.uvs)
         idx_list.append(m.indices.astype(np.uint32) + offset)
+        if has_colors:
+            col_list.append(m.colors if m.colors is not None else np.ones_like(m.positions, dtype=np.float32))
         offset += m.positions.shape[0]
 
     return MeshData(
@@ -110,6 +150,7 @@ def merge_meshes(meshes: Sequence[MeshData]) -> MeshData:
         normals=np.vstack(norm_list).astype(np.float32),
         uvs=np.vstack(uv_list).astype(np.float32),
         indices=np.concatenate(idx_list).astype(np.uint32),
+        colors=np.vstack(col_list).astype(np.float32) if has_colors else None,
     )
 
 

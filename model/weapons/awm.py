@@ -383,15 +383,15 @@ def _normalize_hierarchy_and_sockets(gltf: dict[str, Any]) -> None:
         }
     )
 
-    # 3. Wrap magazine under `awm_mag_group` with attached `socket_mag` for reload hand tracking
+    # 3. Wrap magazine under `awm_mag_group` with attached `socket_mag` positioned outside left/lower mag face for clean reload grip
     mag_socket_idx = len(nodes)
     nodes.append(
         {
             "name": "socket_mag",
-            "translation": [1.60, -7.20, -11.30],
+            "translation": [4.00, -10.20, -10.40],
             "rotation": _world_to_root_cm_socket_rot(
-                distal=(0.54, -0.18, -0.82),
-                palm_normal=(0.80, 0.24, 0.55),
+                distal=(0.34, -0.18, -0.923),
+                palm_normal=(0.89, 0.26, 0.37),
                 is_right_hand=False,
             ),
         }
@@ -431,16 +431,16 @@ def _normalize_hierarchy_and_sockets(gltf: dict[str, Any]) -> None:
 
     sock_hg_idx = make_metric_socket(
         "socket_handguard",
-        pos=(-0.026, -0.036, -0.275),
-        distal=(-0.20, -0.12, -0.972),
-        palm=(0.50, 0.86, -0.04),
+        pos=(-0.028, -0.044, -0.275),
+        distal=(-0.20, -0.18, -0.963),
+        palm=(0.64, 0.77, -0.04),
         is_right=False,
     )
     sock_grip_idx = make_metric_socket(
         "socket_grip",
-        pos=(0.024, -0.056, 0.070),
-        distal=(0.18, -0.04, -0.983),
-        palm=(-0.96, 0.08, 0.26),
+        pos=(0.036, -0.062, 0.065),
+        distal=(0.14, -0.06, -0.988),
+        palm=(-0.95, 0.14, 0.28),
         is_right=True,
     )
     sock_ch_idx = make_metric_socket(

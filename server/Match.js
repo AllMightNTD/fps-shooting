@@ -145,7 +145,7 @@ export class Match {
 
     const pos = msg.pos;
     if (finiteVec3(pos)) {
-      const clamped = clampAndResolvePlayerPos(pos, this.room.arena.boxes);
+      const clamped = clampAndResolvePlayerPos(pos, this.room.arena, 0.45, incomingFlags);
       const dtSec = Math.max(0.05, (now - (player.lastStateAt || now)) / 1000);
       const maxDist = allowedSpeed * dtSec + 1.35;
       const d = Math.hypot(clamped.x - player.x, clamped.z - player.z);
@@ -161,7 +161,9 @@ export class Match {
             y: clamped.y,
             z: player.z + (clamped.z - player.z) * k,
           },
-          this.room.arena.boxes,
+          this.room.arena,
+          0.45,
+          incomingFlags,
         );
         player.x = stepPos.x;
         player.y = stepPos.y;
@@ -343,13 +345,13 @@ export class Match {
     }
 
     // Posture-aware wall occlusion check (crouching lowers both head and torso hitboxes)
-    const boxes = this.room.arena.boxes;
+    const arena = this.room.arena;
     const shooterEyeY = shooter.y + (shooter.flags & FLAG.CROUCH ? 1.12 : 1.7);
     const victimCrouch = Boolean(victim.flags & FLAG.CROUCH);
     const victimTorsoY = victim.y + (victimCrouch ? 0.72 : 1.25);
     const victimHeadY = victim.y + (victimCrouch ? 1.08 : 1.63);
-    const canHitTorso = hasLineOfSight(shooter.x, shooterEyeY, shooter.z, victim.x, victimTorsoY, victim.z, boxes);
-    const canHitHead = hasLineOfSight(shooter.x, shooterEyeY, shooter.z, victim.x, victimHeadY, victim.z, boxes);
+    const canHitTorso = hasLineOfSight(shooter.x, shooterEyeY, shooter.z, victim.x, victimTorsoY, victim.z, arena);
+    const canHitHead = hasLineOfSight(shooter.x, shooterEyeY, shooter.z, victim.x, victimHeadY, victim.z, arena);
     if (!canHitTorso && !canHitHead) {
       return { ok: false, code: ERR.INVALID_STATE, message: "Bị vật cản che khuất" };
     }

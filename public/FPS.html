@@ -176,11 +176,23 @@
       }
       #hm { position: absolute; left: 50%; top: 50%; width: 30px; height: 30px; margin: -15px 0 0 -15px; border: 2px solid var(--amber); transform: rotate(45deg); opacity: 0; }
       #dmg { position: absolute; inset: 0; box-shadow: inset 0 0 140px 30px #c0291e; opacity: 0; }
+      #lowHpOverlay {
+        position: fixed; inset: 0; pointer-events: none; opacity: 0;
+        background: radial-gradient(ellipse at center, rgba(130, 14, 10, 0) 40%, rgba(165, 20, 14, 0.62) 78%, rgba(95, 6, 6, 0.90) 100%);
+        box-shadow: inset 0 0 130px 26px rgba(155, 16, 12, 0.72);
+        transition: opacity 0.12s linear;
+      }
       #bot { position: absolute; left: 16px; right: 16px; bottom: 16px; display: flex; justify-content: space-between; align-items: flex-end; }
+      #vignette {
+        position: fixed; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.25s;
+        background: radial-gradient(ellipse at center, rgba(0,0,0,0) 56%, rgba(6,9,13,0.38) 100%);
+      }
       #hpWrap { display: flex; flex-direction: column; gap: 5px; }
       #postureBadge { font-size: 12px; color: #b5cbd8; text-shadow: 0 1px 3px #000; }
-      #hp { width: 220px; height: 12px; background: rgba(0, 0, 0, 0.5); border: 1px solid #ffffff55; }
+      #hpRow { display: flex; align-items: center; gap: 8px; }
+      #hp { width: 200px; height: 12px; background: rgba(0, 0, 0, 0.52); border: 1px solid #ffffff55; }
       #hpb { height: 100%; width: 100%; background: #4ec3b0; transition: width 0.15s; }
+      #hpLabel { font-size: 12px; color: #e6f1f6; text-shadow: 0 1px 3px #000; letter-spacing: 0.3px; }
       #ammoWrap { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
       #weaponBar { display: flex; gap: 6px; }
       .wSlot {
@@ -207,6 +219,7 @@
   <body>
     <!-- HUD trong trận -->
     <div id="hud">
+      <div id="vignette"></div>
       <div id="top">Đợt <b id="wv">0</b> &nbsp; Điểm <b id="sc">0</b></div>
       <canvas id="radarCanvas" width="124" height="124"></canvas>
       <div id="pvpTop">
@@ -218,6 +231,7 @@
       <div id="hudChatLog"></div>
       <div id="killAlert"></div>
       <div id="respawnBanner"></div>
+      <div id="lowHpOverlay"></div>
       <div id="dmg"></div>
       <div id="sniperScope"></div>
       <div id="cross"></div>
@@ -232,7 +246,7 @@
       <div id="bot">
         <div id="hpWrap">
           <div id="postureBadge">Đứng</div>
-          <div id="hp"><div id="hpb"></div></div>
+          <div id="hpRow"><div id="hp"><div id="hpb"></div></div><span id="hpLabel">MÁU 100 / 100</span></div>
         </div>
         <div id="ammoWrap">
           <div id="weaponBar">
@@ -281,12 +295,19 @@
             <button id="btnOpenCreate" type="button">+ Tạo phòng</button>
             <button id="btnQuickJoin" type="button" class="sec">Vào trận nhanh</button>
           </div>
-          <button id="btnSoloMode" type="button" class="sec">Luyện tập Offline (Drone)</button>
+          <div class="row">
+            <select id="soloMapSelect" title="Chọn bản đồ luyện tập">
+              <option value="military" selected>Khu Quân Sự Cũ</option>
+              <option value="harbor">Bến Cảng Mưa</option>
+            </select>
+            <button id="btnSoloMode" type="button" class="sec">Luyện tập Offline (Drone)</button>
+          </div>
         </div>
 
         <div id="createRoomPanel" class="subPanel">
           <div class="row" style="margin-bottom:8px">
-            <input id="createRoomName" maxlength="24" placeholder="Tên phòng" value="Cảng Mưa TDM" style="flex:1.4;min-width:140px" />
+            <input id="createRoomName" maxlength="24" placeholder="Tên phòng" value="Khu Quân Sự TDM" style="flex:1.4;min-width:140px" />
+            <select id="createMap"><option value="military" selected>Khu Quân Sự Cũ (5v5)</option><option value="harbor">Bến Cảng Mưa</option></select>
             <select id="createMode"><option value="TDM">Đấu Đội (TDM)</option><option value="FFA">Đấu Đơn (FFA)</option></select>
             <select id="createKills"><option value="10">10 Mạng</option><option value="20">20 Mạng</option><option value="30" selected>30 Mạng</option><option value="50">50 Mạng</option></select>
             <select id="createTime"><option value="300">5 Phút</option><option value="600" selected>10 Phút</option></select>
@@ -333,6 +354,7 @@
         <div id="roomCountdown" class="countdownBanner"></div>
 
         <div class="row" style="padding:8px;background:rgba(128,150,168,0.1);border-radius:4px;margin-bottom:8px">
+          <select id="roomSetMap"><option value="military">Khu Quân Sự Cũ</option><option value="harbor">Bến Cảng Mưa</option></select>
           <select id="roomSetMode"><option value="TDM">Đấu Đội (TDM)</option><option value="FFA">Đấu Đơn (FFA)</option></select>
           <select id="roomSetKills"><option value="1">1 Mạng</option><option value="10">10 Mạng</option><option value="20">20 Mạng</option><option value="30">30 Mạng</option><option value="50">50 Mạng</option></select>
           <select id="roomSetTime"><option value="300">5 Phút</option><option value="600">10 Phút</option></select>
@@ -444,6 +466,18 @@
     <script src="/model/dist/awm.bundle.js"></script>
     <script src="/model/dist/fps_arms.bundle.js"></script>
     <script src="/model/dist/soldier.bundle.js"></script>
+    <script src="/model/dist/map_container.bundle.js"></script>
+    <script src="/model/dist/map_warehouse.bundle.js"></script>
+    <script src="/model/dist/map_wrecked_truck.bundle.js"></script>
+    <script src="/model/dist/map_watchtower.bundle.js"></script>
+    <script src="/model/dist/map_sandbag.bundle.js"></script>
+    <script src="/model/dist/map_concrete_wall.bundle.js"></script>
+    <script src="/model/dist/map_fence.bundle.js"></script>
+    <script src="/model/dist/map_wood_crate.bundle.js"></script>
+    <script src="/model/dist/map_oil_barrel.bundle.js"></script>
+    <script src="/model/dist/map_wood_pallet.bundle.js"></script>
+    <script src="/model/dist/map_tire_stack.bundle.js"></script>
+    <script src="/model/dist/map_barbed_wire.bundle.js"></script>
     <script type="module">
       import { MSG, ROOM_STATE, sanitizeText } from "/js/protocol.js";
       import { createNetClient } from "/js/net.js";
@@ -529,9 +563,9 @@
       const lobby = createLobbyController({
         net,
         getNickFn: getNick,
-        onEnterSolo: () => {
+        onEnterSolo: (mapId) => {
           showScreen("none");
-          game.startSolo();
+          game.startSolo(mapId);
         },
         onError: showErrorBanner,
       });

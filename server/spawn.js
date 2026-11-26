@@ -1,10 +1,39 @@
 /**
- * Deterministic Rainy Harbor arena boxes (MAP_SEED = 11042026) and spawn point selection.
+ * Deterministic arena boxes/OBBs/ladders and spawn point selection for Harbor & Military 5v5.
  * Used for collision clamping, line-of-sight wall checks, TDM bases, and FFA safe spawns.
  */
 
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { FLAG } from "./weapons.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 export const MAP_SEED = 11042026;
 export const ARENA_BOUND = 48.0;
+
+let cachedMilitaryArena = null;
+
+export function loadMilitaryArena(collidersPath = null) {
+  if (!collidersPath && cachedMilitaryArena) return cachedMilitaryArena;
+  const resolved =
+    collidersPath || path.resolve(__dirname, "..", "shared", "maps", "military_colliders.json");
+  const raw = JSON.parse(fs.readFileSync(resolved, "utf8"));
+  const arena = {
+    mapId: "military",
+    bounds: raw.bounds || { minX: -35, maxX: 35, minZ: -45, maxZ: 45, wallHeight: 3.5 },
+    boxes: Array.isArray(raw.boxes) ? raw.boxes : [],
+    obbs: Array.isArray(raw.obbs) ? raw.obbs : [],
+    walkableSlabs: Array.isArray(raw.walkableSlabs) ? raw.walkableSlabs : [],
+    ladders: Array.isArray(raw.ladders) ? raw.ladders : [],
+    spawns: raw.spawns || { A: [], B: [], FFA: [] },
+  };
+  if (!collidersPath) cachedMilitaryArena = arena;
+  return arena;
+}
 
 /**
  * Deterministic 31-bit Park-Miller PRNG matching public/js/game.js container layout.
@@ -70,29 +99,88 @@ export function isPointClear(x, z, boxes, margin = 0.9) {
   return true;
 }
 
-export function clampAndResolvePlayerPos(pos, boxes, radius = 0.45) {
-  let x = Math.max(-ARENA_BOUND, Math.min(ARENA_BOUND, pos.x));
-  let z = Math.max(-ARENA_BOUND, Math.min(ARENA_BOUND, pos.z));
-  const y = Math.max(0, Math.min(8, pos.y));
+export function clampAndResolvePlayerPos(pos, arenaOrBoxes, radius = 0.45, flags = 0) {
+  const isArr = Array.isArray(arenaOrBoxes);
+  const boxes = isArr ? arenaOrBoxes : (arenaOrBoxes && arenaOrBoxes.boxes) || [];
+  const obbs = isArr ? [] : (arenaOrBoxes && arenaOrBoxes.obbs) || [];
+  const slabs = isArr ? [] : (arenaOrBoxes && arenaOrBoxes.walkableSlabs) || [];
+  const ladders = isArr ? [] : (arenaOrBoxes && arenaOrBoxes.ladders) || [];
+  const bounds = isArr || !arenaOrBoxes?.bounds
+    ? { minX: -ARENA_BOUND, maxX: ARENA_BOUND, minZ: -ARENA_BOUND, maxZ: ARENA_BOUND }
+    : arenaOrBoxes.bounds;
 
-  for (const b of boxes) {
-    if (b.y1 >= 9 || y >= b.y1) continue;
-    const cx = Math.max(b.x0, Math.min(x, b.x1));
-    const cz = Math.max(b.z0, Math.min(z, b.z1));
-    const dx = x - cx;
-    const dz = z - cz;
-    const d2 = dx * dx + dz * dz;
-    if (d2 < radius * radius) {
-      const d = Math.sqrt(d2) || 0.001;
-      x += (dx / d) * (radius - d);
-      z += (dz / d) * (radius - d);
+  let x = Math.max(bounds.minX + radius, Math.min(bounds.maxX - radius, pos.x));
+  let z = Math.max(bounds.minZ + radius, Math.min(bounds.maxZ - radius, pos.z));
+  let y = Math.max(0, Math.min(8, pos.y));
+
+  // Clamp elevation cleanly if arena defines walkable slabs & ladders
+  if (slabs.length || ladders.length) {
+    let supportY = 0;
+    for (const s of slabs) {
+      if (x >= s.x0 - 0.3 && x <= s.x1 + 0.3 && z >= s.z0 - 0.3 && z <= s.z1 + 0.3 && y >= s.y1 - 0.5) {
+        if (s.y1 > supportY) supportY = s.y1;
+      }
+    }
+    const nearLadder = ladders.some(
+      (l) => Math.hypot(x - l.x, z - l.z) <= (l.radius || 0.75) + 0.4 && y <= l.maxY + 0.35,
+    );
+    if (!nearLadder && y > supportY + 2.2) {
+      y = supportY + 2.2;
+    }
+    if (y < supportY) y = supportY;
+  }
+
+  const pHeight = flags & FLAG.CROUCH ? 1.22 : 1.78;
+  const minFootClear = y + 0.36;
+  const maxHeadY = y + pHeight;
+
+  for (let pass = 0; pass < 2; pass++) {
+    for (const b of boxes) {
+      if (b.bulletOnly) continue;
+      if (isArr && b.y1 >= 9) continue;
+      const by0 = b.y0 ?? 0;
+      if (maxHeadY <= by0 + 0.04 || minFootClear >= b.y1) continue;
+      const cx = Math.max(b.x0, Math.min(x, b.x1));
+      const cz = Math.max(b.z0, Math.min(z, b.z1));
+      const dx = x - cx;
+      const dz = z - cz;
+      const d2 = dx * dx + dz * dz;
+      if (d2 < radius * radius) {
+        const d = Math.sqrt(d2) || 0.001;
+        x += (dx / d) * (radius - d);
+        z += (dz / d) * (radius - d);
+      }
+    }
+
+    for (const o of obbs) {
+      if (o.bulletOnly) continue;
+      if (maxHeadY <= o.cy - o.hy + 0.04 || minFootClear >= o.cy + o.hy) continue;
+      const c = Math.cos(o.yaw);
+      const s = Math.sin(o.yaw);
+      const rx = x - o.cx;
+      const rz = z - o.cz;
+      const lx = rx * c - rz * s;
+      const lz = rx * s + rz * c;
+      const clx = Math.max(-o.hx, Math.min(lx, o.hx));
+      const clz = Math.max(-o.hz, Math.min(lz, o.hz));
+      const dx = lx - clx;
+      const dz = lz - clz;
+      const d2 = dx * dx + dz * dz;
+      if (d2 < radius * radius) {
+        const d = Math.sqrt(d2) || 0.001;
+        const pushL = radius - d;
+        const plx = (dx / d) * pushL;
+        const plz = (dz / d) * pushL;
+        x += plx * c + plz * s;
+        z += -plx * s + plz * c;
+      }
     }
   }
 
   return {
-    x: Math.max(-ARENA_BOUND, Math.min(ARENA_BOUND, x)),
+    x: Math.max(bounds.minX + radius, Math.min(bounds.maxX - radius, x)),
     y,
-    z: Math.max(-ARENA_BOUND, Math.min(ARENA_BOUND, z)),
+    z: Math.max(bounds.minZ + radius, Math.min(bounds.maxZ - radius, z)),
   };
 }
 
@@ -123,7 +211,28 @@ export function rayIntersectsAABB(ox, oy, oz, dx, dy, dz, box, maxDist = 200) {
   return tmin <= tmax && tmin >= 0 ? tmin : null;
 }
 
-export function hasLineOfSight(ax, ay, az, bx, by, bz, boxes) {
+export function rayIntersectsOBB(ox, oy, oz, dx, dy, dz, obb, maxDist = 200) {
+  const c = Math.cos(obb.yaw);
+  const s = Math.sin(obb.yaw);
+  const rx = ox - obb.cx;
+  const ry = oy - obb.cy;
+  const rz = oz - obb.cz;
+  return rayIntersectsAABB(
+    rx * c - rz * s,
+    ry,
+    rx * s + rz * c,
+    dx * c - dz * s,
+    dy,
+    dx * s + dz * c,
+    { x0: -obb.hx, x1: obb.hx, y0: -obb.hy, y1: obb.hy, z0: -obb.hz, z1: obb.hz },
+    maxDist,
+  );
+}
+
+export function hasLineOfSight(ax, ay, az, bx, by, bz, arenaOrBoxes) {
+  const isArr = Array.isArray(arenaOrBoxes);
+  const boxes = isArr ? arenaOrBoxes : (arenaOrBoxes && arenaOrBoxes.boxes) || [];
+  const obbs = isArr ? [] : (arenaOrBoxes && arenaOrBoxes.obbs) || [];
   const dx = bx - ax;
   const dy = by - ay;
   const dz = bz - az;
@@ -133,7 +242,13 @@ export function hasLineOfSight(ax, ay, az, bx, by, bz, boxes) {
   const ny = dy / dist;
   const nz = dz / dist;
   for (const b of boxes) {
+    if (b.moveOnly) continue;
     const t = rayIntersectsAABB(ax, ay, az, nx, ny, nz, b, dist);
+    if (t !== null && t < dist - 0.05) return false;
+  }
+  for (const o of obbs) {
+    if (o.moveOnly) continue;
+    const t = rayIntersectsOBB(ax, ay, az, nx, ny, nz, o, dist);
     if (t !== null && t < dist - 0.05) return false;
   }
   return true;
@@ -230,7 +345,7 @@ export function pickFfaSpawn(arena, players, excludeId = null) {
       if (enemy.id === excludeId || !enemy.alive) continue;
       const d2 = (cand.x - enemy.x) ** 2 + (cand.z - enemy.z) ** 2;
       minEnemyD2 = Math.min(minEnemyD2, d2);
-      if (hasLineOfSight(enemy.x, enemy.y + 1.65, enemy.z, cand.x, 1.55, cand.z, arena.boxes)) {
+      if (hasLineOfSight(enemy.x, enemy.y + 1.65, enemy.z, cand.x, 1.55, cand.z, arena)) {
         hidden = false;
       }
     }

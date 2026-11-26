@@ -343,17 +343,32 @@ def export_glb(root_nodes: list[GLBNode], scene_name: str = "Scene") -> bytes:
         )
 
         mat_idx = get_material_index(mat)
+        attrs: dict[str, int] = {
+            "POSITION": acc_pos,
+            "NORMAL": acc_norm,
+            "TEXCOORD_0": acc_uv,
+        }
+        if mesh.colors is not None:
+            col = np.ascontiguousarray(mesh.colors, dtype="<f4")
+            bv_col = bin_builder.add_view(col.tobytes(), target=_TARGET_ARRAY_BUFFER)
+            acc_col = len(accessors)
+            accessors.append(
+                {
+                    "bufferView": bv_col,
+                    "componentType": _COMP_FLOAT,
+                    "count": int(col.shape[0]),
+                    "type": "VEC3",
+                }
+            )
+            attrs["COLOR_0"] = acc_col
+
         mesh_idx = len(meshes_json)
         meshes_json.append(
             {
                 "name": mesh_name,
                 "primitives": [
                     {
-                        "attributes": {
-                            "POSITION": acc_pos,
-                            "NORMAL": acc_norm,
-                            "TEXCOORD_0": acc_uv,
-                        },
+                        "attributes": attrs,
                         "indices": acc_idx,
                         "material": mat_idx,
                     }

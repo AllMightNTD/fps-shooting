@@ -1,0 +1,4905 @@
+{
+  "mapId": "military",
+  "name": "Khu Quân Sự Cũ",
+  "bounds": {
+    "minX": -35.0,
+    "maxX": 35.0,
+    "minZ": -45.0,
+    "maxZ": 45.0,
+    "wallHeight": 3.5
+  },
+  "spawns": {
+    "A": [
+      {
+        "x": -3.5,
+        "y": 0.0,
+        "z": -40.5,
+        "yaw": 3.141593
+      },
+      {
+        "x": -1.75,
+        "y": 0.0,
+        "z": -40.0,
+        "yaw": 3.141593
+      },
+      {
+        "x": 0.0,
+        "y": 0.0,
+        "z": -40.5,
+        "yaw": 3.141593
+      },
+      {
+        "x": 1.75,
+        "y": 0.0,
+        "z": -40.0,
+        "yaw": 3.141593
+      },
+      {
+        "x": 3.5,
+        "y": 0.0,
+        "z": -40.5,
+        "yaw": 3.141593
+      }
+    ],
+    "B": [
+      {
+        "x": -3.5,
+        "y": 0.0,
+        "z": 40.5,
+        "yaw": 0.0
+      },
+      {
+        "x": -1.75,
+        "y": 0.0,
+        "z": 40.0,
+        "yaw": 0.0
+      },
+      {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 40.5,
+        "yaw": 0.0
+      },
+      {
+        "x": 1.75,
+        "y": 0.0,
+        "z": 40.0,
+        "yaw": 0.0
+      },
+      {
+        "x": 3.5,
+        "y": 0.0,
+        "z": 40.5,
+        "yaw": 0.0
+      }
+    ],
+    "FFA": [
+      {
+        "x": 0.0,
+        "y": 0.0,
+        "z": -40.5,
+        "yaw": 3.141593
+      },
+      {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 40.5,
+        "yaw": 0.0
+      },
+      {
+        "x": -29.0,
+        "y": 0.0,
+        "z": -35.0,
+        "yaw": 2.513274
+      },
+      {
+        "x": 29.0,
+        "y": 0.0,
+        "z": -36.0,
+        "yaw": -2.513274
+      },
+      {
+        "x": -29.0,
+        "y": 0.0,
+        "z": 35.0,
+        "yaw": 0.628319
+      },
+      {
+        "x": 29.0,
+        "y": 0.0,
+        "z": 36.0,
+        "yaw": -0.628319
+      },
+      {
+        "x": -22.0,
+        "y": 0.0,
+        "z": -14.0,
+        "yaw": -1.570796
+      },
+      {
+        "x": -22.0,
+        "y": 0.0,
+        "z": 14.0,
+        "yaw": -1.570796
+      },
+      {
+        "x": 20.5,
+        "y": 0.0,
+        "z": -19.0,
+        "yaw": 1.570796
+      },
+      {
+        "x": 21.0,
+        "y": 0.0,
+        "z": 19.0,
+        "yaw": 1.570796
+      },
+      {
+        "x": -12.0,
+        "y": 0.0,
+        "z": 0.0,
+        "yaw": -1.570796
+      },
+      {
+        "x": 11.0,
+        "y": 0.0,
+        "z": -9.0,
+        "yaw": 1.570796
+      }
+    ]
+  },
+  "objects": [
+    {
+      "id": "spawn_a_wall_l",
+      "asset": "concrete_wall",
+      "position": [
+        -4.0,
+        0.0,
+        -34.0
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "spawn_a_wall_c",
+      "asset": "concrete_wall",
+      "position": [
+        0.0,
+        0.0,
+        -34.0
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "spawn_a_wall_r",
+      "asset": "concrete_wall",
+      "position": [
+        4.0,
+        0.0,
+        -34.0
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "spawn_a_wing",
+      "asset": "concrete_wall",
+      "position": [
+        -6.0,
+        0.0,
+        -36.2
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "spawn_a_sandbag_r",
+      "asset": "sandbag",
+      "position": [
+        7.2,
+        0.0,
+        -34.2
+      ],
+      "rotationY": 0.18,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "spawn_a_crate",
+      "asset": "wood_crate",
+      "position": [
+        -7.2,
+        0.0,
+        -35.2
+      ],
+      "rotationY": 0.12,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "spawn_a_fg_barrel1",
+      "asset": "oil_barrel",
+      "position": [
+        -4.2,
+        0.0,
+        -35.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 1,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "spawn_a_fg_barrel2",
+      "asset": "oil_barrel",
+      "position": [
+        -3.5,
+        0.0,
+        -35.6
+      ],
+      "rotationY": 0.4,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "spawn_a_fg_tires",
+      "asset": "tire_stack",
+      "position": [
+        5.2,
+        0.0,
+        -35.6
+      ],
+      "rotationY": 0.5,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "spawn_a_fg_wire",
+      "asset": "barbed_wire",
+      "position": [
+        -12.5,
+        0.0,
+        -35.2
+      ],
+      "rotationY": -0.25,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "spawn_a_fg_sandbag_far",
+      "asset": "sandbag",
+      "position": [
+        11.0,
+        0.0,
+        -33.2
+      ],
+      "rotationY": -0.32,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "spawn_a_fg_pallet",
+      "asset": "wood_pallet",
+      "position": [
+        -2.2,
+        0.0,
+        -36.8
+      ],
+      "rotationY": 0.18,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "spawn_b_wall_l",
+      "asset": "concrete_wall",
+      "position": [
+        -4.0,
+        0.0,
+        34.0
+      ],
+      "rotationY": 3.141593,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "spawn_b_wall_c",
+      "asset": "concrete_wall",
+      "position": [
+        0.0,
+        0.0,
+        34.0
+      ],
+      "rotationY": 3.141593,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "spawn_b_wall_r",
+      "asset": "concrete_wall",
+      "position": [
+        4.0,
+        0.0,
+        34.0
+      ],
+      "rotationY": 3.141593,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "spawn_b_wing",
+      "asset": "concrete_wall",
+      "position": [
+        6.0,
+        0.0,
+        36.2
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "spawn_b_sandbag_l",
+      "asset": "sandbag",
+      "position": [
+        -7.2,
+        0.0,
+        34.2
+      ],
+      "rotationY": 3.321593,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "spawn_b_crate",
+      "asset": "wood_crate",
+      "position": [
+        7.2,
+        0.0,
+        35.2
+      ],
+      "rotationY": -0.15,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "spawn_b_fg_barrel1",
+      "asset": "oil_barrel",
+      "position": [
+        4.2,
+        0.0,
+        35.4
+      ],
+      "rotationY": 0.2,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 1,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "spawn_b_fg_tires",
+      "asset": "tire_stack",
+      "position": [
+        -5.2,
+        0.0,
+        35.6
+      ],
+      "rotationY": 1.1,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "spawn_b_fg_wire",
+      "asset": "barbed_wire",
+      "position": [
+        12.5,
+        0.0,
+        35.2
+      ],
+      "rotationY": -0.25,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "warehouse_north",
+      "asset": "warehouse",
+      "position": [
+        -22.0,
+        0.0,
+        -14.0
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": true
+    },
+    {
+      "id": "warehouse_south",
+      "asset": "warehouse",
+      "position": [
+        -22.0,
+        0.0,
+        14.0
+      ],
+      "rotationY": 3.141593,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": true
+    },
+    {
+      "id": "wh_n_crate_in",
+      "asset": "wood_crate",
+      "position": [
+        -24.2,
+        0.0,
+        -13.0
+      ],
+      "rotationY": 0.2,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "wh_n_crate_in2",
+      "asset": "wood_crate",
+      "position": [
+        -19.8,
+        0.0,
+        -16.8
+      ],
+      "rotationY": -0.1,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "wh_s_crate_in",
+      "asset": "wood_crate",
+      "position": [
+        -24.2,
+        0.0,
+        13.0
+      ],
+      "rotationY": -0.2,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "wh_s_crate_in2",
+      "asset": "wood_crate",
+      "position": [
+        -19.8,
+        0.0,
+        16.8
+      ],
+      "rotationY": 0.15,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "lane_a_mid_sandbag",
+      "asset": "sandbag",
+      "position": [
+        -15.2,
+        0.0,
+        0.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "lane_a_flank_wall_n",
+      "asset": "concrete_wall",
+      "position": [
+        -31.5,
+        0.0,
+        -24.0
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "lane_a_flank_wall_s",
+      "asset": "concrete_wall",
+      "position": [
+        -31.5,
+        0.0,
+        24.0
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "lane_a_sandbag_n",
+      "asset": "sandbag",
+      "position": [
+        -15.5,
+        0.0,
+        -24.5
+      ],
+      "rotationY": -0.35,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "lane_a_sandbag_s",
+      "asset": "sandbag",
+      "position": [
+        -15.5,
+        0.0,
+        24.5
+      ],
+      "rotationY": 0.35,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "watchtower_mid",
+      "asset": "watchtower",
+      "position": [
+        4.0,
+        0.0,
+        0.0
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": true
+    },
+    {
+      "id": "truck_mid_n",
+      "asset": "wrecked_truck",
+      "position": [
+        -6.0,
+        0.0,
+        -12.0
+      ],
+      "rotationY": 0.58,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": true
+    },
+    {
+      "id": "truck_mid_s",
+      "asset": "wrecked_truck",
+      "position": [
+        7.0,
+        0.0,
+        13.0
+      ],
+      "rotationY": -2.56,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": true
+    },
+    {
+      "id": "mid_sandbag_w",
+      "asset": "sandbag",
+      "position": [
+        -9.5,
+        0.0,
+        1.5
+      ],
+      "rotationY": 1.319469,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "mid_sandbag_fg_n",
+      "asset": "sandbag",
+      "position": [
+        -5.8,
+        0.0,
+        -25.8
+      ],
+      "rotationY": -0.28,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "mid_tires_fg_n",
+      "asset": "tire_stack",
+      "position": [
+        -4.0,
+        0.0,
+        -26.4
+      ],
+      "rotationY": 0.6,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "mid_wire_fg_n",
+      "asset": "barbed_wire",
+      "position": [
+        7.8,
+        0.0,
+        -24.2
+      ],
+      "rotationY": 0.32,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "mid_crate_cluster_n",
+      "asset": "wood_crate",
+      "position": [
+        3.5,
+        0.0,
+        -21.0
+      ],
+      "rotationY": 0.35,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "mid_crate_cluster_s",
+      "asset": "wood_crate",
+      "position": [
+        -3.5,
+        0.0,
+        21.0
+      ],
+      "rotationY": -0.35,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "mid_barrier_n",
+      "asset": "concrete_wall",
+      "position": [
+        -1.5,
+        0.0,
+        -23.5
+      ],
+      "rotationY": 0.25,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "mid_barrier_s",
+      "asset": "concrete_wall",
+      "position": [
+        1.5,
+        0.0,
+        23.5
+      ],
+      "rotationY": 0.25,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "mid_fence_e",
+      "asset": "fence",
+      "position": [
+        11.2,
+        0.0,
+        -2.5
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "jersey_a_west",
+      "asset": "concrete_wall",
+      "position": [
+        -11.5,
+        0.0,
+        -28.0
+      ],
+      "rotationY": 0.45,
+      "scale": [
+        0.85,
+        0.52,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "jersey_a_east",
+      "asset": "concrete_wall",
+      "position": [
+        10.5,
+        0.0,
+        -28.0
+      ],
+      "rotationY": -0.4,
+      "scale": [
+        0.85,
+        0.52,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "jersey_b_west",
+      "asset": "concrete_wall",
+      "position": [
+        -10.5,
+        0.0,
+        28.0
+      ],
+      "rotationY": -0.45,
+      "scale": [
+        0.85,
+        0.52,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "jersey_b_east",
+      "asset": "concrete_wall",
+      "position": [
+        11.5,
+        0.0,
+        28.0
+      ],
+      "rotationY": 0.4,
+      "scale": [
+        0.85,
+        0.52,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "jersey_mid_nw",
+      "asset": "concrete_wall",
+      "position": [
+        -11.8,
+        0.0,
+        -6.5
+      ],
+      "rotationY": 1.193805,
+      "scale": [
+        0.75,
+        0.52,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "jersey_mid_se",
+      "asset": "concrete_wall",
+      "position": [
+        10.8,
+        0.0,
+        6.5
+      ],
+      "rotationY": 1.193805,
+      "scale": [
+        0.75,
+        0.52,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "barrel_n1",
+      "asset": "oil_barrel",
+      "position": [
+        -10.2,
+        0.0,
+        -18.5
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "barrel_n2",
+      "asset": "oil_barrel",
+      "position": [
+        -9.5,
+        0.0,
+        -18.8
+      ],
+      "rotationY": 0.4,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 1,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "barrel_n3",
+      "asset": "oil_barrel",
+      "position": [
+        -9.9,
+        0.0,
+        -17.9
+      ],
+      "rotationY": 0.9,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 2,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "barrel_s1",
+      "asset": "oil_barrel",
+      "position": [
+        9.8,
+        0.0,
+        18.5
+      ],
+      "rotationY": 0.2,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 1,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "barrel_s2",
+      "asset": "oil_barrel",
+      "position": [
+        10.5,
+        0.0,
+        18.9
+      ],
+      "rotationY": 0.6,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "barrel_s3",
+      "asset": "oil_barrel",
+      "position": [
+        10.2,
+        0.0,
+        17.9
+      ],
+      "rotationY": 1.1,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 2,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "barrel_mid_w1",
+      "asset": "oil_barrel",
+      "position": [
+        -1.4,
+        0.0,
+        7.8
+      ],
+      "rotationY": 0.3,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 1,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "barrel_mid_w2",
+      "asset": "oil_barrel",
+      "position": [
+        -0.8,
+        0.0,
+        8.2
+      ],
+      "rotationY": 0.9,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "barrel_mid_e1",
+      "asset": "oil_barrel",
+      "position": [
+        1.2,
+        0.0,
+        -7.8
+      ],
+      "rotationY": 0.1,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 2,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "barrel_mid_e2",
+      "asset": "oil_barrel",
+      "position": [
+        1.9,
+        0.0,
+        -7.4
+      ],
+      "rotationY": 0.7,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 1,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "barrel_wh_a1",
+      "asset": "oil_barrel",
+      "position": [
+        -16.4,
+        0.0,
+        -7.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "barrel_wh_a2",
+      "asset": "oil_barrel",
+      "position": [
+        -16.4,
+        0.0,
+        7.4
+      ],
+      "rotationY": 0.3,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 1,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "pallet_1",
+      "asset": "wood_pallet",
+      "position": [
+        13.6,
+        0.0,
+        -22.8
+      ],
+      "rotationY": 0.22,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "pallet_2",
+      "asset": "wood_pallet",
+      "position": [
+        -16.2,
+        0.0,
+        -19.8
+      ],
+      "rotationY": 0.12,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "pallet_3",
+      "asset": "wood_pallet",
+      "position": [
+        -16.2,
+        0.0,
+        19.8
+      ],
+      "rotationY": -0.15,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "pallet_4",
+      "asset": "wood_pallet",
+      "position": [
+        20.8,
+        0.0,
+        -7.0
+      ],
+      "rotationY": 0.55,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "pallet_5",
+      "asset": "wood_pallet",
+      "position": [
+        4.6,
+        0.0,
+        -21.8
+      ],
+      "rotationY": -0.35,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "pallet_6",
+      "asset": "wood_pallet",
+      "position": [
+        -4.6,
+        0.0,
+        21.8
+      ],
+      "rotationY": 0.42,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "tires_1",
+      "asset": "tire_stack",
+      "position": [
+        13.4,
+        0.0,
+        -21.2
+      ],
+      "rotationY": 0.4,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "tires_2",
+      "asset": "tire_stack",
+      "position": [
+        -16.0,
+        0.0,
+        -13.5
+      ],
+      "rotationY": 1.1,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "tires_3",
+      "asset": "tire_stack",
+      "position": [
+        -16.0,
+        0.0,
+        13.5
+      ],
+      "rotationY": 2.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "tires_4",
+      "asset": "tire_stack",
+      "position": [
+        22.0,
+        0.0,
+        11.2
+      ],
+      "rotationY": 0.8,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "tires_5",
+      "asset": "tire_stack",
+      "position": [
+        -7.8,
+        0.0,
+        -34.8
+      ],
+      "rotationY": 0.2,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "tires_6",
+      "asset": "tire_stack",
+      "position": [
+        7.8,
+        0.0,
+        34.8
+      ],
+      "rotationY": 2.5,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "sandbag_mid_nw",
+      "asset": "sandbag",
+      "position": [
+        -1.2,
+        0.0,
+        -15.5
+      ],
+      "rotationY": 0.18,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "sandbag_mid_se",
+      "asset": "sandbag",
+      "position": [
+        1.2,
+        0.0,
+        15.5
+      ],
+      "rotationY": 3.321593,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "sandbag_lane_a_fg",
+      "asset": "sandbag",
+      "position": [
+        -11.2,
+        0.0,
+        -9.2
+      ],
+      "rotationY": 0.52,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "barrel_lane_a_fg1",
+      "asset": "oil_barrel",
+      "position": [
+        -10.3,
+        0.0,
+        -8.5
+      ],
+      "rotationY": 0.3,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 2,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "barrel_lane_a_fg2",
+      "asset": "oil_barrel",
+      "position": [
+        -17.4,
+        0.0,
+        -2.6
+      ],
+      "rotationY": 0.7,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 1,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "pallet_lane_a_fg",
+      "asset": "wood_pallet",
+      "position": [
+        -17.0,
+        0.0,
+        -3.7
+      ],
+      "rotationY": 0.36,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "barrel_lane_b_fg1",
+      "asset": "oil_barrel",
+      "position": [
+        21.6,
+        0.0,
+        -23.6
+      ],
+      "rotationY": 0.4,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 1,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "barrel_lane_b_fg2",
+      "asset": "oil_barrel",
+      "position": [
+        22.3,
+        0.0,
+        -23.1
+      ],
+      "rotationY": 1.1,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "tires_lane_b_fg",
+      "asset": "tire_stack",
+      "position": [
+        14.2,
+        0.0,
+        -26.2
+      ],
+      "rotationY": 0.9,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "sandbag_lane_b_fg",
+      "asset": "sandbag",
+      "position": [
+        23.8,
+        0.0,
+        -26.8
+      ],
+      "rotationY": -0.35,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "barbed_flank_w",
+      "asset": "barbed_wire",
+      "position": [
+        -30.5,
+        0.0,
+        0.0
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "barbed_flank_e",
+      "asset": "barbed_wire",
+      "position": [
+        30.8,
+        0.0,
+        -8.5
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "cont_b1",
+      "asset": "container",
+      "position": [
+        17.0,
+        -0.025,
+        -22.0
+      ],
+      "rotationY": 0.026,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "cont_b2_bot",
+      "asset": "container",
+      "position": [
+        24.0,
+        -0.025,
+        -14.0
+      ],
+      "rotationY": 1.552796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 1,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "cont_b2_top",
+      "asset": "container",
+      "position": [
+        24.0,
+        2.575,
+        -14.0
+      ],
+      "rotationY": 1.552796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 2,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "cont_b3",
+      "asset": "container",
+      "position": [
+        16.0,
+        -0.025,
+        -4.0
+      ],
+      "rotationY": -0.024,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 2,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "cont_b4",
+      "asset": "container",
+      "position": [
+        25.0,
+        -0.025,
+        4.0
+      ],
+      "rotationY": 1.592796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "cont_b5_bot",
+      "asset": "container",
+      "position": [
+        17.0,
+        -0.025,
+        15.0
+      ],
+      "rotationY": 1.586796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 1,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "cont_b5_top",
+      "asset": "container",
+      "position": [
+        17.0,
+        2.575,
+        15.0
+      ],
+      "rotationY": 1.586796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "cont_b6",
+      "asset": "container",
+      "position": [
+        25.0,
+        -0.025,
+        23.0
+      ],
+      "rotationY": -0.028,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 2,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "cont_b7",
+      "asset": "container",
+      "position": [
+        29.0,
+        -0.025,
+        -28.0
+      ],
+      "rotationY": 1.545796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 1,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "lane_b_crate_1",
+      "asset": "wood_crate",
+      "position": [
+        20.5,
+        0.0,
+        -8.5
+      ],
+      "rotationY": 0.4,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "lane_b_sandbag_1",
+      "asset": "sandbag",
+      "position": [
+        29.2,
+        0.0,
+        -4.0
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "lane_b_crate_2",
+      "asset": "wood_crate",
+      "position": [
+        21.0,
+        0.0,
+        10.0
+      ],
+      "rotationY": -0.25,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "lane_b_sandbag_2",
+      "asset": "sandbag",
+      "position": [
+        13.5,
+        0.0,
+        23.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "lane_b_fence_n",
+      "asset": "fence",
+      "position": [
+        13.0,
+        0.0,
+        -14.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_n_0",
+      "asset": "concrete_wall",
+      "position": [
+        -34.0,
+        0.0,
+        -45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_s_0",
+      "asset": "concrete_wall",
+      "position": [
+        -34.0,
+        0.0,
+        45.4
+      ],
+      "rotationY": 3.141593,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_n_0",
+      "asset": "barbed_wire",
+      "position": [
+        -34.0,
+        3.46,
+        -45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_s_0",
+      "asset": "barbed_wire",
+      "position": [
+        -34.0,
+        3.46,
+        45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_n_1",
+      "asset": "concrete_wall",
+      "position": [
+        -30.0,
+        0.0,
+        -45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_s_1",
+      "asset": "concrete_wall",
+      "position": [
+        -30.0,
+        0.0,
+        45.4
+      ],
+      "rotationY": 3.141593,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_n_1",
+      "asset": "barbed_wire",
+      "position": [
+        -30.0,
+        3.46,
+        -45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_s_1",
+      "asset": "barbed_wire",
+      "position": [
+        -30.0,
+        3.46,
+        45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_n_2",
+      "asset": "concrete_wall",
+      "position": [
+        -26.0,
+        0.0,
+        -45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_s_2",
+      "asset": "concrete_wall",
+      "position": [
+        -26.0,
+        0.0,
+        45.4
+      ],
+      "rotationY": 3.141593,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_n_2",
+      "asset": "barbed_wire",
+      "position": [
+        -26.0,
+        3.46,
+        -45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_s_2",
+      "asset": "barbed_wire",
+      "position": [
+        -26.0,
+        3.46,
+        45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_n_3",
+      "asset": "concrete_wall",
+      "position": [
+        -22.0,
+        0.0,
+        -45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_s_3",
+      "asset": "concrete_wall",
+      "position": [
+        -22.0,
+        0.0,
+        45.4
+      ],
+      "rotationY": 3.141593,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_n_3",
+      "asset": "barbed_wire",
+      "position": [
+        -22.0,
+        3.46,
+        -45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_s_3",
+      "asset": "barbed_wire",
+      "position": [
+        -22.0,
+        3.46,
+        45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_n_4",
+      "asset": "concrete_wall",
+      "position": [
+        -18.0,
+        0.0,
+        -45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_s_4",
+      "asset": "concrete_wall",
+      "position": [
+        -18.0,
+        0.0,
+        45.4
+      ],
+      "rotationY": 3.141593,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_n_4",
+      "asset": "barbed_wire",
+      "position": [
+        -18.0,
+        3.46,
+        -45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_s_4",
+      "asset": "barbed_wire",
+      "position": [
+        -18.0,
+        3.46,
+        45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_n_5",
+      "asset": "concrete_wall",
+      "position": [
+        -14.0,
+        0.0,
+        -45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_s_5",
+      "asset": "concrete_wall",
+      "position": [
+        -14.0,
+        0.0,
+        45.4
+      ],
+      "rotationY": 3.141593,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_n_5",
+      "asset": "barbed_wire",
+      "position": [
+        -14.0,
+        3.46,
+        -45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_s_5",
+      "asset": "barbed_wire",
+      "position": [
+        -14.0,
+        3.46,
+        45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_n_6",
+      "asset": "concrete_wall",
+      "position": [
+        -10.0,
+        0.0,
+        -45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_s_6",
+      "asset": "concrete_wall",
+      "position": [
+        -10.0,
+        0.0,
+        45.4
+      ],
+      "rotationY": 3.141593,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_n_6",
+      "asset": "barbed_wire",
+      "position": [
+        -10.0,
+        3.46,
+        -45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_s_6",
+      "asset": "barbed_wire",
+      "position": [
+        -10.0,
+        3.46,
+        45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_n_7",
+      "asset": "concrete_wall",
+      "position": [
+        -6.0,
+        0.0,
+        -45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_s_7",
+      "asset": "concrete_wall",
+      "position": [
+        -6.0,
+        0.0,
+        45.4
+      ],
+      "rotationY": 3.141593,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_n_7",
+      "asset": "barbed_wire",
+      "position": [
+        -6.0,
+        3.46,
+        -45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_s_7",
+      "asset": "barbed_wire",
+      "position": [
+        -6.0,
+        3.46,
+        45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_n_8",
+      "asset": "concrete_wall",
+      "position": [
+        -2.0,
+        0.0,
+        -45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_s_8",
+      "asset": "concrete_wall",
+      "position": [
+        -2.0,
+        0.0,
+        45.4
+      ],
+      "rotationY": 3.141593,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_n_8",
+      "asset": "barbed_wire",
+      "position": [
+        -2.0,
+        3.46,
+        -45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_s_8",
+      "asset": "barbed_wire",
+      "position": [
+        -2.0,
+        3.46,
+        45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_n_9",
+      "asset": "concrete_wall",
+      "position": [
+        2.0,
+        0.0,
+        -45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_s_9",
+      "asset": "concrete_wall",
+      "position": [
+        2.0,
+        0.0,
+        45.4
+      ],
+      "rotationY": 3.141593,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_n_9",
+      "asset": "barbed_wire",
+      "position": [
+        2.0,
+        3.46,
+        -45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_s_9",
+      "asset": "barbed_wire",
+      "position": [
+        2.0,
+        3.46,
+        45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_n_10",
+      "asset": "concrete_wall",
+      "position": [
+        6.0,
+        0.0,
+        -45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_s_10",
+      "asset": "concrete_wall",
+      "position": [
+        6.0,
+        0.0,
+        45.4
+      ],
+      "rotationY": 3.141593,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_n_10",
+      "asset": "barbed_wire",
+      "position": [
+        6.0,
+        3.46,
+        -45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_s_10",
+      "asset": "barbed_wire",
+      "position": [
+        6.0,
+        3.46,
+        45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_n_11",
+      "asset": "concrete_wall",
+      "position": [
+        10.0,
+        0.0,
+        -45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_s_11",
+      "asset": "concrete_wall",
+      "position": [
+        10.0,
+        0.0,
+        45.4
+      ],
+      "rotationY": 3.141593,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_n_11",
+      "asset": "barbed_wire",
+      "position": [
+        10.0,
+        3.46,
+        -45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_s_11",
+      "asset": "barbed_wire",
+      "position": [
+        10.0,
+        3.46,
+        45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_n_12",
+      "asset": "concrete_wall",
+      "position": [
+        14.0,
+        0.0,
+        -45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_s_12",
+      "asset": "concrete_wall",
+      "position": [
+        14.0,
+        0.0,
+        45.4
+      ],
+      "rotationY": 3.141593,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_n_12",
+      "asset": "barbed_wire",
+      "position": [
+        14.0,
+        3.46,
+        -45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_s_12",
+      "asset": "barbed_wire",
+      "position": [
+        14.0,
+        3.46,
+        45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_n_13",
+      "asset": "concrete_wall",
+      "position": [
+        18.0,
+        0.0,
+        -45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_s_13",
+      "asset": "concrete_wall",
+      "position": [
+        18.0,
+        0.0,
+        45.4
+      ],
+      "rotationY": 3.141593,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_n_13",
+      "asset": "barbed_wire",
+      "position": [
+        18.0,
+        3.46,
+        -45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_s_13",
+      "asset": "barbed_wire",
+      "position": [
+        18.0,
+        3.46,
+        45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_n_14",
+      "asset": "concrete_wall",
+      "position": [
+        22.0,
+        0.0,
+        -45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_s_14",
+      "asset": "concrete_wall",
+      "position": [
+        22.0,
+        0.0,
+        45.4
+      ],
+      "rotationY": 3.141593,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_n_14",
+      "asset": "barbed_wire",
+      "position": [
+        22.0,
+        3.46,
+        -45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_s_14",
+      "asset": "barbed_wire",
+      "position": [
+        22.0,
+        3.46,
+        45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_n_15",
+      "asset": "concrete_wall",
+      "position": [
+        26.0,
+        0.0,
+        -45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_s_15",
+      "asset": "concrete_wall",
+      "position": [
+        26.0,
+        0.0,
+        45.4
+      ],
+      "rotationY": 3.141593,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_n_15",
+      "asset": "barbed_wire",
+      "position": [
+        26.0,
+        3.46,
+        -45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_s_15",
+      "asset": "barbed_wire",
+      "position": [
+        26.0,
+        3.46,
+        45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_n_16",
+      "asset": "concrete_wall",
+      "position": [
+        30.0,
+        0.0,
+        -45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_s_16",
+      "asset": "concrete_wall",
+      "position": [
+        30.0,
+        0.0,
+        45.4
+      ],
+      "rotationY": 3.141593,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_n_16",
+      "asset": "barbed_wire",
+      "position": [
+        30.0,
+        3.46,
+        -45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_s_16",
+      "asset": "barbed_wire",
+      "position": [
+        30.0,
+        3.46,
+        45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_n_17",
+      "asset": "concrete_wall",
+      "position": [
+        34.0,
+        0.0,
+        -45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_s_17",
+      "asset": "concrete_wall",
+      "position": [
+        34.0,
+        0.0,
+        45.4
+      ],
+      "rotationY": 3.141593,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_n_17",
+      "asset": "barbed_wire",
+      "position": [
+        34.0,
+        3.46,
+        -45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_s_17",
+      "asset": "barbed_wire",
+      "position": [
+        34.0,
+        3.46,
+        45.4
+      ],
+      "rotationY": 0.0,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_w_0",
+      "asset": "concrete_wall",
+      "position": [
+        -35.4,
+        0.0,
+        -44.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_e_0",
+      "asset": "concrete_wall",
+      "position": [
+        35.4,
+        0.0,
+        -44.0
+      ],
+      "rotationY": -1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_w_0",
+      "asset": "barbed_wire",
+      "position": [
+        -35.4,
+        3.46,
+        -44.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_e_0",
+      "asset": "barbed_wire",
+      "position": [
+        35.4,
+        3.46,
+        -44.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_w_1",
+      "asset": "concrete_wall",
+      "position": [
+        -35.4,
+        0.0,
+        -40.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_e_1",
+      "asset": "concrete_wall",
+      "position": [
+        35.4,
+        0.0,
+        -40.0
+      ],
+      "rotationY": -1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_w_1",
+      "asset": "barbed_wire",
+      "position": [
+        -35.4,
+        3.46,
+        -40.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_e_1",
+      "asset": "barbed_wire",
+      "position": [
+        35.4,
+        3.46,
+        -40.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_w_2",
+      "asset": "concrete_wall",
+      "position": [
+        -35.4,
+        0.0,
+        -36.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_e_2",
+      "asset": "concrete_wall",
+      "position": [
+        35.4,
+        0.0,
+        -36.0
+      ],
+      "rotationY": -1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_w_2",
+      "asset": "barbed_wire",
+      "position": [
+        -35.4,
+        3.46,
+        -36.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_e_2",
+      "asset": "barbed_wire",
+      "position": [
+        35.4,
+        3.46,
+        -36.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_w_3",
+      "asset": "concrete_wall",
+      "position": [
+        -35.4,
+        0.0,
+        -32.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_e_3",
+      "asset": "concrete_wall",
+      "position": [
+        35.4,
+        0.0,
+        -32.0
+      ],
+      "rotationY": -1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_w_3",
+      "asset": "barbed_wire",
+      "position": [
+        -35.4,
+        3.46,
+        -32.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_e_3",
+      "asset": "barbed_wire",
+      "position": [
+        35.4,
+        3.46,
+        -32.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_w_4",
+      "asset": "concrete_wall",
+      "position": [
+        -35.4,
+        0.0,
+        -28.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_e_4",
+      "asset": "concrete_wall",
+      "position": [
+        35.4,
+        0.0,
+        -28.0
+      ],
+      "rotationY": -1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_w_4",
+      "asset": "barbed_wire",
+      "position": [
+        -35.4,
+        3.46,
+        -28.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_e_4",
+      "asset": "barbed_wire",
+      "position": [
+        35.4,
+        3.46,
+        -28.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_w_5",
+      "asset": "concrete_wall",
+      "position": [
+        -35.4,
+        0.0,
+        -24.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_e_5",
+      "asset": "concrete_wall",
+      "position": [
+        35.4,
+        0.0,
+        -24.0
+      ],
+      "rotationY": -1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_w_5",
+      "asset": "barbed_wire",
+      "position": [
+        -35.4,
+        3.46,
+        -24.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_e_5",
+      "asset": "barbed_wire",
+      "position": [
+        35.4,
+        3.46,
+        -24.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_w_6",
+      "asset": "concrete_wall",
+      "position": [
+        -35.4,
+        0.0,
+        -20.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_e_6",
+      "asset": "concrete_wall",
+      "position": [
+        35.4,
+        0.0,
+        -20.0
+      ],
+      "rotationY": -1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_w_6",
+      "asset": "barbed_wire",
+      "position": [
+        -35.4,
+        3.46,
+        -20.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_e_6",
+      "asset": "barbed_wire",
+      "position": [
+        35.4,
+        3.46,
+        -20.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_w_7",
+      "asset": "concrete_wall",
+      "position": [
+        -35.4,
+        0.0,
+        -16.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_e_7",
+      "asset": "concrete_wall",
+      "position": [
+        35.4,
+        0.0,
+        -16.0
+      ],
+      "rotationY": -1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_w_7",
+      "asset": "barbed_wire",
+      "position": [
+        -35.4,
+        3.46,
+        -16.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_e_7",
+      "asset": "barbed_wire",
+      "position": [
+        35.4,
+        3.46,
+        -16.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_w_8",
+      "asset": "concrete_wall",
+      "position": [
+        -35.4,
+        0.0,
+        -12.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_e_8",
+      "asset": "concrete_wall",
+      "position": [
+        35.4,
+        0.0,
+        -12.0
+      ],
+      "rotationY": -1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_w_8",
+      "asset": "barbed_wire",
+      "position": [
+        -35.4,
+        3.46,
+        -12.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_e_8",
+      "asset": "barbed_wire",
+      "position": [
+        35.4,
+        3.46,
+        -12.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_w_9",
+      "asset": "concrete_wall",
+      "position": [
+        -35.4,
+        0.0,
+        -8.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_e_9",
+      "asset": "concrete_wall",
+      "position": [
+        35.4,
+        0.0,
+        -8.0
+      ],
+      "rotationY": -1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_w_9",
+      "asset": "barbed_wire",
+      "position": [
+        -35.4,
+        3.46,
+        -8.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_e_9",
+      "asset": "barbed_wire",
+      "position": [
+        35.4,
+        3.46,
+        -8.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_w_10",
+      "asset": "concrete_wall",
+      "position": [
+        -35.4,
+        0.0,
+        -4.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_e_10",
+      "asset": "concrete_wall",
+      "position": [
+        35.4,
+        0.0,
+        -4.0
+      ],
+      "rotationY": -1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_w_10",
+      "asset": "barbed_wire",
+      "position": [
+        -35.4,
+        3.46,
+        -4.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_e_10",
+      "asset": "barbed_wire",
+      "position": [
+        35.4,
+        3.46,
+        -4.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_w_11",
+      "asset": "concrete_wall",
+      "position": [
+        -35.4,
+        0.0,
+        0.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_e_11",
+      "asset": "concrete_wall",
+      "position": [
+        35.4,
+        0.0,
+        0.0
+      ],
+      "rotationY": -1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_w_11",
+      "asset": "barbed_wire",
+      "position": [
+        -35.4,
+        3.46,
+        0.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_e_11",
+      "asset": "barbed_wire",
+      "position": [
+        35.4,
+        3.46,
+        0.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_w_12",
+      "asset": "concrete_wall",
+      "position": [
+        -35.4,
+        0.0,
+        4.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_e_12",
+      "asset": "concrete_wall",
+      "position": [
+        35.4,
+        0.0,
+        4.0
+      ],
+      "rotationY": -1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_w_12",
+      "asset": "barbed_wire",
+      "position": [
+        -35.4,
+        3.46,
+        4.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_e_12",
+      "asset": "barbed_wire",
+      "position": [
+        35.4,
+        3.46,
+        4.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_w_13",
+      "asset": "concrete_wall",
+      "position": [
+        -35.4,
+        0.0,
+        8.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_e_13",
+      "asset": "concrete_wall",
+      "position": [
+        35.4,
+        0.0,
+        8.0
+      ],
+      "rotationY": -1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_w_13",
+      "asset": "barbed_wire",
+      "position": [
+        -35.4,
+        3.46,
+        8.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_e_13",
+      "asset": "barbed_wire",
+      "position": [
+        35.4,
+        3.46,
+        8.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_w_14",
+      "asset": "concrete_wall",
+      "position": [
+        -35.4,
+        0.0,
+        12.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_e_14",
+      "asset": "concrete_wall",
+      "position": [
+        35.4,
+        0.0,
+        12.0
+      ],
+      "rotationY": -1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_w_14",
+      "asset": "barbed_wire",
+      "position": [
+        -35.4,
+        3.46,
+        12.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_e_14",
+      "asset": "barbed_wire",
+      "position": [
+        35.4,
+        3.46,
+        12.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_w_15",
+      "asset": "concrete_wall",
+      "position": [
+        -35.4,
+        0.0,
+        16.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_e_15",
+      "asset": "concrete_wall",
+      "position": [
+        35.4,
+        0.0,
+        16.0
+      ],
+      "rotationY": -1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_w_15",
+      "asset": "barbed_wire",
+      "position": [
+        -35.4,
+        3.46,
+        16.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_e_15",
+      "asset": "barbed_wire",
+      "position": [
+        35.4,
+        3.46,
+        16.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_w_16",
+      "asset": "concrete_wall",
+      "position": [
+        -35.4,
+        0.0,
+        20.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_e_16",
+      "asset": "concrete_wall",
+      "position": [
+        35.4,
+        0.0,
+        20.0
+      ],
+      "rotationY": -1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_w_16",
+      "asset": "barbed_wire",
+      "position": [
+        -35.4,
+        3.46,
+        20.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_e_16",
+      "asset": "barbed_wire",
+      "position": [
+        35.4,
+        3.46,
+        20.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_w_17",
+      "asset": "concrete_wall",
+      "position": [
+        -35.4,
+        0.0,
+        24.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_e_17",
+      "asset": "concrete_wall",
+      "position": [
+        35.4,
+        0.0,
+        24.0
+      ],
+      "rotationY": -1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_w_17",
+      "asset": "barbed_wire",
+      "position": [
+        -35.4,
+        3.46,
+        24.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_e_17",
+      "asset": "barbed_wire",
+      "position": [
+        35.4,
+        3.46,
+        24.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_w_18",
+      "asset": "concrete_wall",
+      "position": [
+        -35.4,
+        0.0,
+        28.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_e_18",
+      "asset": "concrete_wall",
+      "position": [
+        35.4,
+        0.0,
+        28.0
+      ],
+      "rotationY": -1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_w_18",
+      "asset": "barbed_wire",
+      "position": [
+        -35.4,
+        3.46,
+        28.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_e_18",
+      "asset": "barbed_wire",
+      "position": [
+        35.4,
+        3.46,
+        28.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_w_19",
+      "asset": "concrete_wall",
+      "position": [
+        -35.4,
+        0.0,
+        32.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_e_19",
+      "asset": "concrete_wall",
+      "position": [
+        35.4,
+        0.0,
+        32.0
+      ],
+      "rotationY": -1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_w_19",
+      "asset": "barbed_wire",
+      "position": [
+        -35.4,
+        3.46,
+        32.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_e_19",
+      "asset": "barbed_wire",
+      "position": [
+        35.4,
+        3.46,
+        32.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_w_20",
+      "asset": "concrete_wall",
+      "position": [
+        -35.4,
+        0.0,
+        36.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_e_20",
+      "asset": "concrete_wall",
+      "position": [
+        35.4,
+        0.0,
+        36.0
+      ],
+      "rotationY": -1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_w_20",
+      "asset": "barbed_wire",
+      "position": [
+        -35.4,
+        3.46,
+        36.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_e_20",
+      "asset": "barbed_wire",
+      "position": [
+        35.4,
+        3.46,
+        36.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_w_21",
+      "asset": "concrete_wall",
+      "position": [
+        -35.4,
+        0.0,
+        40.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_e_21",
+      "asset": "concrete_wall",
+      "position": [
+        35.4,
+        0.0,
+        40.0
+      ],
+      "rotationY": -1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_w_21",
+      "asset": "barbed_wire",
+      "position": [
+        -35.4,
+        3.46,
+        40.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_e_21",
+      "asset": "barbed_wire",
+      "position": [
+        35.4,
+        3.46,
+        40.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_w_22",
+      "asset": "concrete_wall",
+      "position": [
+        -35.4,
+        0.0,
+        44.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_e_22",
+      "asset": "concrete_wall",
+      "position": [
+        35.4,
+        0.0,
+        44.0
+      ],
+      "rotationY": -1.570796,
+      "scale": [
+        1.0,
+        1.46,
+        1.78
+      ],
+      "variant": 0,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_w_22",
+      "asset": "barbed_wire",
+      "position": [
+        -35.4,
+        3.46,
+        44.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    },
+    {
+      "id": "perim_wire_e_22",
+      "asset": "barbed_wire",
+      "position": [
+        35.4,
+        3.46,
+        44.0
+      ],
+      "rotationY": 1.570796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
+      "castShadow": false,
+      "bvhCollision": false
+    }
+  ]
+}

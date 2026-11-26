@@ -22,6 +22,7 @@ export function createRoomController({ net, onNotice }) {
   const listFfa = document.getElementById("ffaList");
   const countdownEl = document.getElementById("roomCountdown");
 
+  const setMapEl = document.getElementById("roomSetMap");
   const setModeEl = document.getElementById("roomSetMode");
   const setKillEl = document.getElementById("roomSetKills");
   const setTimeEl = document.getElementById("roomSetTime");
@@ -85,21 +86,23 @@ export function createRoomController({ net, onNotice }) {
     const inWaiting = room.state === ROOM_STATE.WAITING;
     const me = room.players.find((p) => p.id === net.playerId);
 
+    const mapLabel = room.map === "harbor" ? "Bến Cảng Mưa" : "Khu Quân Sự Cũ";
     titleEl.textContent = (room.hasPassword ? "🔐 " : "") + room.name;
     metaEl.textContent =
-      `${isTdm ? "Đấu Đội (TDM)" : "Đấu Đơn (FFA)"} • Bến Cảng Mưa • ` +
+      `${isTdm ? "Đấu Đội (TDM)" : "Đấu Đơn (FFA)"} • ${mapLabel} • ` +
       `Mục tiêu ${room.killLimit} mạng • ${(room.timeLimit / 60) | 0} phút • ` +
       `${room.players.length}/${room.maxPlayers} người`;
 
     // Sync settings form controls (enabled strictly for Host during WAITING)
+    if (setMapEl) setMapEl.value = room.map === "harbor" ? "harbor" : "military";
     setModeEl.value = room.mode;
     setKillEl.value = String(room.killLimit);
     setTimeEl.value = String(room.timeLimit);
     setMaxEl.value = String(room.maxPlayers);
     setSoloEl.checked = Boolean(room.allowSoloTest);
     const canEdit = isHost && inWaiting;
-    for (const inp of [setModeEl, setKillEl, setTimeEl, setMaxEl, setPwEl, setSoloEl, btnSaveSettings]) {
-      inp.disabled = !canEdit;
+    for (const inp of [setMapEl, setModeEl, setKillEl, setTimeEl, setMaxEl, setPwEl, setSoloEl, btnSaveSettings]) {
+      if (inp) inp.disabled = !canEdit;
     }
 
     teamColsEl.style.display = isTdm ? "grid" : "none";
@@ -202,6 +205,7 @@ export function createRoomController({ net, onNotice }) {
 
   btnSaveSettings.onclick = () => {
     net.send(MSG.ROOM_SETTINGS, {
+      map: setMapEl ? setMapEl.value : "military",
       mode: setModeEl.value,
       killLimit: Number(setKillEl.value),
       timeLimit: Number(setTimeEl.value),
