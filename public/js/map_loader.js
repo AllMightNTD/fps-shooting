@@ -1,14 +1,14 @@
 /**
- * MapLoader for Khu Quân Sự Cũ 5v5 (v3 Realism Pass):
+ * MapLoader for Khu Quân Sự Cũ 5v5 (v3.1 Performance + 3-Tier Quality):
  * - Balanced ~3.5:1 sun-to-ambient lighting, toned PMREM IBL, layered height fog & aerial perspective
- * - Sculpted 1K cloudy Sky Dome + slow drifting upper cloud deck + occluded sun lens flare + subtle dust/god-rays
- * - World-space multi-layer PBR ground (concrete/gravel/dirt/tire tracks) + float-precision shader puddles (zero contour rings)
- * - 3-species realistic trees (broadleaf, conifer, dead snags + scrub bushes) with zero alpha-bleed & baked canopy AO
- * - Strong two-stage contact shadows, clustered wild grass, angular rubble, ammo crates, hazard signs & fluttering tarps
+ * - Pre-baked 512x512 world-space ground mask (replaces 14-octave per-pixel FBM with 1 texture fetch!)
+ * - Consolidated GLSL customProgramCacheKey (~7 shared programs instead of 54!)
+ * - Runtime applyQualityPreset() controlling shadows, post-grade/atmosphere, grass density, tree draw distance & fog length
  */
 
 import { buildTriangleBVH, createMapCollision } from "/js/map_collision.js";
 import { MILITARY_COLLIDERS, MILITARY_LAYOUT } from "/js/military_map_data.js";
+import { QUALITY_PRESETS } from "/js/graphics_quality.js";
 
 // Rich weathered military tones (deep saturation without pastel washout or crushed blacks)
 const CONTAINER_PALETTE = [0x86382b, 0x47573d, 0x384e5e];
@@ -41,10 +41,11 @@ function periodicNoise(nx, ny, period, seedOff) {
   return (a * (1 - ux) + b * ux) * (1 - uy) + (c * (1 - ux) + d * ux) * uy;
 }
 
-// Deterministic world-space puddle sampler matching the GLSL puddle field (for wet footsteps)
+// Deterministic world-space FBM helpers shared between baked ground mask & wet footstep sampling
 function hash2Js(ix, iz) {
-  let h = Math.sin(ix * 127.1 + iz * 311.7) * 43758.5453123;
-  return h - Math.floor(h);
+  let n = Math.imul(ix * 374761393 + iz * 668265263, 1274126177);
+  n = (n ^ (n >>> 13)) * 1274126177;
+  return ((n ^ (n >>> 16)) >>> 0) / 4294967295;
 }
 function noise2Js(x, z) {
   const ix = Math.floor(x), iz = Math.floor(z);
@@ -55,12 +56,9 @@ function noise2Js(x, z) {
   const c = hash2Js(ix, iz + 1), d = hash2Js(ix + 1, iz + 1);
   return (a * (1 - ux) + b * ux) * (1 - uz) + (c * (1 - ux) + d * ux) * uz;
 }
-function sampleMilitaryPuddle(x, z) {
-  // Dry inside both roofed warehouses
-  if (x > -27.2 && x < -16.8 && Math.abs(Math.abs(z) - 14.0) < 7.2) return 0;
-  let px = x * 0.072, pz = z * 0.072;
-  let v = 0, a = 0.52;
-  for (let k = 0; k < 4; k++) {
+function fbm2Js(x, z, octaves = 4) {
+  let px = x, pz = z, v = 0, a = 0.52;
+  for (let k = 0; k < octaves; k++) {
     v += a * noise2Js(px, pz);
     const nx = 0.8 * px + 0.6 * pz;
     const nz = -0.6 * px + 0.8 * pz;
@@ -68,11 +66,66 @@ function sampleMilitaryPuddle(x, z) {
     pz = nz * 2.04 + 9.2;
     a *= 0.48;
   }
-  const t = Math.max(0, Math.min(1, (v - 0.58) / 0.10));
+  return v;
+}
+function smoothstepJs(e0, e1, x) {
+  const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0)));
   return t * t * (3 - 2 * t);
 }
 
-// Shared GLSL height-fog + aerial perspective chunk (injected only onto military materials)
+function sampleMilitaryPuddle(x, z) {
+  if (x > -27.2 && x < -16.8 && Math.abs(Math.abs(z) - 14.0) < 7.2) return 0;
+  const pField = fbm2Js(x * 0.072, z * 0.072, 4);
+  return smoothstepJs(0.58, 0.68, pField);
+}
+
+// Pre-bake world-space macro variation, puddles & convoy tire tracks into 1 single 512x512 RGBA DataTexture!
+// Eliminates 14-octave per-pixel FBM (56 hash calls/pixel -> 1 hardware bilinear texture2D fetch).
+const WORLD_MASK_HALF_X = 72.0;
+const WORLD_MASK_HALF_Z = 82.0;
+
+function buildWorldGroundMask(THREE) {
+  const size = 512;
+  const data = new Uint8Array(size * size * 4);
+  for (let py = 0; py < size; py++) {
+    const wz = ((py / (size - 1)) * 2 - 1) * WORLD_MASK_HALF_Z;
+    for (let px = 0; px < size; px++) {
+      const wx = ((px / (size - 1)) * 2 - 1) * WORLD_MASK_HALF_X;
+      const idx = (py * size + px) * 4;
+
+      const macroA = fbm2Js(wx * 0.042, wz * 0.042, 3);
+      const macroB = fbm2Js(wx * 0.115 + 31.4, wz * 0.115 - 19.2, 3);
+      const dirtPatch = smoothstepJs(0.46, 0.72, macroA);
+      const asphaltPatch = smoothstepJs(0.56, 0.76, macroB) * (1 - dirtPatch * 0.7);
+
+      const inWh = wx > -27.2 && wx < -16.8 && Math.abs(Math.abs(wz) - 14.0) < 7.2;
+      const pField = inWh ? 0 : fbm2Js(wx * 0.072, wz * 0.072, 4);
+
+      // World-space military convoy tire tracks running through Mid lane
+      const roadCenter = -1.5 + Math.sin(wz * 0.055) * 4.2;
+      const dT1 = Math.abs(wx - (roadCenter - 0.92));
+      const dT2 = Math.abs(wx - (roadCenter + 0.92));
+      const tireTrack =
+        Math.max(1 - smoothstepJs(0.16, 0.42, dT1), 1 - smoothstepJs(0.16, 0.42, dT2)) *
+        smoothstepJs(-40.0, -32.0, wz) *
+        (1 - smoothstepJs(32.0, 40.0, wz));
+
+      data[idx] = Math.min(255, Math.max(0, Math.round(dirtPatch * 255)));
+      data[idx + 1] = Math.min(255, Math.max(0, Math.round(asphaltPatch * 255)));
+      data[idx + 2] = Math.min(255, Math.max(0, Math.round(pField * 255)));
+      data[idx + 3] = Math.min(255, Math.max(0, Math.round(tireTrack * 255)));
+    }
+  }
+  const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+  tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearFilter;
+  tex.generateMipmaps = false;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+// Shared GLSL height-fog + optional in-shader WebGL color grade (zero DOM CSS filter compositor blit!)
 const HEIGHT_FOG_VERT_CHUNK = `
   #include <project_vertex>
   vec4 milFogWp = vec4( transformed, 1.0 );
@@ -88,14 +141,19 @@ const HEIGHT_FOG_FRAG_CHUNK = `
     vec3 milToFrag = vMilWorldPos - cameraPosition;
     float milDist = length(milToFrag);
     vec3 milViewDir = milToFrag / max(milDist, 0.0001);
-    float milNearClear = smoothstep(14.0, 34.0, milDist);
+    float milNearClear = smoothstep(uMilFogParams.x, uMilFogParams.y, milDist);
     float milHeightBand = exp(-max(0.0, vMilWorldPos.y - 0.4) * 0.048);
-    float milDistFog = 1.0 - exp(-milDist * (0.0022 + 0.0030 * milHeightBand));
+    float milDistFog = 1.0 - exp(-milDist * (uMilFogParams.z + uMilFogParams.w * milHeightBand));
     float milFogAmt = clamp(milDistFog * milNearClear, 0.0, 0.88);
     float milSunScatter = pow(max(dot(milViewDir, uMilSunDir), 0.0), 4.5);
     vec3 milFogCol = mix(fogColor, uMilSunFogColor, milSunScatter * 0.42);
     gl_FragColor.rgb = mix(gl_FragColor.rgb, milFogCol, milFogAmt);
   #endif
+  if (uMilPostGrade > 0.5) {
+    float milLum = dot(gl_FragColor.rgb, vec3(0.2126, 0.7152, 0.0722));
+    gl_FragColor.rgb = mix(vec3(milLum), gl_FragColor.rgb, 1.09);
+    gl_FragColor.rgb = max(vec3(0.0), (gl_FragColor.rgb - 0.16) * 1.08 + 0.16);
+  }
 `;
 
 function createHeightFogUniforms(THREE) {
@@ -103,23 +161,28 @@ function createHeightFogUniforms(THREE) {
   return {
     uMilSunDir: { value: sunDir },
     uMilSunFogColor: { value: new THREE.Color(FOG_SUN_HEX) },
+    // (nearStart, nearEnd, distBase, heightAmp)
+    uMilFogParams: { value: new THREE.Vector4(14.0, 34.0, 0.0022, 0.0030) },
+    uMilPostGrade: { value: 1.0 },
   };
 }
 
-function applyMilitaryHeightFog(mat, fogUniforms, extraHook = null, cacheTag = "mil_hfog") {
+function applyMilitaryHeightFog(mat, fogUniforms, extraHook = null, cacheTag = "mil_hfog_std") {
   const prevCompile = mat.onBeforeCompile;
   mat.customProgramCacheKey = () => cacheTag;
   mat.onBeforeCompile = (shader, renderer) => {
     if (prevCompile) prevCompile(shader, renderer);
     shader.uniforms.uMilSunDir = fogUniforms.uMilSunDir;
     shader.uniforms.uMilSunFogColor = fogUniforms.uMilSunFogColor;
+    shader.uniforms.uMilFogParams = fogUniforms.uMilFogParams;
+    shader.uniforms.uMilPostGrade = fogUniforms.uMilPostGrade;
     shader.vertexShader = shader.vertexShader
       .replace("#include <common>", "#include <common>\nvarying vec3 vMilWorldPos;")
       .replace("#include <project_vertex>", HEIGHT_FOG_VERT_CHUNK);
     shader.fragmentShader = shader.fragmentShader
       .replace(
         "#include <common>",
-        "#include <common>\nvarying vec3 vMilWorldPos;\nuniform vec3 uMilSunDir;\nuniform vec3 uMilSunFogColor;",
+        "#include <common>\nvarying vec3 vMilWorldPos;\nuniform vec3 uMilSunDir;\nuniform vec3 uMilSunFogColor;\nuniform vec4 uMilFogParams;\nuniform float uMilPostGrade;",
       )
       .replace("#include <fog_fragment>", HEIGHT_FOG_FRAG_CHUNK);
     if (extraHook) extraHook(shader, renderer);
@@ -127,7 +190,8 @@ function applyMilitaryHeightFog(mat, fogUniforms, extraHook = null, cacheTag = "
 }
 
 function buildSkyDomeAndEnvMap(renderer, THREE) {
-  const w = 1024, h = 512;
+  // 512x256 sculpted volumetric sky dome (4x faster synchronous load, visually smooth with linear filtering)
+  const w = 512, h = 256;
   const canvas = document.createElement("canvas");
   canvas.width = w;
   canvas.height = h;
@@ -150,7 +214,6 @@ function buildSkyDomeAndEnvMap(renderer, THREE) {
       const dz = Math.sin(theta) * sinP;
       const idx = (py * w + px) * 4;
 
-      // Dark grounded lower hemisphere so PMREM IBL does not flood undersides/shadows
       if (dy < -0.02) {
         const gFade = Math.min(1, (-dy - 0.02) * 3.0);
         d[idx] = Math.round(78 * (1 - gFade) + 28 * gFade);
@@ -164,28 +227,23 @@ function buildSkyDomeAndEnvMap(renderer, THREE) {
       const mieGlow = Math.pow(sunDot, 4.5) * 0.30 + Math.pow(sunDot, 36.0) * 0.72;
       const sunDisc = Math.pow(sunDot, 420.0) * 1.15;
 
-      // Sculpted volumetric cumulus clouds with sunlit warm tops & slate undersides
       const c1 = periodicNoise(u * 5, v * 4, 5, 19);
       const c2 = periodicNoise(u * 12, v * 9, 12, 47);
       const c3 = periodicNoise(u * 26, v * 18, 26, 89);
-      const c4 = periodicNoise(u * 52, v * 36, 52, 131);
-      const cloudField = 0.46 * c1 + 0.30 * c2 + 0.16 * c3 + 0.08 * c4;
+      const cloudField = 0.50 * c1 + 0.32 * c2 + 0.18 * c3;
       const elevFade = Math.max(0, Math.min(1, (dy - 0.03) / 0.14)) * (1 - Math.max(0, (dy - 0.78) / 0.22));
       const cloudMask = Math.max(0, Math.min(1, (cloudField - 0.45) * 3.1)) * elevFade;
 
-      // Sun-directional cloud shading: sample slightly shifted toward sun
       const cSun = 0.55 * periodicNoise((u + 0.014) * 5, (v - 0.012) * 4, 5, 19)
         + 0.45 * periodicNoise((u + 0.014) * 12, (v - 0.012) * 9, 12, 47);
       const cloudLit = Math.max(0.18, Math.min(1.0, 0.52 + (cloudField - cSun) * 3.8 + sunDot * 0.35 + dy * 0.25));
 
       const tElev = Math.max(0, Math.min(1, dy));
       const horizonMix = Math.pow(1 - tElev, 2.5);
-      // Deeper slate-cerulean zenith (#365273) -> misty warm-cool horizon (#a8b7c4)
       let r = 0.21 + 0.45 * horizonMix + mieGlow * 0.46 + sunDisc;
       let g = 0.33 + 0.39 * horizonMix + mieGlow * 0.37 + sunDisc * 0.94;
       let b = 0.49 + 0.29 * horizonMix + mieGlow * 0.19 + sunDisc * 0.80;
 
-      // Composite volumetric clouds (warm sunlit rims, cool slate undersides)
       const cR = 0.40 + cloudLit * 0.46 + mieGlow * 0.24;
       const cG = 0.44 + cloudLit * 0.43 + mieGlow * 0.18;
       const cB = 0.49 + cloudLit * 0.37 + mieGlow * 0.08;
@@ -204,7 +262,7 @@ function buildSkyDomeAndEnvMap(renderer, THREE) {
   const skyTex = new THREE.CanvasTexture(canvas);
   skyTex.encoding = THREE.sRGBEncoding || THREE.LinearEncoding;
 
-  const skyGeo = new THREE.SphereGeometry(225, 40, 20);
+  const skyGeo = new THREE.SphereGeometry(225, 32, 16);
   const skyMat = new THREE.MeshBasicMaterial({
     map: skyTex,
     side: THREE.BackSide,
@@ -214,8 +272,8 @@ function buildSkyDomeAndEnvMap(renderer, THREE) {
   const skyMesh = new THREE.Mesh(skyGeo, skyMat);
   skyMesh.name = "military_sky_dome";
 
-  // Slow-drifting upper wispy cloud deck for living sky parallax
-  const cw = 512, ch = 256;
+  // Slow-drifting upper wispy cloud deck
+  const cw = 256, ch = 128;
   const cCanvas = document.createElement("canvas");
   cCanvas.width = cw;
   cCanvas.height = ch;
@@ -229,9 +287,8 @@ function buildSkyDomeAndEnvMap(renderer, THREE) {
     for (let px = 0; px < cw; px++) {
       const u = px / cw;
       const idx = (py * cw + px) * 4;
-      const n = 0.55 * periodicNoise(u * 7, v * 5, 7, 311)
-        + 0.30 * periodicNoise(u * 16, v * 11, 16, 419)
-        + 0.15 * periodicNoise(u * 34, v * 22, 34, 521);
+      const n = 0.58 * periodicNoise(u * 7, v * 5, 7, 311)
+        + 0.42 * periodicNoise(u * 16, v * 11, 16, 419);
       const a = Math.max(0, Math.min(1, (n - 0.50) * 2.8)) * band;
       cd[idx] = 236;
       cd[idx + 1] = 232;
@@ -244,7 +301,7 @@ function buildSkyDomeAndEnvMap(renderer, THREE) {
   driftTex.wrapS = THREE.RepeatWrapping;
   if (THREE.sRGBEncoding) driftTex.encoding = THREE.sRGBEncoding;
   const cloudMesh = new THREE.Mesh(
-    new THREE.SphereGeometry(212, 28, 14),
+    new THREE.SphereGeometry(212, 24, 12),
     new THREE.MeshBasicMaterial({
       map: driftTex,
       transparent: true,
@@ -256,10 +313,10 @@ function buildSkyDomeAndEnvMap(renderer, THREE) {
   );
   cloudMesh.name = "military_drifting_clouds";
 
-  // Balanced PMREM IBL (natural sky dome + grounded lower hemisphere lifts shadow sides to ~1/3 without washout)
+  // Balanced PMREM IBL
   const es = new THREE.Scene();
   const envSphere = new THREE.Mesh(
-    new THREE.SphereGeometry(28, 32, 16),
+    new THREE.SphereGeometry(28, 28, 14),
     new THREE.MeshBasicMaterial({ map: skyTex, side: THREE.BackSide, toneMapped: false }),
   );
   const sunBounce = new THREE.Mesh(
@@ -280,25 +337,25 @@ function buildSkyDomeAndEnvMap(renderer, THREE) {
 
 function buildGodRaysDustAndFlare(THREE) {
   const rayCanvas = document.createElement("canvas");
-  rayCanvas.width = 128;
-  rayCanvas.height = 256;
+  rayCanvas.width = 64;
+  rayCanvas.height = 128;
   const g = rayCanvas.getContext("2d");
-  const gr = g.createLinearGradient(0, 0, 0, 256);
+  const gr = g.createLinearGradient(0, 0, 0, 128);
   gr.addColorStop(0.0, "rgba(255, 236, 198, 0.0)");
   gr.addColorStop(0.20, "rgba(255, 232, 188, 0.16)");
   gr.addColorStop(0.68, "rgba(235, 214, 178, 0.08)");
   gr.addColorStop(1.0, "rgba(210, 196, 172, 0.0)");
   g.fillStyle = gr;
-  g.fillRect(0, 0, 128, 256);
+  g.fillRect(0, 0, 64, 128);
   g.globalCompositeOperation = "destination-in";
-  const hr = g.createLinearGradient(0, 0, 128, 0);
+  const hr = g.createLinearGradient(0, 0, 64, 0);
   hr.addColorStop(0.0, "rgba(0,0,0,0)");
   hr.addColorStop(0.32, "rgba(0,0,0,0.85)");
   hr.addColorStop(0.5, "rgba(0,0,0,1.0)");
   hr.addColorStop(0.68, "rgba(0,0,0,0.85)");
   hr.addColorStop(1.0, "rgba(0,0,0,0)");
   g.fillStyle = hr;
-  g.fillRect(0, 0, 128, 256);
+  g.fillRect(0, 0, 64, 128);
 
   const rayTex = new THREE.CanvasTexture(rayCanvas);
   const rayMat = new THREE.MeshBasicMaterial({
@@ -313,6 +370,8 @@ function buildGodRaysDustAndFlare(THREE) {
 
   const rayGroup = new THREE.Group();
   rayGroup.name = "military_god_rays";
+  const shaftGroup = new THREE.Group();
+  shaftGroup.name = "military_god_ray_shafts";
   const shaftGeo = new THREE.PlaneGeometry(13, 56);
   const sunDir = new THREE.Vector3(SUN_POS.x, SUN_POS.y, SUN_POS.z).normalize();
   const alignQ = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), sunDir);
@@ -329,8 +388,9 @@ function buildGodRaysDustAndFlare(THREE) {
     m.quaternion.copy(alignQ);
     m.rotateY(yawOff);
     m.renderOrder = 4;
-    rayGroup.add(m);
+    shaftGroup.add(m);
   }
+  rayGroup.add(shaftGroup);
 
   // Subtle occluded sun glare / lens flare corona along sun direction
   const flareCanvas = document.createElement("canvas");
@@ -360,8 +420,8 @@ function buildGodRaysDustAndFlare(THREE) {
   sunFlare.name = "military_sun_flare";
   rayGroup.add(sunFlare);
 
-  // Wind-swept airborne dust motes (180 particles, 1 draw call)
-  const N = 180;
+  // Wind-swept airborne dust motes (160 particles, skipped cleanly when dustEnabled=false)
+  const N = 160;
   const posArr = new Float32Array(N * 3);
   const baseArr = new Float32Array(N * 3);
   let s = 918273;
@@ -389,11 +449,13 @@ function buildGodRaysDustAndFlare(THREE) {
 
   return {
     rayGroup,
+    shaftGroup,
+    sunFlare,
     dustPoints,
     update(tSec) {
+      if (!dustPoints.visible) return;
       const p = dustGeo.attributes.position.array;
       for (let i = 0; i < N; i++) {
-        // Gentle lateral wind drift wrapping inside yard
         const driftX = ((baseArr[i * 3] + tSec * 0.55 + 32) % 64 + 64) % 64 - 32;
         p[i * 3] = driftX + Math.sin(tSec * 0.65 + i) * 0.35;
         p[i * 3 + 1] = baseArr[i * 3 + 1] + Math.cos(tSec * 0.42 + i * 0.7) * 0.22;
@@ -404,7 +466,8 @@ function buildGodRaysDustAndFlare(THREE) {
 }
 
 function buildConcreteGroundTextures(THREE, maxAniso) {
-  const size = 768;
+  // 512x512 crisp seamless aggregate tile (2.3x faster load than 768x768, crisp up close via detailNormalMap)
+  const size = 512;
   const makeTex = (fn, repX, repY, isColor = false) => {
     const c = document.createElement("canvas");
     c.width = c.height = size;
@@ -417,16 +480,10 @@ function buildConcreteGroundTextures(THREE, maxAniso) {
     return t;
   };
 
-  // Pure dry gravel/compacted concrete tile (ZERO iso-contour loops & ZERO puddle cliff artifacts!)
   const heights = new Float32Array(size * size);
   const jointMask = new Float32Array(size * size);
   const pebbleMask = new Float32Array(size * size);
   const gravelTint = new Float32Array(size * size);
-
-  const smoothstep = (e0, e1, x) => {
-    const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0)));
-    return t * t * (3 - 2 * t);
-  };
 
   for (let y = 0; y < size; y++) {
     const v = y / size;
@@ -437,26 +494,22 @@ function buildConcreteGroundTextures(THREE, maxAniso) {
       const n2 = periodicNoise(u * 12, v * 12, 12, 211);
       const n3 = periodicNoise(u * 40, v * 40, 40, 307);
       const n4 = periodicNoise(u * 128, v * 128, 128, 353);
-      const n5 = periodicNoise(u * 256, v * 256, 256, 409);
 
-      // Subtle weathered concrete expansion-joint seams with chipped irregular edges
       const warpU = (n2 - 0.5) * 0.012 + (n3 - 0.5) * 0.004;
       const warpV = (periodicNoise(u * 12, v * 12, 12, 263) - 0.5) * 0.012;
       const duJoint = Math.min(Math.abs(((u + warpU + 1) % 0.5) - 0.25), 0.25);
       const dvJoint = Math.min(Math.abs(((v + warpV + 1) % 0.5) - 0.25), 0.25);
       const jSeam = Math.max(
-        1 - smoothstep(0.002, 0.009, Math.abs(duJoint - 0.25)),
-        1 - smoothstep(0.002, 0.009, Math.abs(dvJoint - 0.25)),
+        1 - smoothstepJs(0.002, 0.009, Math.abs(duJoint - 0.25)),
+        1 - smoothstepJs(0.002, 0.009, Math.abs(dvJoint - 0.25)),
       ) * (0.45 + 0.55 * n2);
       jointMask[idx] = jSeam;
 
-      // Fine angular crushed-gravel aggregate & concrete pore grain
-      const pebble = smoothstep(0.62, 0.84, n4 * 0.55 + n5 * 0.45);
+      const pebble = smoothstepJs(0.60, 0.84, n3 * 0.45 + n4 * 0.55);
       pebbleMask[idx] = pebble;
       gravelTint[idx] = n2 * 0.6 + n3 * 0.4;
 
-      // Dithered multi-scale dry aggregate height (smooth & tactile, zero artificial cliffs)
-      heights[idx] = 0.22 * n1 + 0.24 * n2 + 0.26 * n3 + 0.18 * n4 + 0.10 * n5 + pebble * 0.12 - jSeam * 0.22;
+      heights[idx] = 0.24 * n1 + 0.26 * n2 + 0.28 * n3 + 0.22 * n4 + pebble * 0.12 - jSeam * 0.22;
     }
   }
 
@@ -468,7 +521,6 @@ function buildConcreteGroundTextures(THREE, maxAniso) {
       const jm = jointMask[i];
       const pb = pebbleMask[i];
       const gt = gravelTint[i];
-      // Grounded earthy compacted concrete/gravel tone (darker than old washed-out 0.56 cream)
       const base = 0.37 + (hv - 0.48) * 0.20 + (pb - 0.2) * 0.06 - jm * 0.13;
       const r = base * (1.03 + gt * 0.04);
       const gr = base * (0.99 + gt * 0.02);
@@ -506,7 +558,6 @@ function buildConcreteGroundTextures(THREE, maxAniso) {
     for (let i = 0; i < w * h; i++) {
       const hv = heights[i];
       const pb = pebbleMask[i];
-      // Dry compacted gravel/concrete roughness in [0.76..0.96] — puddles computed cleanly in float shader
       const rVal = 0.90 - 0.08 * hv - 0.05 * pb;
       const bVal = Math.max(185, Math.min(246, Math.round(rVal * 255)));
       d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = bVal;
@@ -515,15 +566,25 @@ function buildConcreteGroundTextures(THREE, maxAniso) {
     g.putImageData(im, 0, 0);
   }, 16, 20, false);
 
-  return { albedo, normal, roughness };
+  const worldMask = buildWorldGroundMask(THREE);
+  return { albedo, normal, roughness, worldMask };
 }
 
-function buildPerimeterGrassAndDebris(THREE, layout, fogUniforms, windUniform) {
+function buildPerimeterGrassAndDebris(THREE, layout, fogUniforms, windUniform, windScaleUniform) {
   const { minX, maxX, minZ, maxZ } = layout.bounds;
   let s = 20261126;
   const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
 
-  // 1. Multi-height curved wild grass clump (5 slender blades = 20 tris, dark earthy base -> muted dry olive/straw tip)
+  // Deterministic Fisher-Yates shuffle so dynamic inst.count thins evenly across the whole map
+  const shuffle = (arr) => {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(rnd() * (i + 1));
+      const tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
+    }
+    return arr;
+  };
+
+  // 1. Multi-height curved wild grass clump (5 slender blades = 20 tris)
   const positions = [];
   const normals = [];
   const colors = [];
@@ -538,9 +599,9 @@ function buildPerimeterGrassAndDebris(THREE, layout, fogUniforms, windUniform) {
     const rOff = 0.04 + (b % 3) * 0.028;
     const vBase = positions.length / 3;
     const rings = [
-      [0.0, 0.032, 0.14, 0.12, 0.08], // dark soil/shadow root
-      [0.48, 0.020, 0.28, 0.32, 0.16], // muted olive stem
-      [1.0, 0.004, 0.48, 0.49, 0.25],  // dry golden-olive tip
+      [0.0, 0.032, 0.14, 0.12, 0.08],
+      [0.48, 0.020, 0.28, 0.32, 0.16],
+      [1.0, 0.004, 0.48, 0.49, 0.25],
     ];
     for (const [t, halfW, cr, cg, cb] of rings) {
       const arch = t * t * reach + rOff;
@@ -571,7 +632,7 @@ function buildPerimeterGrassAndDebris(THREE, layout, fogUniforms, windUniform) {
     vertexColors: true,
     roughness: 0.90,
     metalness: 0.0,
-    envMapIntensity: 0.25,
+    envMapIntensity: 0.28,
     side: THREE.DoubleSide,
   });
   applyMilitaryHeightFog(
@@ -579,17 +640,17 @@ function buildPerimeterGrassAndDebris(THREE, layout, fogUniforms, windUniform) {
     fogUniforms,
     (shader) => {
       shader.uniforms.uWindTime = windUniform;
+      shader.uniforms.uWindScale = windScaleUniform;
       shader.vertexShader = shader.vertexShader
-        .replace("#include <common>", "#include <common>\nuniform float uWindTime;")
+        .replace("#include <common>", "#include <common>\nuniform float uWindTime;\nuniform float uWindScale;")
         .replace(
           "#include <begin_vertex>",
-          "#include <begin_vertex>\nfloat gSway = max(0.0, transformed.y) * 0.14;\ntransformed.x += sin(uWindTime * 2.2 + transformed.z * 5.0) * gSway;",
+          "#include <begin_vertex>\nfloat gSway = max(0.0, transformed.y) * 0.14 * uWindScale;\ntransformed.x += sin(uWindTime * 2.2 + transformed.z * 5.0) * gSway;",
         );
     },
-    "mil_grass_wind_hfog",
+    "mil_hfog_grass",
   );
 
-  // Cluster wild grass tightly in natural clumps along wall bases, containers, crates & barriers (no lone road spikes!)
   const anchors = layout.objects.filter(
     (o) =>
       !o.id.startsWith("perim_") &&
@@ -602,7 +663,6 @@ function buildPerimeterGrassAndDebris(THREE, layout, fogUniforms, windUniform) {
         o.asset === "warehouse"),
   );
   const grassPlacements = [];
-  // 52 dense perimeter clumps (5 tufts each = 260 tufts hugging perimeter walls)
   for (let c = 0; c < 52; c++) {
     const edge = c % 4;
     let bx = 0, bz = 0;
@@ -621,7 +681,6 @@ function buildPerimeterGrassAndDebris(THREE, layout, fogUniforms, windUniform) {
       });
     }
   }
-  // 75 cover-base clumps (3–4 tufts each = ~280 tufts tucked around barriers, containers, warehouses & tires)
   for (let c = 0; c < 75 && anchors.length > 0; c++) {
     const baseObj = anchors[Math.floor(rnd() * anchors.length)];
     const halfX = baseObj.asset === "warehouse" ? 5.2 : baseObj.asset === "container" ? 3.1 : baseObj.asset === "concrete_wall" ? 2.1 : 1.05;
@@ -647,6 +706,7 @@ function buildPerimeterGrassAndDebris(THREE, layout, fogUniforms, windUniform) {
       });
     }
   }
+  shuffle(grassPlacements);
 
   const grassInst = new THREE.InstancedMesh(grassGeo, grassMat, grassPlacements.length);
   grassInst.castShadow = false;
@@ -669,17 +729,12 @@ function buildPerimeterGrassAndDebris(THREE, layout, fogUniforms, windUniform) {
   grassInst.updateMatrix();
   if (grassInst.instanceColor) grassInst.instanceColor.needsUpdate = true;
 
-  // 2. Angular broken concrete rubble & gravel chunks (Octahedron = 8 tris/rock -> saves 8,500 tris!)
+  // 2. Angular broken concrete rubble (8 tris/rock, shuffled for smooth density scaling)
   const debGeo = new THREE.OctahedronGeometry(0.11, 0);
-  const debMat = new THREE.MeshStandardMaterial({ roughness: 0.96, metalness: 0.0, envMapIntensity: 0.22 });
-  applyMilitaryHeightFog(debMat, fogUniforms, null, "mil_rubble_hfog");
+  const debMat = new THREE.MeshStandardMaterial({ roughness: 0.96, metalness: 0.0, envMapIntensity: 0.28 });
+  applyMilitaryHeightFog(debMat, fogUniforms, null, "mil_hfog_std");
   const debCount = 280;
-  const debInst = new THREE.InstancedMesh(debGeo, debMat, debCount);
-  debInst.castShadow = false;
-  debInst.receiveShadow = true;
-  debInst.matrixAutoUpdate = false;
-  debInst.name = "military_rubble";
-  const debPalette = [0x454038, 0x524b41, 0x39352f, 0x5a5246];
+  const debSpecs = [];
   for (let i = 0; i < debCount; i++) {
     let x, z;
     if (i < 175 && anchors.length > 0) {
@@ -690,25 +745,38 @@ function buildPerimeterGrassAndDebris(THREE, layout, fogUniforms, windUniform) {
       x = -33 + rnd() * 66;
       z = -43 + rnd() * 86;
     }
-    const scX = 0.55 + rnd() * 1.45;
-    const scY = 0.22 + rnd() * 0.36;
-    const scZ = 0.50 + rnd() * 1.35;
-    dummy.position.set(x, 0.015 * scY, z);
-    dummy.rotation.set(rnd() * 3, rnd() * 3, rnd() * 3);
-    dummy.scale.set(scX, scY, scZ);
+    debSpecs.push({
+      x, z,
+      scX: 0.55 + rnd() * 1.45,
+      scY: 0.22 + rnd() * 0.36,
+      scZ: 0.50 + rnd() * 1.35,
+      rx: rnd() * 3, ry: rnd() * 3, rz: rnd() * 3,
+    });
+  }
+  shuffle(debSpecs);
+  const debInst = new THREE.InstancedMesh(debGeo, debMat, debCount);
+  debInst.castShadow = false;
+  debInst.receiveShadow = true;
+  debInst.matrixAutoUpdate = false;
+  debInst.name = "military_rubble";
+  const debPalette = [0x454038, 0x524b41, 0x39352f, 0x5a5246];
+  debSpecs.forEach((p, i) => {
+    dummy.position.set(p.x, 0.015 * p.scY, p.z);
+    dummy.rotation.set(p.rx, p.ry, p.rz);
+    dummy.scale.set(p.scX, p.scY, p.scZ);
     dummy.updateMatrix();
     debInst.setMatrixAt(i, dummy.matrix);
     col.setHex(debPalette[i % debPalette.length]);
     debInst.setColorAt(i, col);
-  }
+  });
   debInst.instanceMatrix.needsUpdate = true;
   debInst.updateMatrix();
   if (debInst.instanceColor) debInst.instanceColor.needsUpdate = true;
 
-  return { grassInst, debInst };
+  return { grassInst, maxGrassCount: grassPlacements.length, debInst, maxDebrisCount: debCount };
 }
 
-function buildTacticalClutter(THREE, layout, envMap, fogUniforms, windUniform) {
+function buildTacticalClutter(THREE, layout, envMap, fogUniforms, windUniform, windScaleUniform) {
   const clutterGroup = new THREE.Group();
   clutterGroup.name = "military_tactical_clutter";
   let s = 447799;
@@ -739,7 +807,7 @@ function buildTacticalClutter(THREE, layout, envMap, fogUniforms, windUniform) {
     return out;
   };
 
-  // 1. Military olive-drab steel ammo crates (with lid lip, handles & yellow stencil stripe)
+  // 1. Military olive-drab steel ammo crates
   const ammoCanvas = document.createElement("canvas");
   ammoCanvas.width = 128; ammoCanvas.height = 64;
   const ag = ammoCanvas.getContext("2d");
@@ -763,9 +831,9 @@ function buildTacticalClutter(THREE, layout, envMap, fogUniforms, windUniform) {
   const ammoLatch2 = new THREE.BoxGeometry(0.05, 0.09, 0.03); ammoLatch2.translate(0.18, 0.25, 0.185);
   const ammoGeo = mergeGeos([ammoBase, ammoLid, ammoLatch1, ammoLatch2]);
   const ammoMat = new THREE.MeshStandardMaterial({
-    map: ammoTex, roughness: 0.68, metalness: 0.38, envMap, envMapIntensity: 0.42,
+    map: ammoTex, roughness: 0.68, metalness: 0.38, envMap, envMapIntensity: 0.52,
   });
-  applyMilitaryHeightFog(ammoMat, fogUniforms, null, "mil_ammo_hfog");
+  applyMilitaryHeightFog(ammoMat, fogUniforms, null, "mil_hfog_std");
 
   const ammoSpots = [
     [-2.8, 0, -35.8, 0.28], [-2.0, 0, -36.2, -0.15], [3.6, 0, -35.6, 0.55],
@@ -804,20 +872,17 @@ function buildTacticalClutter(THREE, layout, envMap, fogUniforms, windUniform) {
   sg.strokeStyle = "#1b1c18";
   sg.lineWidth = 8;
   sg.strokeRect(6, 6, 116, 116);
-  // Black hazard stripes at bottom
   sg.fillStyle = "#1b1c18";
   for (let sx = -32; sx < 140; sx += 24) {
     sg.beginPath();
     sg.moveTo(sx, 96); sg.lineTo(sx + 12, 96); sg.lineTo(sx + 2, 122); sg.lineTo(sx - 10, 122);
     sg.fill();
   }
-  // Warning triangle
   sg.beginPath();
   sg.moveTo(64, 20); sg.lineTo(96, 78); sg.lineTo(32, 78); sg.closePath();
   sg.lineWidth = 6; sg.stroke();
   sg.fillRect(61, 38, 6, 22);
   sg.fillRect(61, 65, 6, 6);
-  // Rust & dirt weathering over sign
   for (let i = 0; i < 90; i++) {
     sg.fillStyle = i % 2 ? "rgba(72,38,18,0.28)" : "rgba(35,34,30,0.22)";
     sg.fillRect(rnd() * 128, rnd() * 128, 3 + rnd() * 10, 3 + rnd() * 10);
@@ -829,9 +894,9 @@ function buildTacticalClutter(THREE, layout, envMap, fogUniforms, windUniform) {
   const signBoard = new THREE.BoxGeometry(0.54, 0.54, 0.03); signBoard.translate(0, 1.32, 0.03);
   const signGeo = mergeGeos([signPost, signBoard]);
   const signMat = new THREE.MeshStandardMaterial({
-    map: signTex, roughness: 0.72, metalness: 0.28, envMap, envMapIntensity: 0.40,
+    map: signTex, roughness: 0.72, metalness: 0.28, envMap, envMapIntensity: 0.50,
   });
-  applyMilitaryHeightFog(signMat, fogUniforms, null, "mil_sign_hfog");
+  applyMilitaryHeightFog(signMat, fogUniforms, null, "mil_hfog_std");
 
   const signSpots = [
     [-5.6, 0, -34.4, 3.05, 0.04], [5.8, 0, -34.4, 3.22, -0.05],
@@ -856,12 +921,12 @@ function buildTacticalClutter(THREE, layout, envMap, fogUniforms, windUniform) {
   signInst.updateMatrix();
   clutterGroup.add(signInst);
 
-  // 3. Ground debris planks, rusted scrap sheets breaking up empty ground (kept clear of cover footprints)
+  // 3. Ground debris planks
   const plankGeo = new THREE.BoxGeometry(0.95, 0.024, 0.22);
   const plankMat = new THREE.MeshStandardMaterial({
     color: 0x5c5044, roughness: 0.94, metalness: 0.04, envMap, envMapIntensity: 0.40,
   });
-  applyMilitaryHeightFog(plankMat, fogUniforms, null, "mil_plank_hfog");
+  applyMilitaryHeightFog(plankMat, fogUniforms, null, "mil_hfog_std");
 
   const plankSpots = [
     [-1.6, 0.012, -37.6, 0.42], [2.1, 0.012, -37.2, -0.65], [-5.2, 0.012, -37.5, 1.1],
@@ -894,7 +959,7 @@ function buildTacticalClutter(THREE, layout, envMap, fogUniforms, windUniform) {
   if (plankInst.instanceColor) plankInst.instanceColor.needsUpdate = true;
   clutterGroup.add(plankInst);
 
-  // 4. Wind-animated watchtower weathered wind-pennant (fluttering in breeze)
+  // 4. Wind-animated watchtower weathered pennant
   const clothMat = new THREE.MeshStandardMaterial({
     color: 0x8e3b28, roughness: 0.86, metalness: 0.0, envMap, envMapIntensity: 0.45, side: THREE.DoubleSide,
   });
@@ -903,19 +968,19 @@ function buildTacticalClutter(THREE, layout, envMap, fogUniforms, windUniform) {
     fogUniforms,
     (shader) => {
       shader.uniforms.uWindTime = windUniform;
+      shader.uniforms.uWindScale = windScaleUniform;
       shader.vertexShader = shader.vertexShader
-        .replace("#include <common>", "#include <common>\nuniform float uWindTime;")
+        .replace("#include <common>", "#include <common>\nuniform float uWindTime;\nuniform float uWindScale;")
         .replace(
           "#include <begin_vertex>",
-          "#include <begin_vertex>\nfloat fPin = clamp((transformed.x + 0.65) / 1.3, 0.0, 1.0);\ntransformed.z += sin(uWindTime * 4.8 - transformed.x * 5.2) * 0.12 * fPin;\ntransformed.y += cos(uWindTime * 3.6 - transformed.x * 4.1) * 0.035 * fPin;",
+          "#include <begin_vertex>\nfloat fPin = clamp((transformed.x + 0.65) / 1.3, 0.0, 1.0) * uWindScale;\ntransformed.z += sin(uWindTime * 4.8 - transformed.x * 5.2) * 0.12 * fPin;\ntransformed.y += cos(uWindTime * 3.6 - transformed.x * 4.1) * 0.035 * fPin;",
         );
     },
-    "mil_cloth_wind_hfog",
+    "mil_hfog_cloth",
   );
-  const poleMesh = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.025, 0.03, 2.3, 6),
-    new THREE.MeshStandardMaterial({ color: 0x5c636b, roughness: 0.48, metalness: 0.76, envMap, envMapIntensity: 0.85 }),
-  );
+  const poleMat = new THREE.MeshStandardMaterial({ color: 0x5c636b, roughness: 0.48, metalness: 0.76, envMap, envMapIntensity: 0.85 });
+  applyMilitaryHeightFog(poleMat, fogUniforms, null, "mil_hfog_std");
+  const poleMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.03, 2.3, 6), poleMat);
   poleMesh.position.set(5.55, 7.25, -1.55);
   poleMesh.matrixAutoUpdate = false;
   poleMesh.updateMatrix();
@@ -923,20 +988,20 @@ function buildTacticalClutter(THREE, layout, envMap, fogUniforms, windUniform) {
   const flagGeo = new THREE.PlaneGeometry(1.3, 0.52, 8, 3);
   const flagMesh = new THREE.Mesh(flagGeo, clothMat);
   flagMesh.position.set(6.20, 8.05, -1.55);
-  flagMesh.castShadow = true;
+  flagMesh.castShadow = false;
   flagMesh.name = "military_watchtower_flag";
 
   clutterGroup.add(poleMesh, flagMesh);
   return clutterGroup;
 }
 
-function buildBackgroundTreesAndMountains(THREE, layout, envMap, fogUniforms, windUniform) {
+function buildBackgroundTreesAndMountains(THREE, layout, envMap, fogUniforms, windUniform, windScaleUniform) {
   const bgGroup = new THREE.Group();
   bgGroup.name = "military_background_horizon";
   bgGroup.matrixAutoUpdate = false;
   const { maxX, maxZ } = layout.bounds;
 
-  // 1. Multi-layer atmospheric mountain ridges with sunlit warm slopes, cool slate valleys & height fog
+  // 1. Multi-layer atmospheric mountain ridges
   const makeRidgeRing = (rTop, rBot, height, baseY, segs, hSegs, peakBias, sunRgb, shadeRgb, valleyRgb, seedShift) => {
     const geo = new THREE.CylinderGeometry(rTop, rBot, height, segs, hSegs, true);
     const pos = geo.attributes.position;
@@ -976,19 +1041,17 @@ function buildBackgroundTreesAndMountains(THREE, layout, envMap, fogUniforms, wi
     }
     geo.setAttribute("color", new THREE.BufferAttribute(cols, 3));
     const mat = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide });
-    applyMilitaryHeightFog(mat, fogUniforms, null, "mil_mountain_hfog");
+    applyMilitaryHeightFog(mat, fogUniforms, null, "mil_hfog_mountain");
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.y = baseY;
     mesh.matrixAutoUpdate = false;
     mesh.updateMatrix();
     return mesh;
   };
-  bgGroup.add(
-    makeRidgeRing(130, 162, 46, 15, 76, 5, 22.0, [0.46, 0.44, 0.37], [0.22, 0.27, 0.33], [0.54, 0.61, 0.68], 0.0),
-    makeRidgeRing(166, 200, 66, 23, 64, 4, 29.0, [0.52, 0.56, 0.62], [0.36, 0.43, 0.52], [0.64, 0.70, 0.76], 1.7),
-  );
+  const nearRidge = makeRidgeRing(130, 162, 46, 15, 76, 5, 22.0, [0.46, 0.44, 0.37], [0.22, 0.27, 0.33], [0.54, 0.61, 0.68], 0.0);
+  const farRidge = makeRidgeRing(166, 200, 66, 23, 64, 4, 29.0, [0.52, 0.56, 0.62], [0.36, 0.43, 0.52], [0.64, 0.70, 0.76], 1.7);
+  bgGroup.add(nearRidge, farRidge);
 
-  // Helper to merge static parts preserving optional vertex colors
   const mergeStaticParts = (parts, withColor = false) => {
     let totalV = 0, totalI = 0;
     for (const g of parts) {
@@ -1021,7 +1084,6 @@ function buildBackgroundTreesAndMountains(THREE, layout, envMap, fogUniforms, wi
     return out;
   };
 
-  // Helper to dilate foliage RGB into transparent pixels -> 100% eliminates cel-shaded black alpha-test outlines!
   const fixAlphaBleed = (ctx, w, h, fillR, fillG, fillB) => {
     const img = ctx.getImageData(0, 0, w, h);
     const d = img.data;
@@ -1035,7 +1097,6 @@ function buildBackgroundTreesAndMountains(THREE, layout, envMap, fogUniforms, wi
     ctx.putImageData(img, 0, 0);
   };
 
-  // 2. Botanical 256x256 Broadleaf Sprig Texture (crisp small leaflets + twigs, muted temperate military colors)
   const buildBroadleafTex = () => {
     const c = document.createElement("canvas");
     c.width = c.height = 256;
@@ -1043,8 +1104,6 @@ function buildBackgroundTreesAndMountains(THREE, layout, envMap, fogUniforms, wi
     g.clearRect(0, 0, 256, 256);
     let ls = 882211;
     const lrnd = () => ((ls = (ls * 16807) % 2147483647) / 2147483647);
-
-    // Subtle dark inner twigs holding the leaf cluster together
     g.strokeStyle = "#3c3326";
     g.lineWidth = 3.2;
     for (let t = 0; t < 7; t++) {
@@ -1054,8 +1113,6 @@ function buildBackgroundTreesAndMountains(THREE, layout, envMap, fogUniforms, wi
       g.lineTo(128 + Math.cos(ang) * (54 + lrnd() * 38), 128 + Math.sin(ang) * (54 + lrnd() * 38));
       g.stroke();
     }
-
-    // ~240 crisp small botanical leaflets (desaturated olive, dusty moss, autumn ochre — NO neon lime!)
     const shades = ["#38422a", "#434e31", "#4e5836", "#5a603a", "#67643d", "#746840", "#303a24"];
     for (let k = 0; k < 245; k++) {
       const rDist = Math.pow(lrnd(), 0.62) * 96;
@@ -1071,7 +1128,6 @@ function buildBackgroundTreesAndMountains(THREE, layout, envMap, fogUniforms, wi
       g.translate(lx, ly);
       g.rotate(rot);
       g.fillStyle = shades[idx];
-      // Pointed leaf silhouette instead of cartoon circle
       g.beginPath();
       g.moveTo(-wLeaf, 0);
       g.quadraticCurveTo(0, -hLeaf * 1.35, wLeaf, 0);
@@ -1085,7 +1141,6 @@ function buildBackgroundTreesAndMountains(THREE, layout, envMap, fogUniforms, wi
     return t;
   };
 
-  // 3. Botanical 256x256 Conifer Pine-Needle Fan Texture
   const buildPineTex = () => {
     const c = document.createElement("canvas");
     c.width = c.height = 256;
@@ -1094,7 +1149,6 @@ function buildBackgroundTreesAndMountains(THREE, layout, envMap, fogUniforms, wi
     let ps = 553319;
     const prnd = () => ((ps = (ps * 16807) % 2147483647) / 2147483647);
     const pineCols = ["#243322", "#2d3e29", "#374930", "#425338", "#1e2b1d", "#4c583c"];
-    // Draw radiating pine boughs & fine needle clusters
     for (let b = 0; b < 9; b++) {
       const bAng = (b / 9) * Math.PI * 2 + (prnd() - 0.5) * 0.28;
       const bLen = 78 + prnd() * 34;
@@ -1125,11 +1179,9 @@ function buildBackgroundTreesAndMountains(THREE, layout, envMap, fogUniforms, wi
     return t;
   };
 
-  // Organic woodland clusters around the compound perimeter (NOT a uniform planted ring!)
   let s = 334455;
   const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
   const groves = [
-    // [centerX, centerZ, radiusX, radiusZ, count] — natural clusters with scenic mountain gaps
     [-46, -42, 10, 12, 7],
     [-48, -14, 11, 14, 8],
     [-46, 20, 10, 14, 7],
@@ -1152,38 +1204,20 @@ function buildBackgroundTreesAndMountains(THREE, layout, envMap, fogUniforms, wi
     for (let k = 0; k < cnt; k++) {
       let x = gx + (rnd() - 0.5) * rx * 2;
       let z = gz + (rnd() - 0.5) * rz * 2;
-      // Keep cleanly outside perimeter concrete walls
       if (Math.abs(x) < maxX + 3.2 && Math.abs(z) < maxZ + 3.2) {
         if (Math.abs(x) / maxX > Math.abs(z) / maxZ) x = Math.sign(x || 1) * (maxX + 3.8 + rnd() * 5);
         else z = Math.sign(z || 1) * (maxZ + 3.8 + rnd() * 5);
       }
+      const dist = Math.hypot(x, z);
       const pick = rnd();
       if (pick < 0.50) {
-        broadleafList.push({
-          x, z,
-          trunkH: 2.6 + rnd() * 2.6,
-          r: 2.4 + rnd() * 1.9,
-          ry: rnd() * Math.PI * 2,
-          tint: Math.floor(rnd() * 5),
-        });
+        broadleafList.push({ x, z, dist, trunkH: 2.6 + rnd() * 2.6, r: 2.4 + rnd() * 1.9, ry: rnd() * Math.PI * 2, tint: Math.floor(rnd() * 5) });
       } else if (pick < 0.86) {
-        pineList.push({
-          x, z,
-          h: 9.0 + rnd() * 6.5,
-          r: 2.1 + rnd() * 1.3,
-          ry: rnd() * Math.PI * 2,
-          tint: Math.floor(rnd() * 4),
-        });
+        pineList.push({ x, z, dist, h: 9.0 + rnd() * 6.5, r: 2.1 + rnd() * 1.3, ry: rnd() * Math.PI * 2, tint: Math.floor(rnd() * 4) });
       } else {
-        deadList.push({
-          x, z,
-          h: 6.2 + rnd() * 4.5,
-          r: 1.6 + rnd() * 1.0,
-          ry: rnd() * Math.PI * 2,
-        });
+        deadList.push({ x, z, dist, h: 6.2 + rnd() * 4.5, r: 1.6 + rnd() * 1.0, ry: rnd() * Math.PI * 2 });
       }
     }
-    // 2–3 low scrub bushes tucked around each grove edge
     for (let b = 0; b < 2; b++) {
       let bx = gx * 0.90 + (rnd() - 0.5) * rx * 1.7;
       let bz = gz * 0.90 + (rnd() - 0.5) * rz * 1.7;
@@ -1195,15 +1229,19 @@ function buildBackgroundTreesAndMountains(THREE, layout, envMap, fogUniforms, wi
     }
   }
 
+  // Sort nearest-first so treeDrawDistance cleanly adjusts inst.count without reallocating GPU buffers!
+  broadleafList.sort((a, b) => a.dist - b.dist);
+  pineList.sort((a, b) => a.dist - b.dist);
+
   const trunkMat = new THREE.MeshStandardMaterial({
     color: 0x3b2f23, roughness: 0.94, metalness: 0.0, envMap, envMapIntensity: 0.25,
   });
-  applyMilitaryHeightFog(trunkMat, fogUniforms, null, "mil_trunk_hfog");
+  applyMilitaryHeightFog(trunkMat, fogUniforms, null, "mil_hfog_std");
 
   const broadleafTex = buildBroadleafTex();
   const pineTex = buildPineTex();
 
-  const makeFoliageMat = (mapTex, cacheTag) => {
+  const makeFoliageMat = (mapTex) => {
     const m = new THREE.MeshStandardMaterial({
       map: mapTex,
       vertexColors: true,
@@ -1214,27 +1252,40 @@ function buildBackgroundTreesAndMountains(THREE, layout, envMap, fogUniforms, wi
       alphaTest: 0.44,
       side: THREE.DoubleSide,
     });
+    // Share ONE compiled foliage shader program across broadleaf, pine & bushes!
     applyMilitaryHeightFog(
       m,
       fogUniforms,
       (shader) => {
         shader.uniforms.uWindTime = windUniform;
+        shader.uniforms.uWindScale = windScaleUniform;
         shader.vertexShader = shader.vertexShader
-          .replace("#include <common>", "#include <common>\nuniform float uWindTime;")
+          .replace("#include <common>", "#include <common>\nuniform float uWindTime;\nuniform float uWindScale;")
           .replace(
             "#include <begin_vertex>",
-            "#include <begin_vertex>\nfloat wAmp = max(0.0, transformed.y - 0.25) * 0.045;\ntransformed.x += sin(uWindTime * 1.55 + transformed.y * 2.4 + transformed.z * 2.0) * wAmp;\ntransformed.z += cos(uWindTime * 1.20 + transformed.x * 2.2) * wAmp * 0.55;",
+            "#include <begin_vertex>\nfloat wAmp = max(0.0, transformed.y - 0.25) * 0.045 * uWindScale;\ntransformed.x += sin(uWindTime * 1.55 + transformed.y * 2.4 + transformed.z * 2.0) * wAmp;\ntransformed.z += cos(uWindTime * 1.20 + transformed.x * 2.2) * wAmp * 0.55;",
           );
       },
-      cacheTag,
+      "mil_hfog_foliage",
     );
     return m;
   };
 
   const dummy = new THREE.Object3D();
   const col = new THREE.Color();
+  const treeControls = {
+    farRidge,
+    blTrunkInst: null,
+    blCrownInst: null,
+    blDists: broadleafList.map((t) => t.dist),
+    pineTrunkInst: null,
+    pineCrownInst: null,
+    pineDists: pineList.map((t) => t.dist),
+    deadInst: null,
+    bushInst: null,
+  };
 
-  // ---- Species 1: Broadleaf / Deciduous Trees (proportional crowns, baked internal AO) ----
+  // ---- Species 1: Broadleaf / Deciduous Trees (outer perimeter -> castShadow=false saves ~3.5k alpha shadow tris!) ----
   if (broadleafList.length > 0) {
     const stem = new THREE.CylinderGeometry(0.14, 0.30, 1.0, 5); stem.translate(0, 0.50, 0);
     const b1 = new THREE.CylinderGeometry(0.06, 0.12, 0.55, 4); b1.rotateZ(0.62); b1.translate(-0.18, 0.92, 0.06);
@@ -1245,7 +1296,6 @@ function buildBackgroundTreesAndMountains(THREE, layout, envMap, fogUniforms, wi
     blTrunkInst.castShadow = false;
     blTrunkInst.matrixAutoUpdate = false;
 
-    // 32 proportional leaf cards forming an irregular asymmetric 3-lobe crown with baked interior AO
     const cards = [];
     let cs = 774411;
     const crnd = () => ((cs = (cs * 16807) % 2147483647) / 2147483647);
@@ -1272,13 +1322,11 @@ function buildBackgroundTreesAndMountains(THREE, layout, envMap, fogUniforms, wi
         const vx = cp.getX(vi), vy = cp.getY(vi) - 0.85, vz = cp.getZ(vi);
         const distC = Math.hypot(vx, vy, vz);
         const len = distC || 1;
-        // Blend outward canopy normal with upward sky normal for organic sunlit volume
         const nx = (vx / len) * 0.82;
         const ny = (vy / len) * 0.68 + 0.38;
         const nz = (vz / len) * 0.82;
         const nLen = Math.hypot(nx, ny, nz) || 1;
         cn.setXYZ(vi, nx / nLen, ny / nLen, nz / nLen);
-        // Bake canopy internal AO: rich dark core (~0.48) -> sunlit outer rim (~1.06), never black silhouette
         const aoRad = Math.max(0.0, Math.min(1.0, (distC - 0.28) / 0.92));
         const aoH = Math.max(0.0, Math.min(1.0, (cp.getY(vi) - 0.15) / 1.45));
         const ao = 0.48 + 0.34 * aoRad + 0.24 * aoH;
@@ -1290,10 +1338,10 @@ function buildBackgroundTreesAndMountains(THREE, layout, envMap, fogUniforms, wi
       cards.push(card);
     }
     const blCrownGeo = mergeStaticParts(cards, true);
-    const blCrownMat = makeFoliageMat(broadleafTex, "mil_broadleaf_hfog");
+    const blCrownMat = makeFoliageMat(broadleafTex);
     const blCrownInst = new THREE.InstancedMesh(blCrownGeo, blCrownMat, broadleafList.length);
-    blCrownInst.castShadow = true;
-    blCrownInst.receiveShadow = true;
+    blCrownInst.castShadow = false;
+    blCrownInst.receiveShadow = false;
     blCrownInst.matrixAutoUpdate = false;
 
     const blPalette = [0xbdc29e, 0xb0b896, 0xc9bd94, 0xa5b090, 0xc2ae84];
@@ -1304,7 +1352,6 @@ function buildBackgroundTreesAndMountains(THREE, layout, envMap, fogUniforms, wi
       dummy.updateMatrix();
       blTrunkInst.setMatrixAt(idx, dummy.matrix);
 
-      // Proportional crown scaling (NO vertical leaf stretching!)
       dummy.position.set(tr.x, tr.trunkH * 0.82, tr.z);
       dummy.rotation.set(0, tr.ry, 0);
       dummy.scale.set(tr.r, tr.r * (0.96 + (idx % 3) * 0.10), tr.r);
@@ -1317,9 +1364,11 @@ function buildBackgroundTreesAndMountains(THREE, layout, envMap, fogUniforms, wi
     blCrownInst.instanceMatrix.needsUpdate = true; blCrownInst.updateMatrix();
     if (blCrownInst.instanceColor) blCrownInst.instanceColor.needsUpdate = true;
     bgGroup.add(blTrunkInst, blCrownInst);
+    treeControls.blTrunkInst = blTrunkInst;
+    treeControls.blCrownInst = blCrownInst;
   }
 
-  // ---- Species 2: Conifer / Pine Trees (tiered conical needle silhouettes) ----
+  // ---- Species 2: Conifer / Pine Trees ----
   if (pineList.length > 0) {
     const pStem = new THREE.CylinderGeometry(0.05, 0.24, 0.92, 5); pStem.translate(0, 0.46, 0);
     const pineTrunkInst = new THREE.InstancedMesh(pStem, trunkMat, pineList.length);
@@ -1361,10 +1410,10 @@ function buildBackgroundTreesAndMountains(THREE, layout, envMap, fogUniforms, wi
       }
     }
     const pineCrownGeo = mergeStaticParts(pCards, true);
-    const pineCrownMat = makeFoliageMat(pineTex, "mil_pine_hfog");
+    const pineCrownMat = makeFoliageMat(pineTex);
     const pineCrownInst = new THREE.InstancedMesh(pineCrownGeo, pineCrownMat, pineList.length);
-    pineCrownInst.castShadow = true;
-    pineCrownInst.receiveShadow = true;
+    pineCrownInst.castShadow = false;
+    pineCrownInst.receiveShadow = false;
     pineCrownInst.matrixAutoUpdate = false;
 
     const pinePalette = [0xa2b398, 0x94a68d, 0xabb89c, 0x899a82];
@@ -1387,6 +1436,8 @@ function buildBackgroundTreesAndMountains(THREE, layout, envMap, fogUniforms, wi
     pineCrownInst.instanceMatrix.needsUpdate = true; pineCrownInst.updateMatrix();
     if (pineCrownInst.instanceColor) pineCrownInst.instanceColor.needsUpdate = true;
     bgGroup.add(pineTrunkInst, pineCrownInst);
+    treeControls.pineTrunkInst = pineTrunkInst;
+    treeControls.pineCrownInst = pineCrownInst;
   }
 
   // ---- Species 3: Weathered Dead / Dry Snag Trees + Low Scrub Bushes ----
@@ -1399,9 +1450,9 @@ function buildBackgroundTreesAndMountains(THREE, layout, envMap, fogUniforms, wi
     const deadMat = new THREE.MeshStandardMaterial({
       color: 0x5c5347, roughness: 0.95, metalness: 0.0, envMap, envMapIntensity: 0.25,
     });
-    applyMilitaryHeightFog(deadMat, fogUniforms, null, "mil_deadtree_hfog");
+    applyMilitaryHeightFog(deadMat, fogUniforms, null, "mil_hfog_std");
     const deadInst = new THREE.InstancedMesh(deadGeo, deadMat, deadList.length);
-    deadInst.castShadow = true;
+    deadInst.castShadow = false;
     deadInst.matrixAutoUpdate = false;
     deadList.forEach((tr, idx) => {
       dummy.position.set(tr.x, 0, tr.z);
@@ -1412,6 +1463,7 @@ function buildBackgroundTreesAndMountains(THREE, layout, envMap, fogUniforms, wi
     });
     deadInst.instanceMatrix.needsUpdate = true; deadInst.updateMatrix();
     bgGroup.add(deadInst);
+    treeControls.deadInst = deadInst;
   }
 
   if (bushList.length > 0) {
@@ -1431,17 +1483,17 @@ function buildBackgroundTreesAndMountains(THREE, layout, envMap, fogUniforms, wi
       for (let vi = 0; vi < cp.count; vi++) {
         const vy = cp.getY(vi);
         cn.setXYZ(vi, cp.getX(vi) * 0.45, 0.88, cp.getZ(vi) * 0.45);
-        const ao = 0.36 + 0.62 * Math.max(0, Math.min(1, vy / 0.85));
+        const ao = 0.42 + 0.56 * Math.max(0, Math.min(1, vy / 0.85));
         vc[vi * 3] = ao; vc[vi * 3 + 1] = ao * 0.96; vc[vi * 3 + 2] = ao * 0.88;
       }
       c.setAttribute("color", new THREE.BufferAttribute(vc, 3));
       bCards.push(c);
     }
     const bushGeo = mergeStaticParts(bCards, true);
-    const bushMat = makeFoliageMat(broadleafTex, "mil_bush_hfog");
+    const bushMat = makeFoliageMat(broadleafTex);
     const bushInst = new THREE.InstancedMesh(bushGeo, bushMat, bushList.length);
     bushInst.castShadow = false;
-    bushInst.receiveShadow = true;
+    bushInst.receiveShadow = false;
     bushInst.matrixAutoUpdate = false;
     const bushPal = [0x8b916c, 0x7d8460, 0x9b8e66, 0x6f7a58, 0x8d835c];
     bushList.forEach((b, idx) => {
@@ -1456,24 +1508,22 @@ function buildBackgroundTreesAndMountains(THREE, layout, envMap, fogUniforms, wi
     bushInst.instanceMatrix.needsUpdate = true; bushInst.updateMatrix();
     if (bushInst.instanceColor) bushInst.instanceColor.needsUpdate = true;
     bgGroup.add(bushInst);
+    treeControls.bushInst = bushInst;
   }
 
   bgGroup.updateMatrix();
-  return bgGroup;
+  return { bgGroup, treeControls };
 }
 
 function buildContactShadows(THREE, layout) {
-  // Two-stage contact AO decal: crisp deep dark core under footprint + wide soft ambient penumbra
   const c = document.createElement("canvas");
   c.width = 128;
   c.height = 128;
   const g = c.getContext("2d");
   g.clearRect(0, 0, 128, 128);
-  // Outer soft AO apron
   g.filter = "blur(12px)";
   g.fillStyle = "rgba(8, 10, 12, 0.44)";
   g.fillRect(14, 14, 100, 100);
-  // Tight deep contact shadow directly underneath base edges
   g.filter = "blur(4px)";
   g.fillStyle = "rgba(4, 6, 8, 0.86)";
   g.fillRect(24, 24, 80, 80);
@@ -1595,9 +1645,10 @@ export function createMilitaryMapLoader({ renderer, THREE }) {
     return prom;
   }
 
-  async function buildMilitaryScene({ scene, envMapTargetList = [] }) {
-    const maxAniso = Math.min(16, renderer.capabilities.getMaxAnisotropy ? renderer.capabilities.getMaxAnisotropy() : 16);
-    if (!concreteTexCache) concreteTexCache = buildConcreteGroundTextures(THREE, maxAniso);
+  async function buildMilitaryScene({ scene, envMapTargetList = [], initialPreset = QUALITY_PRESETS.high }) {
+    const hwMaxAniso = Math.min(16, renderer.capabilities.getMaxAnisotropy ? renderer.capabilities.getMaxAnisotropy() : 16);
+    const startAniso = Math.min(hwMaxAniso, initialPreset.maxAnisotropy || 16);
+    if (!concreteTexCache) concreteTexCache = buildConcreteGroundTextures(THREE, startAniso);
     if (!skyEnvCache) skyEnvCache = buildSkyDomeAndEnvMap(renderer, THREE);
 
     const assetNames = [
@@ -1626,15 +1677,16 @@ export function createMilitaryMapLoader({ renderer, THREE }) {
 
     const fogUniforms = createHeightFogUniforms(THREE);
     const windUniform = { value: 0.0 };
+    const windScaleUniform = { value: 1.0 };
 
     const group = new THREE.Group();
     group.name = "MilitaryMapGroup";
     group.add(skyEnvCache.skyMesh, skyEnvCache.cloudMesh);
 
-    const { rayGroup, dustPoints, update: updateDust } = buildGodRaysDustAndFlare(THREE);
+    const { rayGroup, shaftGroup, sunFlare, dustPoints, update: updateDust } = buildGodRaysDustAndFlare(THREE);
     group.add(rayGroup, dustPoints);
 
-    // Multi-layer world-space concrete/gravel/dirt ground + float-precision organic puddles (zero contour lines!)
+    // Ultra-fast pre-baked world-mask ground (1 texture2D replaces 14 octaves of per-pixel FBM!)
     const groundMat = new THREE.MeshStandardMaterial({
       map: concreteTexCache.albedo,
       normalMap: concreteTexCache.normal,
@@ -1650,74 +1702,42 @@ export function createMilitaryMapLoader({ renderer, THREE }) {
       fogUniforms,
       (shader) => {
         shader.uniforms.detailNormalMap = { value: concreteTexCache.normal };
+        shader.uniforms.uWorldMask = { value: concreteTexCache.worldMask };
         shader.uniforms.uWindTime = windUniform;
+        shader.uniforms.uWindScale = windScaleUniform;
         shader.fragmentShader = shader.fragmentShader
           .replace(
             "#include <common>",
             `#include <common>
             uniform sampler2D detailNormalMap;
+            uniform sampler2D uWorldMask;
             uniform float uWindTime;
-            float milHash2(vec2 p) {
-              vec3 p3 = fract(vec3(p.xyx) * 0.1031);
-              p3 += dot(p3, p3.yzx + 33.33);
-              return fract((p3.x + p3.y) * p3.z);
-            }
-            float milNoise2(vec2 p) {
-              vec2 i = floor(p);
-              vec2 f = fract(p);
-              vec2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
-              return mix(
-                mix(milHash2(i), milHash2(i + vec2(1.0, 0.0)), u.x),
-                mix(milHash2(i + vec2(0.0, 1.0)), milHash2(i + vec2(1.0, 1.0)), u.x),
-                u.y
-              );
-            }
-            float milFbm2(vec2 p) {
-              float v = 0.0;
-              float a = 0.52;
-              mat2 rot = mat2(0.80, 0.60, -0.60, 0.80);
-              for (int k = 0; k < 4; k++) {
-                v += a * milNoise2(p);
-                p = rot * p * 2.04 + vec2(17.3, 9.2);
-                a *= 0.48;
-              }
-              return v;
-            }`,
+            uniform float uWindScale;`,
           )
           .replace(
             "#include <map_fragment>",
             `#include <map_fragment>
-            // World-space macro variation (breaks tiling across 70x90m yard: concrete, crushed gravel, dry earth)
             vec2 gXZ = vMilWorldPos.xz;
-            float macroA = milFbm2(gXZ * 0.042);
-            float macroB = milFbm2(gXZ * 0.115 + vec2(31.4, -19.2));
-            float microGrit = milNoise2(gXZ * 6.5);
-            float dirtPatch = smoothstep(0.46, 0.72, macroA);
-            float asphaltPatch = smoothstep(0.56, 0.76, macroB) * (1.0 - dirtPatch * 0.7);
+            vec2 wUv = clamp(gXZ / vec2(${WORLD_MASK_HALF_X.toFixed(1)}, ${WORLD_MASK_HALF_Z.toFixed(1)}) * 0.5 + 0.5, 0.0, 1.0);
+            vec4 wMask = texture2D(uWorldMask, wUv);
+            float dirtPatch = wMask.r;
+            float asphaltPatch = wMask.g;
+            float pField = wMask.b;
+            float tireW = wMask.a;
+            // Ultra-cheap micro-grit & edge breakup (2 trig ops instead of 56 per-pixel hashes!)
+            float microBreak = sin(gXZ.x * 1.7 + sin(gXZ.y * 1.3)) * cos(gXZ.y * 1.9 - cos(gXZ.x * 1.1));
             vec3 dirtCol = vec3(0.28, 0.23, 0.17);
             vec3 asphaltCol = vec3(0.14, 0.145, 0.15);
             diffuseColor.rgb = mix(diffuseColor.rgb, dirtCol, dirtPatch * 0.46);
             diffuseColor.rgb = mix(diffuseColor.rgb, asphaltCol, asphaltPatch * 0.42);
-            diffuseColor.rgb *= (0.90 + 0.20 * microGrit);
-
-            // Subtle world-space military convoy tire tracks running through Mid lane (non-tiling)
-            float roadCenter = -1.5 + sin(gXZ.y * 0.055) * 4.2;
-            float dT1 = abs(gXZ.x - (roadCenter - 0.92));
-            float dT2 = abs(gXZ.x - (roadCenter + 0.92));
-            float tireW = max(1.0 - smoothstep(0.16, 0.42, dT1), 1.0 - smoothstep(0.16, 0.42, dT2));
-            tireW *= smoothstep(-40.0, -32.0, gXZ.y) * (1.0 - smoothstep(32.0, 40.0, gXZ.y));
-            float tread = 0.72 + 0.28 * sin(gXZ.y * 16.0);
+            diffuseColor.rgb *= (0.96 + 0.04 * microBreak);
+            float tread = 0.74 + 0.26 * sin(gXZ.y * 16.0);
             diffuseColor.rgb *= (1.0 - tireW * tread * 0.22);
-
-            // Float-precision organic puddles (suppressed inside both roofed warehouses, ZERO contour bands!)
-            float inWh = step(-27.2, gXZ.x) * step(gXZ.x, -16.8) * step(abs(abs(gXZ.y) - 14.0), 7.2);
-            float outdoorMask = 1.0 - inWh;
-            float pField = milFbm2(gXZ * 0.072);
-            float pEdgeBreak = (milNoise2(gXZ * 1.45) - 0.5) * 0.065;
-            float milDamp = smoothstep(0.49, 0.62, pField + pEdgeBreak) * outdoorMask;
-            float milWet = smoothstep(0.58, 0.68, pField + pEdgeBreak * 0.55) * outdoorMask;
-            // Physical wetness darkening: damp halo (-30%), standing puddle (-52%)
-            diffuseColor.rgb *= mix(1.0, 0.70, milDamp);
+            float pVal = pField + microBreak * 0.020;
+            float outdoorOk = step(0.02, pField);
+            float milDamp = smoothstep(0.55, 0.66, pVal) * outdoorOk;
+            float milWet = smoothstep(0.63, 0.72, pVal) * outdoorOk;
+            diffuseColor.rgb *= mix(1.0, 0.72, milDamp);
             diffuseColor.rgb *= mix(1.0, 0.68, milWet);`,
           )
           .replace(
@@ -1733,20 +1753,18 @@ export function createMilitaryMapLoader({ renderer, THREE }) {
             vec3 detN = texture2D( detailNormalMap, vUv * 12.0 ).xyz * 2.0 - 1.0;
             float dryWeight = (1.0 - milDamp * 0.55) * (1.0 - milWet * 0.96);
             mapN.xy = (mapN.xy + detN.xy * 0.80) * dryWeight;
-            // Subtle wind ripples on standing puddle surfaces
             float ripX = sin(vMilWorldPos.x * 5.2 + uWindTime * 1.8) * cos(vMilWorldPos.z * 4.8 - uWindTime * 1.3);
             float ripY = cos(vMilWorldPos.x * 4.5 - uWindTime * 1.5) * sin(vMilWorldPos.z * 5.6 + uWindTime * 1.6);
-            mapN.xy += vec2(ripX, ripY) * 0.010 * milWet;
+            mapN.xy += vec2(ripX, ripY) * 0.010 * milWet * uWindScale;
             mapN = normalize(mapN);`,
           )
           .replace(
             "#include <lights_fragment_end>",
             `#include <lights_fragment_end>
-            // Boost sky IBL reflection cleanly inside standing puddles while keeping damp/dry ground matte
             reflectedLight.indirectSpecular *= mix(1.0, 2.25, milWet);`,
           );
       },
-      "mil_ground_pbr_puddle_hfog",
+      "mil_hfog_ground",
     );
 
     const groundMesh = new THREE.Mesh(new THREE.PlaneGeometry(240, 260), groundMat);
@@ -1755,15 +1773,29 @@ export function createMilitaryMapLoader({ renderer, THREE }) {
     groundMesh.name = "military_ground";
     group.add(groundMesh);
 
-    const { grassInst, debInst } = buildPerimeterGrassAndDebris(THREE, layout, fogUniforms, windUniform);
+    const { grassInst, maxGrassCount, debInst, maxDebrisCount } = buildPerimeterGrassAndDebris(
+      THREE,
+      layout,
+      fogUniforms,
+      windUniform,
+      windScaleUniform,
+    );
     group.add(grassInst, debInst);
     group.add(buildContactShadows(THREE, layout));
-    group.add(buildTacticalClutter(THREE, layout, skyEnvCache.envMap, fogUniforms, windUniform));
-    const bgHorizon = buildBackgroundTreesAndMountains(THREE, layout, skyEnvCache.envMap, fogUniforms, windUniform);
-    group.add(bgHorizon);
+    group.add(buildTacticalClutter(THREE, layout, skyEnvCache.envMap, fogUniforms, windUniform, windScaleUniform));
+    const { bgGroup, treeControls } = buildBackgroundTreesAndMountains(
+      THREE,
+      layout,
+      skyEnvCache.envMap,
+      fogUniforms,
+      windUniform,
+      windScaleUniform,
+    );
+    group.add(bgGroup);
 
-    // Hydrate prototype materials with restrained IBL (so sun:ambient ~3.5:1) + height fog + camo wind
+    // Hydrate prototype materials sharing ONE compiled shader key ("mil_hfog_std") -> ~7x fewer WebGL programs!
     const hydratedMats = new Map();
+    const managedTextures = new Set([concreteTexCache.albedo, concreteTexCache.normal, concreteTexCache.roughness]);
     const getMat = (srcMat) => {
       if (hydratedMats.has(srcMat)) return hydratedMats.get(srcMat);
       const m = srcMat.clone();
@@ -1777,9 +1809,9 @@ export function createMilitaryMapLoader({ renderer, THREE }) {
       } else {
         m.envMapIntensity = 0.50;
       }
-      if (m.map) m.map.anisotropy = maxAniso;
-      if (m.normalMap) m.normalMap.anisotropy = maxAniso;
-      if (m.roughnessMap) m.roughnessMap.anisotropy = maxAniso;
+      if (m.map) { m.map.anisotropy = startAniso; managedTextures.add(m.map); }
+      if (m.normalMap) { m.normalMap.anisotropy = startAniso; managedTextures.add(m.normalMap); }
+      if (m.roughnessMap) { m.roughnessMap.anisotropy = startAniso; managedTextures.add(m.roughnessMap); }
       if (m.name === "Watchtower_CamoNet") {
         m.transparent = false;
         m.alphaTest = 0.45;
@@ -1789,17 +1821,18 @@ export function createMilitaryMapLoader({ renderer, THREE }) {
           fogUniforms,
           (shader) => {
             shader.uniforms.uWindTime = windUniform;
+            shader.uniforms.uWindScale = windScaleUniform;
             shader.vertexShader = shader.vertexShader
-              .replace("#include <common>", "#include <common>\nuniform float uWindTime;")
+              .replace("#include <common>", "#include <common>\nuniform float uWindTime;\nuniform float uWindScale;")
               .replace(
                 "#include <begin_vertex>",
-                "#include <begin_vertex>\ntransformed.x += sin(uWindTime * 2.6 + transformed.y * 5.0 + transformed.z * 3.0) * 0.018;",
+                "#include <begin_vertex>\ntransformed.x += sin(uWindTime * 2.6 + transformed.y * 5.0 + transformed.z * 3.0) * 0.018 * uWindScale;",
               );
           },
-          "mil_camo_wind_hfog",
+          "mil_hfog_camo",
         );
       } else {
-        applyMilitaryHeightFog(m, fogUniforms, null, `mil_prop_hfog_${m.name || "std"}`);
+        applyMilitaryHeightFog(m, fogUniforms, null, "mil_hfog_std");
       }
       m.needsUpdate = true;
       hydratedMats.set(srcMat, m);
@@ -1899,18 +1932,19 @@ export function createMilitaryMapLoader({ renderer, THREE }) {
       }
     }
 
-    // Crisp golden-afternoon directional sun (~3:1 - 3.5:1 sunlit-to-shadow ratio, shadow detail readable!)
+    // Golden-afternoon directional sun (~3.5:1 - 4:1 sunlit-to-shadow ratio)
     const hemi = new THREE.HemisphereLight(0xa2c0de, 0x564b3d, 0.52);
     const sun = new THREE.DirectionalLight(0xffe9c2, 2.65);
     sun.position.set(SUN_POS.x, SUN_POS.y, SUN_POS.z);
-    sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
-    const SHADOW_EXTENT = 28; // 56m x 56m around player (~2.7cm/texel sharp shadows)
+    sun.castShadow = Boolean(initialPreset.shadowsEnabled);
+    const initShadowSize = initialPreset.shadowMapSize || 2048;
+    const initShadowExtent = initialPreset.shadowExtent || 28;
+    sun.shadow.mapSize.set(initShadowSize, initShadowSize);
     Object.assign(sun.shadow.camera, {
-      left: -SHADOW_EXTENT,
-      right: SHADOW_EXTENT,
-      top: SHADOW_EXTENT,
-      bottom: -SHADOW_EXTENT,
+      left: -initShadowExtent,
+      right: initShadowExtent,
+      top: initShadowExtent,
+      bottom: -initShadowExtent,
       near: 4,
       far: 150,
     });
@@ -1920,18 +1954,117 @@ export function createMilitaryMapLoader({ renderer, THREE }) {
     sun.layers.enableAll();
     group.add(hemi, sun, sun.target);
 
-    const texelWorld = (SHADOW_EXTENT * 2) / 2048;
-    const updateAtmosphere = (tSec, camPos) => {
-      windUniform.value = tSec;
-      skyEnvCache.cloudMesh.rotation.y = tSec * 0.0045;
-      updateDust(tSec);
-      if (camPos) {
-        const snapX = Math.round(camPos.x / texelWorld) * texelWorld;
-        const snapZ = Math.round(camPos.z / texelWorld) * texelWorld;
-        sun.target.position.set(snapX, 0, snapZ);
-        sun.target.updateMatrixWorld();
-        sun.position.set(snapX + SUN_POS.x, SUN_POS.y, snapZ + SUN_POS.z);
+    let currentShadowExtent = initShadowExtent;
+    let currentShadowSize = initShadowSize;
+    let lastSnapX = Number.NaN;
+    let lastSnapZ = Number.NaN;
+    let curFogDensity = initialPreset.fogDensity || 0.0034;
+
+    const countWithinDist = (dists, maxDist, minKeep = 4) => {
+      let c = 0;
+      for (let i = 0; i < dists.length; i++) {
+        if (dists[i] <= maxDist) c++;
+        else break;
       }
+      return Math.max(Math.min(minKeep, dists.length), c);
+    };
+
+    const applyQualityPreset = (preset = QUALITY_PRESETS.high) => {
+      // 1. Shadows (enable/disable, mapSize & frustum without leaks)
+      sun.castShadow = Boolean(preset.shadowsEnabled);
+      if (preset.shadowsEnabled) {
+        const nextSize = preset.shadowMapSize || 1024;
+        const nextExt = preset.shadowExtent || 24;
+        if (nextExt !== currentShadowExtent) {
+          currentShadowExtent = nextExt;
+          Object.assign(sun.shadow.camera, {
+            left: -nextExt, right: nextExt, top: nextExt, bottom: -nextExt,
+          });
+          sun.shadow.camera.updateProjectionMatrix();
+        }
+        if (nextSize !== currentShadowSize) {
+          currentShadowSize = nextSize;
+          sun.shadow.mapSize.set(nextSize, nextSize);
+          if (sun.shadow.map) {
+            sun.shadow.map.dispose();
+            sun.shadow.map = null;
+          }
+        }
+      }
+      lastSnapX = Number.NaN;
+      lastSnapZ = Number.NaN;
+
+      // 2. Post-processing & atmospheric extras
+      fogUniforms.uMilPostGrade.value = preset.postGradeEnabled ? 1.0 : 0.0;
+      shaftGroup.visible = Boolean(preset.godRaysEnabled);
+      sunFlare.visible = Boolean(preset.sunFlareEnabled);
+      skyEnvCache.cloudMesh.visible = Boolean(preset.cloudsEnabled);
+      dustPoints.visible = Boolean(preset.dustEnabled);
+      windScaleUniform.value = preset.windEnabled ? (preset.id === "medium" ? 0.6 : 1.0) : 0.0;
+
+      // 3. Grass & rubble density (zero-allocation InstancedMesh.count)
+      grassInst.count = Math.max(1, Math.round(maxGrassCount * (preset.grassDensity ?? 1.0)));
+      debInst.count = Math.max(1, Math.round(maxDebrisCount * (preset.rubbleDensity ?? 1.0)));
+
+      // 4. Tree draw distance (nearest-sorted InstancedMesh.count + outer dead/bush visibility)
+      const maxTreeDist = preset.treeDrawDistance ?? 200;
+      if (treeControls.blTrunkInst && treeControls.blCrownInst) {
+        const blCnt = countWithinDist(treeControls.blDists, maxTreeDist, 6);
+        treeControls.blTrunkInst.count = blCnt;
+        treeControls.blCrownInst.count = blCnt;
+      }
+      if (treeControls.pineTrunkInst && treeControls.pineCrownInst) {
+        const pineCnt = countWithinDist(treeControls.pineDists, maxTreeDist, 4);
+        treeControls.pineTrunkInst.count = pineCnt;
+        treeControls.pineCrownInst.count = pineCnt;
+      }
+      if (treeControls.deadInst) treeControls.deadInst.visible = Boolean(preset.showDeadTrees);
+      if (treeControls.bushInst) treeControls.bushInst.visible = Boolean(preset.showBushes);
+      if (treeControls.farRidge) treeControls.farRidge.visible = preset.id !== "low";
+
+      // 5. Fog distance & height-fog falloff
+      curFogDensity = preset.fogDensity ?? 0.0034;
+      fogUniforms.uMilFogParams.value.set(
+        preset.fogNearStart ?? 14.0,
+        preset.fogNearEnd ?? 34.0,
+        preset.fogDistBase ?? 0.0022,
+        preset.fogHeightAmp ?? 0.0030,
+      );
+
+      // 6. Texture anisotropy cap
+      const nextAniso = Math.min(hwMaxAniso, preset.maxAnisotropy || 4);
+      for (const tex of managedTextures) {
+        if (tex.anisotropy !== nextAniso) {
+          tex.anisotropy = nextAniso;
+          tex.needsUpdate = true;
+        }
+      }
+    };
+
+    applyQualityPreset(initialPreset);
+
+    const updateAtmosphere = (tSec, camPos, preset = QUALITY_PRESETS.high) => {
+      if (preset.windEnabled) windUniform.value = tSec;
+      if (preset.cloudsEnabled) skyEnvCache.cloudMesh.rotation.y = tSec * 0.0045;
+      if (preset.dustEnabled) updateDust(tSec);
+
+      let shadowMoved = false;
+      if (preset.shadowsEnabled && camPos) {
+        // Snap shadow camera in 0.40m chunks (clean texel-aligned steps) so shadows only re-render on real player movement!
+        const texelWorld = (currentShadowExtent * 2) / currentShadowSize;
+        const stepWorld = Math.max(texelWorld * 12, 0.36);
+        const snapX = Math.round(camPos.x / stepWorld) * stepWorld;
+        const snapZ = Math.round(camPos.z / stepWorld) * stepWorld;
+        if (snapX !== lastSnapX || snapZ !== lastSnapZ) {
+          lastSnapX = snapX;
+          lastSnapZ = snapZ;
+          sun.target.position.set(snapX, 0, snapZ);
+          sun.target.updateMatrixWorld();
+          sun.position.set(snapX + SUN_POS.x, SUN_POS.y, snapZ + SUN_POS.z);
+          shadowMoved = true;
+        }
+      }
+      return shadowMoved;
     };
 
     const collision = createMapCollision({
@@ -1947,7 +2080,7 @@ export function createMilitaryMapLoader({ renderer, THREE }) {
     groundMesh.updateMatrix();
     scene.add(group);
     scene.background = new THREE.Color(FOG_HORIZON_HEX);
-    scene.fog = new THREE.FogExp2(FOG_HORIZON_HEX, 0.0034);
+    scene.fog = new THREE.FogExp2(FOG_HORIZON_HEX, curFogDensity);
 
     for (const target of envMapTargetList) {
       if (target) {
@@ -1970,9 +2103,27 @@ export function createMilitaryMapLoader({ renderer, THREE }) {
       collision,
       envMap: skyEnvCache.envMap,
       fogColor: FOG_HORIZON_HEX,
-      fogDensity: 0.0034,
+      get fogDensity() { return curFogDensity; },
+      applyQualityPreset,
       updateAtmosphere,
       samplePuddle: sampleMilitaryPuddle,
+      getQualityStats: () => ({
+        grassCount: grassInst.count,
+        maxGrassCount,
+        rubbleCount: debInst.count,
+        broadleafCount: treeControls.blCrownInst ? treeControls.blCrownInst.count : 0,
+        pineCount: treeControls.pineCrownInst ? treeControls.pineCrownInst.count : 0,
+        deadTreesVisible: treeControls.deadInst ? treeControls.deadInst.visible : false,
+        bushesVisible: treeControls.bushInst ? treeControls.bushInst.visible : false,
+        cloudsVisible: skyEnvCache.cloudMesh.visible,
+        godRaysVisible: shaftGroup.visible,
+        dustVisible: dustPoints.visible,
+        sunFlareVisible: sunFlare.visible,
+        sunCastShadow: sun.castShadow,
+        shadowMapSize: currentShadowSize,
+        fogDensity: curFogDensity,
+        postGradeValue: fogUniforms.uMilPostGrade.value,
+      }),
       isRainy: false,
     };
   }

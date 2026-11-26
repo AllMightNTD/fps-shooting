@@ -9,6 +9,12 @@
 import { MSG, sanitizeText } from "/js/protocol.js";
 import { createMilitaryMapLoader } from "/js/map_loader.js";
 import {
+  computeEffectivePixelRatio,
+  detectHardwareTier,
+  probeHardwareInfo,
+  resolveQualityPreset,
+} from "/js/graphics_quality.js";
+import {
   buildSocketPose,
   createSkinnedArmsController,
   viewmodelPointToWorld,
@@ -64,12 +70,25 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
   let seed = 11;
   const sr = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
 
-  // ---------- Renderer, scene, camera ----------
-  const R = new THREE.WebGLRenderer({ antialias: true });
-  R.setPixelRatio(Math.min(devicePixelRatio, 2));
+  // ---------- Renderer, scene, camera & Graphics Quality ----------
+  const R = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+  const hwInfo = probeHardwareInfo(R.getContext());
+  const detectedQualityTier = detectHardwareTier(hwInfo);
+  let activeQuality = resolveQualityPreset(
+    settings && settings.get ? settings.get().graphicsQuality : "auto",
+    detectedQualityTier,
+  );
+  const resolveShadowTypeEnum = (typeStr) =>
+    typeStr === "pcfsoft"
+      ? THREE.PCFSoftShadowMap
+      : typeStr === "pcf"
+        ? THREE.PCFShadowMap
+        : THREE.BasicShadowMap;
+
+  R.setPixelRatio(computeEffectivePixelRatio(activeQuality.preset, devicePixelRatio));
   R.setSize(innerWidth, innerHeight);
-  R.shadowMap.enabled = true;
-  R.shadowMap.type = THREE.PCFSoftShadowMap;
+  R.shadowMap.enabled = Boolean(activeQuality.preset.shadowsEnabled);
+  R.shadowMap.type = resolveShadowTypeEnum(activeQuality.preset.shadowType);
   R.toneMapping = THREE.ACESFilmicToneMapping;
   R.toneMappingExposure = 1.08;
   document.body.prepend(R.domElement);
@@ -78,7 +97,7 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
   S.background = new THREE.Color(0x050a11);
   S.fog = new THREE.FogExp2(0x050a11, 0.025);
 
-  const cam = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.03, 380);
+  const cam = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.03, activeQuality.preset.cameraFar);
   cam.rotation.order = "YXZ";
   S.add(cam);
 
@@ -91,6 +110,7 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
   S.add(vmCam);
 
   addEventListener("resize", () => {
+    R.setPixelRatio(computeEffectivePixelRatio(activeQuality.preset, devicePixelRatio));
     R.setSize(innerWidth, innerHeight);
     cam.aspect = innerWidth / innerHeight;
     cam.updateProjectionMatrix();
@@ -1742,20 +1762,19 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
   let activeEnvMap = envMap;
 
   let gt = 0, activeState = "menu", meAlive = true, hp = 100;
+  let shadowDirty = true;
+  let shadowFrameTick = 0;
   let lastCanvasFilter = "";
   function updateCanvasPostGrade(nowSec = 0) {
     const inPlayLowHp = activeState === "play" && meAlive && hp < 35;
     const lowHpFactor = inPlayLowHp ? Math.max(0, Math.min(1, (35 - hp) / 25)) : 0;
 
+    // Never apply CSS filter on <canvas> during normal play (avoids browser compositor full-frame blit & stutter!).
+    // Color grading on High runs directly inside WebGL shaders (uMilPostGrade).
     let nextFilter = "";
-    if (activeMapId === "military") {
-      const sat = (1.09 - 0.54 * lowHpFactor).toFixed(2);
-      const contrast = (1.10 + 0.04 * lowHpFactor).toFixed(2);
-      nextFilter = lowHpFactor > 0.05
-        ? `contrast(${contrast}) saturate(${sat}) blur(${(lowHpFactor * 1.15).toFixed(2)}px)`
-        : "contrast(1.10) saturate(1.09)";
-    } else if (lowHpFactor > 0.05) {
-      nextFilter = `saturate(${(1.0 - 0.50 * lowHpFactor).toFixed(2)}) blur(${(lowHpFactor * 1.1).toFixed(2)}px)`;
+    if (lowHpFactor > 0.05 && activeQuality.preset.lowHpBlurEnabled) {
+      const sat = (1.0 - 0.48 * lowHpFactor).toFixed(2);
+      nextFilter = `saturate(${sat}) blur(${(lowHpFactor * 1.1).toFixed(2)}px)`;
     }
 
     if (nextFilter !== lastCanvasFilter) {
@@ -1772,6 +1791,74 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
         lowOv.style.opacity = "0";
       }
     }
+  }
+
+  function applyGraphicsQuality(choiceOverride = null) {
+    const reqChoice = choiceOverride !== null
+      ? choiceOverride
+      : (settings && settings.get ? settings.get().graphicsQuality : "auto");
+    activeQuality = resolveQualityPreset(reqChoice, detectedQualityTier);
+    const p = activeQuality.preset;
+
+    // 1. Resolution scale (pixelRatio)
+    const effPr = computeEffectivePixelRatio(p, devicePixelRatio);
+    if (Math.abs(R.getPixelRatio() - effPr) > 0.001) {
+      R.setPixelRatio(effPr);
+      R.setSize(innerWidth, innerHeight);
+    }
+
+    // 2. Camera far plane
+    const targetFar = activeMapId === "military" ? p.cameraFar : Math.max(200, p.cameraFar);
+    if (cam.far !== targetFar) {
+      cam.far = targetFar;
+      cam.updateProjectionMatrix();
+    }
+
+    // 3. Shadow map enabled / type / mapSize (recompile materials ONCE only if shadow mode actually changed)
+    const prevShEnabled = R.shadowMap.enabled;
+    const prevShType = R.shadowMap.type;
+    const nextShType = resolveShadowTypeEnum(p.shadowType);
+    R.shadowMap.enabled = Boolean(p.shadowsEnabled);
+    R.shadowMap.type = nextShType;
+
+    moon.castShadow = Boolean(p.shadowsEnabled);
+    if (p.shadowsEnabled && moon.shadow.mapSize.x !== p.shadowMapSize) {
+      moon.shadow.mapSize.set(p.shadowMapSize, p.shadowMapSize);
+      if (moon.shadow.map) { moon.shadow.map.dispose(); moon.shadow.map = null; }
+    }
+
+    if (militaryData && militaryData.applyQualityPreset) {
+      militaryData.applyQualityPreset(p);
+      if (activeMapId === "military" && S.fog) {
+        S.fog.density = militaryData.fogDensity;
+      }
+    }
+
+    if (prevShEnabled !== R.shadowMap.enabled || prevShType !== R.shadowMap.type) {
+      S.traverse((o) => {
+        if (o.isMesh && o.material) {
+          const mats = Array.isArray(o.material) ? o.material : [o.material];
+          for (const m of mats) {
+            if (m && !m.isMeshBasicMaterial) m.needsUpdate = true;
+          }
+        }
+      });
+    }
+
+    // 4. Vignette & post-grade sync
+    const vig = $("vignette");
+    if (vig) vig.style.opacity = activeMapId === "military" && p.vignetteEnabled ? "1" : "0";
+    updateCanvasPostGrade(gt);
+    shadowDirty = true;
+    return activeQuality;
+  }
+
+  if (settings && typeof settings.onChange === "function") {
+    settings.onChange((st) => {
+      if (st && st.graphicsQuality !== activeQuality.choice) {
+        applyGraphicsQuality(st.graphicsQuality);
+      }
+    });
   }
 
   function applySceneEnvMap(targetEnv, isMilitary = false) {
@@ -1825,11 +1912,14 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     R.toneMappingExposure = 1.08;
     const vig = $("vignette");
     if (vig) vig.style.opacity = "0";
+    cam.far = Math.max(200, activeQuality.preset.cameraFar);
+    cam.updateProjectionMatrix();
     S.background = new THREE.Color(0x050a11);
     S.fog = new THREE.FogExp2(0x050a11, 0.025);
     applySceneEnvMap(envMap, false);
     updateCanvasPostGrade(gt);
     syncAmbientAudio();
+    shadowDirty = true;
   }
 
   function ensureMapActive(mapId = "military") {
@@ -1846,13 +1936,17 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       activeCollision = militaryData.collision;
       R.outputEncoding = THREE.sRGBEncoding || THREE.LinearEncoding;
       R.toneMappingExposure = 0.86;
+      militaryData.applyQualityPreset(activeQuality.preset);
       const vig = $("vignette");
-      if (vig) vig.style.opacity = "1";
+      if (vig) vig.style.opacity = activeQuality.preset.vignetteEnabled ? "1" : "0";
+      cam.far = activeQuality.preset.cameraFar;
+      cam.updateProjectionMatrix();
       S.background = new THREE.Color(militaryData.fogColor);
       S.fog = new THREE.FogExp2(militaryData.fogColor, militaryData.fogDensity);
       applySceneEnvMap(militaryData.envMap, true);
       updateCanvasPostGrade(gt);
       syncAmbientAudio();
+      shadowDirty = true;
       window.__militaryMapLoaded = true;
       return Promise.resolve(militaryData);
     }
@@ -1861,6 +1955,7 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
         .buildMilitaryScene({
           scene: S,
           envMapTargetList: [gun, armsRoot, m416WorldProto, pistolWorldProto, awmWorldProto, soldierProto],
+          initialPreset: activeQuality.preset,
         })
         .then((res) => {
           militaryData = res;
@@ -1871,14 +1966,18 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
             res.group.visible = true;
             activeCollision = res.collision;
             R.outputEncoding = THREE.sRGBEncoding || THREE.LinearEncoding;
-            R.toneMappingExposure = 0.78;
+            R.toneMappingExposure = 0.86;
+            res.applyQualityPreset(activeQuality.preset);
             const vig = $("vignette");
-            if (vig) vig.style.opacity = "1";
+            if (vig) vig.style.opacity = activeQuality.preset.vignetteEnabled ? "1" : "0";
+            cam.far = activeQuality.preset.cameraFar;
+            cam.updateProjectionMatrix();
             S.background = new THREE.Color(res.fogColor);
             S.fog = new THREE.FogExp2(res.fogColor, res.fogDensity);
             applySceneEnvMap(res.envMap, true);
             updateCanvasPostGrade(gt);
             syncAmbientAudio();
+            shadowDirty = true;
           } else {
             res.group.visible = false;
           }
@@ -2169,24 +2268,37 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     }
   }
 
+  const _hudCache = Object.create(null);
   function hud() {
     const nowMs = performance.now();
     const { cfg, st } = activeWeapon();
     const isReloading = st.reloadEndsAt > nowMs;
 
-    $("hpb").style.width = Math.max(0, hp) + "%";
-    $("hpb").style.background = meInvuln ? "#64c8ff" : hp > 35 ? "#4ec3b0" : "#e85445";
-    const hpLbl = $("hpLabel");
-    if (hpLbl) hpLbl.textContent = `MÁU ${Math.max(0, Math.round(hp))} / 100`;
+    const hpW = Math.max(0, hp) + "%";
+    const hpBg = meInvuln ? "#64c8ff" : hp > 35 ? "#4ec3b0" : "#e85445";
+    const hpText = `MÁU ${Math.max(0, Math.round(hp))} / 100`;
+    if (_hudCache.hpW !== hpW) { _hudCache.hpW = hpW; $("hpb").style.width = hpW; }
+    if (_hudCache.hpBg !== hpBg) { _hudCache.hpBg = hpBg; $("hpb").style.background = hpBg; }
+    if (_hudCache.hpText !== hpText) {
+      _hudCache.hpText = hpText;
+      const hpLbl = $("hpLabel");
+      if (hpLbl) hpLbl.textContent = hpText;
+    }
 
     const isLow = st.mag <= Math.ceil(cfg.magSize * 0.3);
-    $("am").textContent = isReloading ? "Nạp đạn…" : `${st.mag} / ∞`;
-    $("am").classList.toggle("amLow", isLow && !isReloading);
-    $("reloadHint").style.display = isLow && !isReloading && activeState === "play" && meAlive ? "block" : "none";
+    const amText = isReloading ? "Nạp đạn…" : `${st.mag} / ∞`;
+    const amLow = isLow && !isReloading;
+    const relHint = amLow && activeState === "play" && meAlive ? "block" : "none";
+    if (_hudCache.amText !== amText) { _hudCache.amText = amText; $("am").textContent = amText; }
+    if (_hudCache.amLow !== amLow) { _hudCache.amLow = amLow; $("am").classList.toggle("amLow", amLow); }
+    if (_hudCache.relHint !== relHint) { _hudCache.relHint = relHint; $("reloadHint").style.display = relHint; }
 
-    for (const s of WEAPON_SLOTS) {
-      const pNode = $(`slotPill${s}`);
-      if (pNode) pNode.classList.toggle("active", s === activeSlot);
+    if (_hudCache.activeSlot !== activeSlot) {
+      _hudCache.activeSlot = activeSlot;
+      for (const s of WEAPON_SLOTS) {
+        const pNode = $(`slotPill${s}`);
+        if (pNode) pNode.classList.toggle("active", s === activeSlot);
+      }
     }
 
     const postureLabel = isSprinting
@@ -2198,31 +2310,43 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
           : ads > 0.3
             ? "Đang ngắm"
             : "Đứng";
-    $("postureBadge").textContent = `${cfg.name} • ${postureLabel}`;
+    const postureText = `${cfg.name} • ${postureLabel}`;
+    if (_hudCache.postureText !== postureText) {
+      _hudCache.postureText = postureText;
+      $("postureBadge").textContent = postureText;
+    }
 
-    $("top").style.display = engineMode === "solo" ? "block" : "none";
-    $("pvpTop").style.display = engineMode === "lan" ? "flex" : "none";
-    $("radarCanvas").style.display = engineMode === "lan" ? "block" : "none";
-    $("wv").textContent = soloWave;
-    $("sc").textContent = soloScore;
+    if (_hudCache.engineMode !== engineMode) {
+      _hudCache.engineMode = engineMode;
+      $("top").style.display = engineMode === "solo" ? "block" : "none";
+      $("pvpTop").style.display = engineMode === "lan" ? "flex" : "none";
+      $("radarCanvas").style.display = engineMode === "lan" ? "block" : "none";
+    }
+    if (_hudCache.soloWave !== soloWave) { _hudCache.soloWave = soloWave; $("wv").textContent = soloWave; }
+    if (_hudCache.soloScore !== soloScore) { _hudCache.soloScore = soloScore; $("sc").textContent = soloScore; }
     if (engineMode === "lan") {
-      if (!meAlive && activeState === "play") {
-        $("respawnBanner").style.display = "block";
-        $("respawnBanner").textContent = `Đã bị hạ — Hồi sinh sau ${(respawnMs / 1000).toFixed(1)}s`;
-      } else {
-        $("respawnBanner").style.display = "none";
+      const showRespawn = !meAlive && activeState === "play";
+      const respDisp = showRespawn ? "block" : "none";
+      if (_hudCache.respDisp !== respDisp) { _hudCache.respDisp = respDisp; $("respawnBanner").style.display = respDisp; }
+      if (showRespawn) {
+        const respText = `Đã bị hạ — Hồi sinh sau ${(respawnMs / 1000).toFixed(1)}s`;
+        if (_hudCache.respText !== respText) { _hudCache.respText = respText; $("respawnBanner").textContent = respText; }
       }
       if (currentMode === "TDM") {
-        $("scA").textContent = teamScores.A;
-        $("scB").textContent = teamScores.B;
-        $("pvpMeta").textContent = `${formatClock(timeLeftSec)} | ${killLimit} Mạng`;
+        const metaText = `${formatClock(timeLeftSec)} | ${killLimit} Mạng`;
+        if (_hudCache.scA !== teamScores.A) { _hudCache.scA = teamScores.A; $("scA").textContent = teamScores.A; }
+        if (_hudCache.scB !== teamScores.B) { _hudCache.scB = teamScores.B; $("scB").textContent = teamScores.B; }
+        if (_hudCache.pvpMeta !== metaText) { _hudCache.pvpMeta = metaText; $("pvpMeta").textContent = metaText; }
       } else {
         const topP = lastPlayers.slice().sort((a, b) => b.kills - a.kills)[0];
-        $("scA").textContent = topP ? topP.kills : 0;
-        $("scB").textContent = killLimit;
-        $("pvpMeta").textContent = `FFA ${formatClock(timeLeftSec)} | Dẫn đầu: ${topP ? topP.name : "-"}`;
+        const aVal = topP ? topP.kills : 0;
+        const metaText = `FFA ${formatClock(timeLeftSec)} | Dẫn đầu: ${topP ? topP.name : "-"}`;
+        if (_hudCache.scA !== aVal) { _hudCache.scA = aVal; $("scA").textContent = aVal; }
+        if (_hudCache.scB !== killLimit) { _hudCache.scB = killLimit; $("scB").textContent = killLimit; }
+        if (_hudCache.pvpMeta !== metaText) { _hudCache.pvpMeta = metaText; $("pvpMeta").textContent = metaText; }
       }
-    } else {
+    } else if (_hudCache.respDisp !== "none") {
+      _hudCache.respDisp = "none";
       $("respawnBanner").style.display = "none";
     }
   }
@@ -2810,7 +2934,11 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
     gt += dt;
     sparks.upd(dt);
     if (activeMapId !== "harbor") {
-      if (militaryData && militaryData.updateAtmosphere) militaryData.updateAtmosphere(gt, cam.position);
+      if (militaryData && militaryData.updateAtmosphere) {
+        if (militaryData.updateAtmosphere(gt, cam.position, activeQuality.preset)) {
+          shadowDirty = true;
+        }
+      }
       if (AC && ambFilter && ambGain) {
         const gust = 0.5 + 0.5 * Math.sin(gt * 0.27) * Math.cos(gt * 0.13);
         ambFilter.frequency.setTargetAtTime(210 + gust * 250, AC.currentTime, 0.2);
@@ -3187,10 +3315,14 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
       drones.slice().forEach((d) => updDrone(d, dt));
     }
 
-    hm = Math.max(0, hm - dt * 5);
-    $("hm").style.opacity = hm;
-    dmgV = Math.max(0, dmgV - dt * 1.6);
-    $("dmg").style.opacity = dmgV;
+    if (hm > 0) {
+      hm = Math.max(0, hm - dt * 5);
+      $("hm").style.opacity = hm;
+    }
+    if (dmgV > 0) {
+      dmgV = Math.max(0, dmgV - dt * 1.6);
+      $("dmg").style.opacity = dmgV;
+    }
     if (killAlertT > 0) { killAlertT -= dt; if (killAlertT <= 0) $("killAlert").style.opacity = "0"; }
 
     updateCanvasPostGrade(gt);
@@ -3212,7 +3344,15 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
   R.autoClear = false;
   R.shadowMap.autoUpdate = false;
   function renderFrame() {
-    R.shadowMap.needsUpdate = true;
+    if (activeQuality.preset.shadowsEnabled) {
+      shadowFrameTick++;
+      const hasDynamicCasters = drones.length > 0 || remotePlayers.size > 0;
+      if (shadowDirty || (hasDynamicCasters && shadowFrameTick >= activeQuality.preset.shadowUpdateInterval)) {
+        R.shadowMap.needsUpdate = true;
+        shadowDirty = false;
+        shadowFrameTick = 0;
+      }
+    }
     cam.layers.set(0);
     R.clear();
     R.render(S, cam);
@@ -3394,6 +3534,26 @@ export function createGameEngine({ net, settings, input, onRequestExitToRoom, on
         vmCam.position.copy(cam.position);
         vmCam.quaternion.copy(cam.quaternion);
         vmCam.updateMatrixWorld(true);
+        if (activeMapId === "military" && militaryData && militaryData.updateAtmosphere) {
+          militaryData.updateAtmosphere(gt, cam.position, activeQuality.preset);
+        }
+        shadowDirty = true;
+      },
+      getGraphicsQuality: () => ({
+        choice: activeQuality.choice,
+        detectedTier: activeQuality.detectedTier,
+        effectiveTier: activeQuality.effectiveTier,
+        preset: activeQuality.preset,
+        hwInfo,
+        pixelRatio: R.getPixelRatio(),
+        cameraFar: cam.far,
+        shadowMapEnabled: R.shadowMap.enabled,
+        mapQualityStats: militaryData && militaryData.getQualityStats ? militaryData.getQualityStats() : null,
+      }),
+      setGraphicsQuality: (choice) => {
+        if (settings && typeof settings.update === "function") settings.update({ graphicsQuality: choice });
+        else applyGraphicsQuality(choice);
+        return activeQuality;
       },
       getViewmodelState: () => {
         let skinningEnabled = false;

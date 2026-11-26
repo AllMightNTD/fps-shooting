@@ -82,11 +82,96 @@ def main() -> int:
                 timeout=10000,
             )
 
-            # Verify raycast through warehouse window, truck cab, and draw call / triangle budget
+            # Verify automatic weak-hardware detection (SwiftShader -> low) & 3-tier hot-switching
             page.wait_for_function(
                 "() => window.__e2eLastRender && window.__e2eLastRender.world && window.__e2eLastRender.frameCount >= 5",
                 timeout=15000,
             )
+            quality_tiers: dict[str, Any] = {}
+            quality_tiers["auto_initial"] = page.evaluate(
+                """() => {
+                  const st = window.__fpsApp.game.getState();
+                  st.setTestCombat({ locked: true, aimHeld: false, crouched: false, hp: 100 });
+                  st.setPose(3.2, 0.0, -25.5, -3.06, -0.03);
+                  return st.getGraphicsQuality();
+                }"""
+            )
+            assert quality_tiers["auto_initial"]["choice"] == "auto"
+            assert quality_tiers["auto_initial"]["effectiveTier"] == "low", f"Expected SwiftShader auto->low: {quality_tiers['auto_initial']}"
+            assert quality_tiers["auto_initial"]["shadowMapEnabled"] is False
+            page.wait_for_timeout(160)
+            low_shot = os.path.join(out_dir, "00_quality_low.png")
+            page.screenshot(path=low_shot)
+
+            # Measure frame time on Low preset
+            low_perf = page.evaluate(
+                """() => new Promise(res => {
+                  const dts = []; let last = performance.now();
+                  const step = (now) => {
+                    dts.push(now - last); last = now;
+                    if (dts.length >= 10) {
+                      const s = dts.slice(2).sort((a,b) => a - b);
+                      const avg = s.reduce((a,b) => a + b, 0) / s.length;
+                      res({ avg_ms: +avg.toFixed(1), p50_ms: +s[Math.floor(s.length/2)].toFixed(1) });
+                    } else requestAnimationFrame(step);
+                  };
+                  requestAnimationFrame(step);
+                })"""
+            )
+            quality_tiers["low_perf"] = low_perf
+
+            # Hot-switch to Medium
+            quality_tiers["medium"] = page.evaluate(
+                """() => {
+                  const st = window.__fpsApp.game.getState();
+                  st.setGraphicsQuality("medium");
+                  return st.getGraphicsQuality();
+                }"""
+            )
+            assert quality_tiers["medium"]["effectiveTier"] == "medium"
+            assert quality_tiers["medium"]["shadowMapEnabled"] is True
+            assert quality_tiers["medium"]["mapQualityStats"]["shadowMapSize"] == 1024
+            page.wait_for_timeout(180)
+            med_shot = os.path.join(out_dir, "00b_quality_medium.png")
+            page.screenshot(path=med_shot)
+
+            # Hot-switch to High for full visual & budget verification
+            quality_tiers["high"] = page.evaluate(
+                """() => {
+                  const st = window.__fpsApp.game.getState();
+                  st.setGraphicsQuality("high");
+                  return st.getGraphicsQuality();
+                }"""
+            )
+            assert quality_tiers["high"]["effectiveTier"] == "high"
+            assert quality_tiers["high"]["shadowMapEnabled"] is True
+            assert quality_tiers["high"]["mapQualityStats"]["shadowMapSize"] == 2048
+            assert quality_tiers["high"]["mapQualityStats"]["grassCount"] > quality_tiers["medium"]["mapQualityStats"]["grassCount"]
+            assert quality_tiers["medium"]["mapQualityStats"]["grassCount"] > quality_tiers["auto_initial"]["mapQualityStats"]["grassCount"]
+            assert quality_tiers["high"]["mapQualityStats"]["broadleafCount"] >= quality_tiers["medium"]["mapQualityStats"]["broadleafCount"]
+            assert quality_tiers["medium"]["mapQualityStats"]["broadleafCount"] >= quality_tiers["auto_initial"]["mapQualityStats"]["broadleafCount"]
+            assert quality_tiers["auto_initial"]["mapQualityStats"]["fogDensity"] > quality_tiers["medium"]["mapQualityStats"]["fogDensity"] > quality_tiers["high"]["mapQualityStats"]["fogDensity"]
+            assert quality_tiers["auto_initial"]["pixelRatio"] < quality_tiers["high"]["pixelRatio"]
+            page.wait_for_timeout(180)
+
+            high_perf = page.evaluate(
+                """() => new Promise(res => {
+                  const dts = []; let last = performance.now();
+                  const step = (now) => {
+                    dts.push(now - last); last = now;
+                    if (dts.length >= 10) {
+                      const s = dts.slice(2).sort((a,b) => a - b);
+                      const avg = s.reduce((a,b) => a + b, 0) / s.length;
+                      res({ avg_ms: +avg.toFixed(1), p50_ms: +s[Math.floor(s.length/2)].toFixed(1) });
+                    } else requestAnimationFrame(step);
+                  };
+                  requestAnimationFrame(step);
+                })"""
+            )
+            quality_tiers["high_perf"] = high_perf
+            report["quality_tiers"] = quality_tiers
+
+            # Verify raycast through warehouse window, truck cab, draw call / triangle budget, & consolidated shader count
             telemetry = page.evaluate(
                 """() => {
                   const st = window.__fpsApp.game.getState();
@@ -97,6 +182,7 @@ def main() -> int:
                   const truckCab = ray(-8.5, 1.80, -11.5, 0.928, 0, -0.371, 6);
                   const truckHood = ray(-8.5, 1.05, -13.1, 0.928, 0, -0.371, 6);
                   const r = window.__e2eLastRender;
+                  const cnv = document.querySelector("canvas");
                   return {
                     mapId: mi.mapId,
                     bounds: mi.bounds,
@@ -106,6 +192,9 @@ def main() -> int:
                     truckHoodHitDist: truckHood ? Number(truckHood.dist.toFixed(2)) : null,
                     worldCalls: r.world ? r.world.calls : null,
                     worldTriangles: r.world ? r.world.triangles : null,
+                    programs: window.__e2eRenderer && window.__e2eRenderer.info && window.__e2eRenderer.info.programs
+                      ? window.__e2eRenderer.info.programs.length : null,
+                    normalPlayCanvasFilter: cnv ? cnv.style.filter : null,
                     vmCalls: r.vm ? r.vm.calls : null,
                     vmTriangles: r.vm ? r.vm.triangles : null,
                     contextLost: Boolean(window.__e2eContextLost),
@@ -120,6 +209,7 @@ def main() -> int:
             assert telemetry["truckHoodHitDist"] is not None and telemetry["truckHoodHitDist"] < 4.0
             assert telemetry["worldCalls"] is not None and telemetry["worldCalls"] <= 90, f"World draw calls > 90: {telemetry}"
             assert telemetry["worldTriangles"] is not None and telemetry["worldTriangles"] <= 120000, f"World tris > 120k: {telemetry}"
+            assert telemetry["normalPlayCanvasFilter"] == "", f"Normal gameplay should not apply slow CSS canvas filter: {telemetry}"
             assert telemetry["contextLost"] is False
 
             # Capture 6 key map & combat poses

@@ -1,7 +1,13 @@
 /**
  * Persistent player preferences stored in localStorage:
- * sensitivity, ADS sensitivity, invert Y, base FOV, hold/toggle modes, and key bindings (BIND).
+ * sensitivity, ADS sensitivity, invert Y, base FOV, hold/toggle modes, graphics quality, and key bindings (BIND).
  */
+
+import {
+  formatQualitySummary,
+  normalizeQualityChoice,
+  resolveQualityPreset,
+} from "/js/graphics_quality.js";
 
 export const DEFAULT_BIND = Object.freeze({
   forward: ["KeyW"],
@@ -31,6 +37,7 @@ const DEFAULT_SETTINGS = {
   fov: 75,
   crouchMode: "hold",
   adsMode: "hold",
+  graphicsQuality: "auto",
   bindings: {},
 };
 
@@ -79,6 +86,7 @@ export function createSettingsStore() {
       base.fov = Math.round(clampNum(parsed.fov, 65, 95, 75));
       base.crouchMode = parsed.crouchMode === "toggle" ? "toggle" : "hold";
       base.adsMode = parsed.adsMode === "toggle" ? "toggle" : "hold";
+      base.graphicsQuality = normalizeQualityChoice(parsed.graphicsQuality);
       if (parsed.bindings && typeof parsed.bindings === "object") {
         for (const action of Object.keys(DEFAULT_BIND)) {
           const list = parsed.bindings[action];
@@ -112,6 +120,7 @@ export function createSettingsStore() {
       if (patch.fov !== undefined) state.fov = Math.round(clampNum(patch.fov, 65, 95, state.fov));
       if (patch.crouchMode !== undefined) state.crouchMode = patch.crouchMode === "toggle" ? "toggle" : "hold";
       if (patch.adsMode !== undefined) state.adsMode = patch.adsMode === "toggle" ? "toggle" : "hold";
+      if (patch.graphicsQuality !== undefined) state.graphicsQuality = normalizeQualityChoice(patch.graphicsQuality);
       save();
     },
     rebind(action, newCode) {
@@ -156,9 +165,12 @@ export function mountSettingsUI(store, inputCtrl) {
   const invertYIn = document.getElementById("setInvertY");
   const crouchModeIn = document.getElementById("setCrouchMode");
   const adsModeIn = document.getElementById("setAdsMode");
+  const qualityIn = document.getElementById("setGraphicsQuality");
+  const qualityHint = document.getElementById("setGraphicsHint");
   const bindList = document.getElementById("setBindList");
 
   let listeningAction = null;
+  let detectedTier = "medium";
 
   function render() {
     const s = store.get();
@@ -171,6 +183,11 @@ export function mountSettingsUI(store, inputCtrl) {
     invertYIn.checked = s.invertY;
     crouchModeIn.value = s.crouchMode;
     adsModeIn.value = s.adsMode;
+    if (qualityIn) qualityIn.value = s.graphicsQuality;
+    if (qualityHint) {
+      const resolved = resolveQualityPreset(s.graphicsQuality, detectedTier);
+      qualityHint.textContent = formatQualitySummary(resolved);
+    }
 
     bindList.textContent = "";
     for (const [action, label] of ACTION_LABELS) {
@@ -203,6 +220,9 @@ export function mountSettingsUI(store, inputCtrl) {
   invertYIn.onchange = () => store.update({ invertY: invertYIn.checked });
   crouchModeIn.onchange = () => store.update({ crouchMode: crouchModeIn.value });
   adsModeIn.onchange = () => store.update({ adsMode: adsModeIn.value });
+  if (qualityIn) {
+    qualityIn.onchange = () => store.update({ graphicsQuality: qualityIn.value });
+  }
 
   document.getElementById("btnSetReset").onclick = () => {
     listeningAction = null;
@@ -227,6 +247,10 @@ export function mountSettingsUI(store, inputCtrl) {
       listeningAction = null;
       inputCtrl.cancelKeyCapture();
       modal.style.display = "none";
+    },
+    setDetectedTier(tier) {
+      detectedTier = tier || "medium";
+      render();
     },
   };
 }
