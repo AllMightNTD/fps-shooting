@@ -7,6 +7,7 @@
 
 import { MSG } from "/js/protocol.js";
 import { filterRoomsByMode, normalizeLobbyView } from "./lobby_utils.js";
+import { isPrivateOrLocalHost, resolveOnlineShareUrl } from "./net_utils.js";
 
 export { filterRoomsByMode, normalizeLobbyView };
 
@@ -134,7 +135,7 @@ export function createLobbyController({
           ? "Phòng Đấu Đơn (FFA)"
           : activeModeFilter === "TDM"
             ? "Phòng Đấu Đội (TDM)"
-            : "Tất cả phòng LAN";
+            : "Tất cả phòng đấu";
     }
     if (lanModeHintEl) {
       lanModeHintEl.textContent =
@@ -151,24 +152,38 @@ export function createLobbyController({
     renderRooms(currentRooms);
   }
 
+  function bindShareBanner(label, shareUrl) {
+    if (!shareUrl) return;
+    if (shareBanner) shareBanner.style.display = "flex";
+    if (shareText) shareText.textContent = `${label}: ${shareUrl}`;
+    if (copyBtn) {
+      copyBtn.onclick = () => {
+        if (navigator.clipboard) navigator.clipboard.writeText(shareUrl).catch(() => {});
+        copyBtn.textContent = "Đã copy!";
+        setTimeout(() => (copyBtn.textContent = "Copy link"), 1500);
+      };
+    }
+  }
+
   function fetchLanUrls() {
     if (!location.protocol.startsWith("http")) return;
+    if (!isPrivateOrLocalHost(location.hostname)) {
+      const publicUrl = resolveOnlineShareUrl(location);
+      bindShareBanner("Link mời bạn", publicUrl);
+      return;
+    }
     fetch("/api/lan-info")
       .then((r) => (r.ok ? r.json() : null))
       .then((info) => {
-        if (!info || !Array.isArray(info.urls) || !info.urls.length) return;
-        const primary = info.urls[0];
-        if (shareBanner) shareBanner.style.display = "flex";
-        if (shareText) shareText.textContent = `Link LAN: ${primary}`;
-        if (copyBtn) {
-          copyBtn.onclick = () => {
-            if (navigator.clipboard) navigator.clipboard.writeText(primary).catch(() => {});
-            copyBtn.textContent = "Đã copy!";
-            setTimeout(() => (copyBtn.textContent = "Copy link"), 1500);
-          };
+        if (!info || !Array.isArray(info.urls) || !info.urls.length) {
+          bindShareBanner("Link mời bạn", resolveOnlineShareUrl(location));
+          return;
         }
+        bindShareBanner("Link LAN", info.urls[0]);
       })
-      .catch(() => {});
+      .catch(() => {
+        bindShareBanner("Link mời bạn", resolveOnlineShareUrl(location));
+      });
   }
 
   function renderRooms(rooms) {
@@ -327,7 +342,7 @@ export function createLobbyController({
 
   document.getElementById("btnCreateSubmit").onclick = () => {
     if (!net.connected) {
-      onError("Chưa kết nối được tới máy chủ LAN.");
+      onError("Chưa kết nối được tới máy chủ.");
       return;
     }
     const mode = createModeEl ? createModeEl.value : "TDM";
@@ -354,7 +369,7 @@ export function createLobbyController({
 
   document.getElementById("btnQuickJoin").onclick = () => {
     if (!net.connected) {
-      onError("Chưa kết nối được tới máy chủ LAN.");
+      onError("Chưa kết nối được tới máy chủ.");
       return;
     }
     const payload = { playerName: getNickFn() };

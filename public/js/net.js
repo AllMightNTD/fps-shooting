@@ -1,11 +1,12 @@
 /**
- * Automatic LAN WebSocket client:
- * - Zero manual URL inputs: derives ws(s)://${location.host}/ws from loaded HTTP page.
- * - Auto-connects on load, pings every 5s, reconnects automatically on drop.
+ * Automatic Online / LAN WebSocket client:
+ * - Resolves explicit `<meta name="fps-ws-url">` / `window.FPS_WS_URL` (for CDN split) or ws(s)://${location.host}/ws.
+ * - Auto-connects on load, calibrates RTT/2 clock offset, pings every 5s, reconnects automatically on drop.
  * - Persists player token in sessionStorage (per tab) and 30s localStorage handoff on tab close.
  */
 
 import { MSG } from "/js/protocol.js";
+import { computeClockOffsetWithRtt, resolveWsUrl } from "./net_utils.js";
 
 const SESSION_TOKEN_KEY = "fps_lan_token_v2";
 const CLOSED_TOKEN_KEY = "fps_lan_closed_token_v2";
@@ -45,6 +46,9 @@ export function createNetClient(getNickFn) {
   let token = takeRecoverableToken();
   let playerName = "ChiếnBinh";
   let clockOffsetMs = 0;
+  let lastRttMs = 0;
+  let hasClockSample = false;
+  let activeWsUrl = "";
   let retryAttempt = 0;
   let retryTimer = null;
   let pingTimer = null;
@@ -102,9 +106,20 @@ export function createNetClient(getNickFn) {
       playerId = msg.playerId;
       playerName = msg.name;
       if (msg.token) persistToken(msg.token);
-      notifyStatus("connected", msg.resumed ? "Đã khôi phục kết nối LAN" : "Đã kết nối LAN");
+      notifyStatus("connected", msg.resumed ? "Đã khôi phục kết nối" : "Đã kết nối máy chủ");
     } else if (msg.type === MSG.PONG && Number.isFinite(msg.serverTime)) {
-      clockOffsetMs = msg.serverTime - Date.now();
+      const synced = computeClockOffsetWithRtt({
+        clientSendMs: Number(msg.t),
+        clientRecvMs: Date.now(),
+        serverTimeMs: msg.serverTime,
+        prevOffsetMs: clockOffsetMs,
+        hasPrev: hasClockSample,
+      });
+      if (synced) {
+        clockOffsetMs = synced.offsetMs;
+        lastRttMs = synced.rttMs;
+        hasClockSample = true;
+      }
     }
 
     const list = handlers.get(msg.type);
@@ -117,15 +132,33 @@ export function createNetClient(getNickFn) {
     if (closedManually || retryTimer) return;
     const delayMs = Math.min(4000, 900 + retryAttempt * 700);
     retryAttempt++;
-    notifyStatus("reconnecting", `Mất kết nối — tự nối lại sau ${(delayMs / 1000).toFixed(1)}s...`);
+    const statusMsg =
+      retryAttempt >= 3
+        ? `Đang đánh thức máy chủ (30–60s nếu ngủ đông) — thử lại sau ${(delayMs / 1000).toFixed(1)}s...`
+        : `Mất kết nối — tự nối lại sau ${(delayMs / 1000).toFixed(1)}s...`;
+    notifyStatus("reconnecting", statusMsg);
     retryTimer = setTimeout(() => {
       retryTimer = null;
       connect();
     }, delayMs);
   }
 
+  function readConfiguredMetaWsUrl() {
+    try {
+      const el = document.querySelector('meta[name="fps-ws-url"]');
+      return el ? el.getAttribute("content") || "" : "";
+    } catch {
+      return "";
+    }
+  }
+
   function connect() {
-    if (!location.protocol.startsWith("http") || !location.host) {
+    const url = resolveWsUrl({
+      metaUrl: readConfiguredMetaWsUrl(),
+      globalUrl: typeof window !== "undefined" ? window.FPS_WS_URL : "",
+      loc: typeof location !== "undefined" ? location : null,
+    });
+    if (!url) {
       notifyStatus("offline", "Đang mở qua file:// — chỉ dùng được Luyện tập Offline (Drone).");
       return;
     }
@@ -135,10 +168,14 @@ export function createNetClient(getNickFn) {
 
     closedManually = false;
     clearTimers();
+    activeWsUrl = url;
 
-    const proto = location.protocol === "https:" ? "wss" : "ws";
-    const url = `${proto}://${location.host}/ws`;
-    notifyStatus("connecting", "Đang tự động kết nối LAN...");
+    notifyStatus(
+      "connecting",
+      retryAttempt >= 2
+        ? "Đang đánh thức máy chủ (có thể mất 30–60s)..."
+        : "Đang kết nối máy chủ...",
+    );
 
     try {
       ws = new WebSocket(url);
@@ -150,6 +187,7 @@ export function createNetClient(getNickFn) {
     ws.onopen = () => {
       const nick = typeof getNickFn === "function" ? getNickFn() : "ChiếnBinh";
       ws.send(JSON.stringify({ type: MSG.HELLO, name: nick, token }));
+      ws.send(JSON.stringify({ type: MSG.PING, t: Date.now() }));
       pingTimer = setInterval(() => {
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: MSG.PING, t: Date.now() }));
@@ -205,6 +243,12 @@ export function createNetClient(getNickFn) {
     },
     get clockOffsetMs() {
       return clockOffsetMs;
+    },
+    get rttMs() {
+      return lastRttMs;
+    },
+    get wsUrl() {
+      return activeWsUrl;
     },
   };
 }

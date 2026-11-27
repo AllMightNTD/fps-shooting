@@ -57,6 +57,40 @@ export function getLanUrls(port) {
   return urls;
 }
 
+export function parseAllowedOrigins(raw) {
+  const list = Array.isArray(raw)
+    ? raw
+    : typeof raw === "string"
+      ? raw.split(",")
+      : [];
+  const allowed = new Set();
+  for (const item of list) {
+    if (typeof item !== "string") continue;
+    const trimmed = item.trim();
+    if (!trimmed) continue;
+    try {
+      const u = new URL(trimmed);
+      if (u.protocol === "http:" || u.protocol === "https:") {
+        allowed.add(u.origin.toLowerCase());
+      }
+    } catch {
+      // Ignore malformed entries
+    }
+  }
+  return allowed;
+}
+
+export function isWsOriginAllowed(originHeader, allowedOrigins) {
+  if (!allowedOrigins || allowedOrigins.size === 0) return true;
+  if (typeof originHeader !== "string" || !originHeader.trim()) return false;
+  try {
+    const u = new URL(originHeader.trim());
+    return allowedOrigins.has(u.origin.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 export function createLanServer(options = {}) {
   const rootDir = path.resolve(options.rootDir || DEFAULT_ROOT);
   const publicDir = path.join(rootDir, "public");
@@ -70,6 +104,10 @@ export function createLanServer(options = {}) {
   const soundDir = path.resolve(rootDir, "sound");
   const nowFn = options.nowFn || Date.now;
   const tickMs = options.tickMs || TICK_MS;
+  const startedAt = nowFn();
+  const allowedOrigins = parseAllowedOrigins(
+    options.allowedOrigins !== undefined ? options.allowedOrigins : process.env.ALLOWED_ORIGIN,
+  );
 
   const roomManager = new RoomManager(nowFn);
 
@@ -233,13 +271,18 @@ export function createLanServer(options = {}) {
     }
   }
 
-  function sendJsonHttp(res, status, data) {
+  function sendJsonHttp(res, status, data, method = "GET") {
     const body = JSON.stringify(data);
     res.writeHead(status, {
       "Content-Type": "application/json; charset=utf-8",
+      "Content-Length": Buffer.byteLength(body, "utf8"),
       "X-Content-Type-Options": "nosniff",
       "Cache-Control": "no-store",
     });
+    if (method === "HEAD") {
+      res.end();
+      return;
+    }
     res.end(body);
   }
 
@@ -402,6 +445,21 @@ export function createLanServer(options = {}) {
       return;
     }
 
+    if (pathname === "/health") {
+      sendJsonHttp(
+        res,
+        200,
+        {
+          ok: true,
+          uptimeSec: Math.max(0, Math.floor((nowFn() - startedAt) / 1000)),
+          rooms: roomManager.rooms.size,
+          sessions: roomManager.sessions.size,
+        },
+        req.method,
+      );
+      return;
+    }
+
     if (pathname === "/api/lan-info") {
       const addr = httpServer.address();
       const port = typeof addr === "object" && addr ? addr.port : DEFAULT_PORT;
@@ -494,6 +552,8 @@ export function createLanServer(options = {}) {
     sendJsonHttp(res, 404, { error: "Not found" });
   });
 
+  const openWsSet = new Set();
+
   httpServer.on("upgrade", (req, socket, head) => {
     let pathname = "/";
     try {
@@ -503,12 +563,16 @@ export function createLanServer(options = {}) {
       return;
     }
     if (pathname !== "/ws") {
-      socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
-      socket.destroy();
+      socket.end("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
+      return;
+    }
+    if (!isWsOriginAllowed(req.headers.origin, allowedOrigins)) {
+      socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
       return;
     }
     const ws = upgradeHttpToWs(req, socket, head);
     if (!ws) return;
+    openWsSet.add(ws);
 
     const connState = { ws, session: null };
     ws.on("pong", () => {
@@ -516,6 +580,7 @@ export function createLanServer(options = {}) {
     });
     ws.on("message", (text) => routeMessage(connState, text));
     ws.on("close", () => {
+      openWsSet.delete(ws);
       if (connState.session) {
         roomManager.markDisconnected(connState.session.id, ws);
       }
@@ -569,10 +634,20 @@ export function createLanServer(options = {}) {
       for (const s of roomManager.sessions.values()) {
         if (s.ws && !s.ws.closed) s.ws.close(1001, "Server stopping");
       }
+      for (const ws of Array.from(openWsSet)) {
+        if (!ws.closed) ws.close(1001, "Server stopping");
+        if (ws.socket && !ws.socket.destroyed) ws.socket.destroy();
+      }
+      openWsSet.clear();
       roomManager.sessions.clear();
       roomManager.tokens.clear();
       if (!httpServer.listening) return Promise.resolve();
-      return new Promise((resolve) => httpServer.close(() => resolve()));
+      return new Promise((resolve) => {
+        httpServer.close(() => resolve());
+        if (typeof httpServer.closeAllConnections === "function") {
+          httpServer.closeAllConnections();
+        }
+      });
     },
   };
 }

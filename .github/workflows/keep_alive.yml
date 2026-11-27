@@ -1,0 +1,33 @@
+name: Render Keep-Alive
+
+on:
+  schedule:
+    # Ping every 10 minutes to stay safely inside Render's 15-minute idle timeout
+    # even when GitHub Actions cron queues are delayed by a few minutes.
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Ping Render /health endpoint
+        env:
+          RENDER_HEALTH_URL: ${{ vars.RENDER_HEALTH_URL }}
+        run: |
+          if [ -z "$RENDER_HEALTH_URL" ]; then
+            echo "RENDER_HEALTH_URL repository variable is not set yet; skipping ping."
+            echo "Configure Settings -> Secrets and variables -> Actions -> Variables -> RENDER_HEALTH_URL=https://your-app.onrender.com/health"
+            exit 0
+          fi
+          case "$RENDER_HEALTH_URL" in
+            http://*|https://*) ;;
+            *)
+              echo "Invalid RENDER_HEALTH_URL scheme (expected http:// or https://)."
+              exit 1
+              ;;
+          esac
+          curl -fsS --retry 2 --retry-delay 5 --max-time 65 "$RENDER_HEALTH_URL"
+          echo ""
+

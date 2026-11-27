@@ -91,6 +91,19 @@ Server mặc định lắng nghe `0.0.0.0:8090` (tự động chuyển sang cổ
   New-NetFirewallRule -DisplayName "FPS LAN Server 8090" -Direction Inbound -Protocol TCP -LocalPort 8090 -Action Allow -Profile Private
   ```
 
+### Deploy Online (Render Free + Cloudflare Pages + GitHub Actions Keep-Alive)
+
+- **Backend WebSocket trên Render Free:**
+  - Start Command: `node server/index.js` (tự nhận `process.env.PORT`).
+  - Biến môi trường tùy chọn: `ALLOWED_ORIGIN=https://<project>.pages.dev` (danh sách Origin cho phép nâng cấp `/ws`, phân tách bằng dấu `,`; để trống khi chạy LAN).
+  - Endpoint kiểm tra sức khỏe: `GET /health` (và `HEAD /health`) trả về `200 OK` JSON `{ ok, uptimeSec, rooms, sessions }`.
+- **Frontend & Asset tĩnh trên Cloudflare Pages (`dist-static/`):**
+  ```bash
+  FPS_WS_URL="wss://<render-service>.onrender.com/ws" node scripts/build_static.mjs
+  ```
+  Xuất trọn bộ HTML/JS/assets/maps/sound/GLB + `_headers` ra `dist-static/` (đã chèn `<meta name="fps-ws-url">`, bù trễ đồng hồ `RTT / 2` và tự hiển thị link mời online).
+- **Giữ Render Free luôn thức:** Trong GitHub repo, vào `Settings → Secrets and variables → Actions → Variables` thêm `RENDER_HEALTH_URL=https://<render-service>.onrender.com/health` để workflow `.github/workflows/keep_alive.yml` tự gọi mỗi 10 phút (`*/10 * * * *`).
+
 ## Điều khiển mặc định & Cài đặt
 
 _(Có thể đổi phím, độ nhạy chuột, độ nhạy ADS, đảo trục Y, FOV `65–95°` và chế độ Giữ/Bật-tắt cho Ngồi/Ngắm trong mục **Cài đặt** từ Sảnh chờ hoặc Menu `Esc`)_
