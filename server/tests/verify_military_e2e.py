@@ -250,7 +250,13 @@ def main() -> int:
                 }"""
             )
             report["weapon_audio_stats"] = weapon_audio_stats
-            assert weapon_audio_stats["loadedCount"] == 4, f"M416 audio bank incomplete: {weapon_audio_stats}"
+            assert weapon_audio_stats["totalCount"] == 11 and weapon_audio_stats["loadedCount"] == 11, (
+                f"Multi-weapon audio bank incomplete: {weapon_audio_stats}"
+            )
+            by_w = weapon_audio_stats.get("byWeapon", {})
+            assert by_w.get("m416", {}).get("loadedCount") == 4
+            assert by_w.get("pistol", {}).get("loadedCount") == 3
+            assert by_w.get("sniper", {}).get("loadedCount") == 4
 
             # Verify automatic weak-hardware detection (SwiftShader -> low) & 3-tier hot-switching
             page.wait_for_function(

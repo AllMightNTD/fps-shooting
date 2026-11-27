@@ -1,10 +1,10 @@
 /**
- * Weapon Audio Bank & Calibrated WebAudio Playback (M416 real outdoor/mechanical WAV assets):
+ * Weapon Audio Bank & Calibrated WebAudio Playback (M416, Pistol & AWM real WAV assets):
  * - Pure helpers (Node-testable): distance gain, air-absorption lowpass cutoff, jittered pitch,
- *   and tactical/empty reload playback calibration.
- * - Browser engine: pre-fetches & decodes WAV ArrayBuffers during Loading Screen, applies gain
- *   staging + soft DynamicsCompressor headroom, tracks interruptible reload playback, and falls
- *   back gracefully to procedural synth if audio hardware or decode is unavailable.
+ *   per-weapon tactical/empty reload playback calibration, and flatline/DC buffer guard.
+ * - Browser engine: pre-fetches & decodes WAV ArrayBuffers during Loading Screen, applies per-WAV
+ *   gain staging + soft DynamicsCompressor headroom + DC high-pass on hot assets, tracks
+ *   interruptible reload playback, and falls back gracefully to procedural synth on missing/corrupt audio.
  */
 
 export const M416_SOUND_PATHS = Object.freeze({
@@ -14,18 +14,74 @@ export const M416_SOUND_PATHS = Object.freeze({
   dryfire: "/sound/m416/m416_dryfire.wav",
 });
 
-// Gains calibrated directly against actual WAV peak levels so M416 punches cleanly without clipping:
-// shot peak=0.30 (-10.4 dBFS), reload peak=0.23, shell peak=0.18, dryfire peak=0.03 (-31 dBFS).
-export const M416_SOUND_TUNING = Object.freeze({
-  shot: Object.freeze({ gain: 1.95, trimStartSec: 0.0085, reverbWet: 0.16, pitchJitter: 0.032 }),
-  remoteShot: Object.freeze({ gain: 1.65, trimStartSec: 0.0085, reverbWet: 0.24, refDist: 10.5 }),
-  reload: Object.freeze({ gain: 1.45, trimStartSec: 0.0, reverbWet: 0.04 }),
-  shell: Object.freeze({ gain: 0.62, trimStartSec: 0.0, reverbWet: 0.05, delayMin: 0.24, delayMax: 0.34, panRight: 0.30 }),
-  dryfire: Object.freeze({ gain: 4.5, trimStartSec: 0.0, reverbWet: 0.02 }),
+export const PISTOL_SOUND_PATHS = Object.freeze({
+  shot: "/sound/pistol/pistol_standard_outdoor_shot.wav",
+  reload: "/sound/pistol/pistol_reload.wav",
+  shell: "/sound/pistol/pistol_shell_casing.wav",
 });
 
-export function extractAudioAssetPaths() {
-  return Object.values(M416_SOUND_PATHS);
+export const AWM_SOUND_PATHS = Object.freeze({
+  shot: "/sound/awm/awm_brake_outdoor_shot.wav",
+  reload: "/sound/awm/awm_reload.wav",
+  shell: "/sound/awm/awm_shell.wav",
+  dryfire: "/sound/awm/awm_dryfire.wav",
+});
+
+// Gains calibrated directly against actual WAV peak levels and lead silence:
+// - M416:   shot peak=0.30, reload peak=0.23, shell peak=0.18, dryfire peak=0.03
+// - Pistol: shot peak=0.24, reload peak=0.28, shell peak=0.13
+// - AWM:    shot peak=0.94 (hot normalized), reload peak=0.94 (66.5ms lead), shell peak=0.94, dryfire DC-flat
+export const WEAPON_SOUND_BANKS = Object.freeze({
+  m416: Object.freeze({
+    paths: M416_SOUND_PATHS,
+    tuning: Object.freeze({
+      shot: Object.freeze({ gain: 1.95, trimStartSec: 0.0085, reverbWet: 0.16, pitchJitter: 0.032 }),
+      remoteShot: Object.freeze({ gain: 1.65, trimStartSec: 0.0085, reverbWet: 0.24, refDist: 10.5 }),
+      reload: Object.freeze({ gain: 1.45, trimStartSec: 0.0, reverbWet: 0.04, emptyRate: 0.80, tactRate: 0.96, tactMaxSec: 0.95, defaultDur: 1.394 }),
+      shell: Object.freeze({ gain: 0.62, trimStartSec: 0.0, reverbWet: 0.05, delayMin: 0.24, delayMax: 0.34, panRight: 0.30 }),
+      dryfire: Object.freeze({ gain: 4.5, trimStartSec: 0.0, reverbWet: 0.02 }),
+    }),
+  }),
+  pistol: Object.freeze({
+    paths: PISTOL_SOUND_PATHS,
+    tuning: Object.freeze({
+      shot: Object.freeze({ gain: 1.82, trimStartSec: 0.0085, reverbWet: 0.14, pitchJitter: 0.04 }),
+      remoteShot: Object.freeze({ gain: 1.45, trimStartSec: 0.0085, reverbWet: 0.22, refDist: 9.0 }),
+      reload: Object.freeze({ gain: 1.28, trimStartSec: 0.0, reverbWet: 0.04, emptyRate: 0.74, tactRate: 0.90, tactMaxSec: 0.80, defaultDur: 1.094 }),
+      shell: Object.freeze({ gain: 0.78, trimStartSec: 0.0, reverbWet: 0.05, delayMin: 0.22, delayMax: 0.30, panRight: 0.32 }),
+    }),
+  }),
+  sniper: Object.freeze({
+    paths: AWM_SOUND_PATHS,
+    tuning: Object.freeze({
+      shot: Object.freeze({ gain: 0.82, trimStartSec: 0.0145, reverbWet: 0.26, pitchJitter: 0.024, dcHighpassHz: 35 }),
+      remoteShot: Object.freeze({ gain: 0.72, trimStartSec: 0.0145, reverbWet: 0.32, refDist: 16.0, dcHighpassHz: 35 }),
+      reload: Object.freeze({ gain: 0.42, trimStartSec: 0.055, reverbWet: 0.05, emptyRate: 0.76, tactRate: 0.92, tactMaxSec: 1.38, defaultDur: 2.15, dcHighpassHz: 35 }),
+      shell: Object.freeze({ gain: 0.16, trimStartSec: 0.014, reverbWet: 0.06, delayMin: 0.58, delayMax: 0.68, panRight: 0.34, dcHighpassHz: 35 }),
+      dryfire: Object.freeze({ gain: 0.45, trimStartSec: 0.0, reverbWet: 0.02, dcHighpassHz: 35 }),
+    }),
+  }),
+});
+
+export const M416_SOUND_TUNING = WEAPON_SOUND_BANKS.m416.tuning;
+
+export function normalizeWeaponAudioKey(weaponId = "m416") {
+  const k = String(weaponId || "").toLowerCase();
+  if (k === "pistol" || k === "glock" || k === "glock-17") return "pistol";
+  if (k === "sniper" || k === "awm") return "sniper";
+  return "m416";
+}
+
+export function extractAudioAssetPaths(weaponId = null) {
+  if (weaponId) {
+    const bank = WEAPON_SOUND_BANKS[normalizeWeaponAudioKey(weaponId)];
+    return bank ? Object.values(bank.paths) : [];
+  }
+  const out = [];
+  for (const bank of Object.values(WEAPON_SOUND_BANKS)) {
+    out.push(...Object.values(bank.paths));
+  }
+  return out;
 }
 
 export function computeAutoPitch(basePitch = 1.0, jitter = 0.03, rand01 = 0.5) {
@@ -47,22 +103,44 @@ export function computeDistanceAirCutoffHz(dist = 0) {
 }
 
 /**
- * Compute playbackRate and optional early cutoff for m416_reload.wav (1.394s natural length):
- * - Empty reload (2.40s): slightly stretched (0.80x -> 1.74s) so bolt pull aligns cleanly.
- * - Tactical reload (1.85s, no bolt rack): plays mag-out + mag-in cleanly and fades before bolt rack (~0.94s).
+ * Compute playbackRate and optional early cutoff matched to weapon empty/tactical reload durations.
  */
-export function computeReloadPlaybackConfig(rawDurationSec = 1.394, isTactical = false) {
-  const dur = Number.isFinite(rawDurationSec) && rawDurationSec > 0.2 ? rawDurationSec : 1.394;
+export function computeReloadPlaybackConfig(rawDurationSec = 1.394, isTactical = false, weaponId = "m416") {
+  const wKey = normalizeWeaponAudioKey(weaponId);
+  const cfg = WEAPON_SOUND_BANKS[wKey].tuning.reload;
+  const trim = cfg.trimStartSec || 0;
+  const rawDur = Number.isFinite(rawDurationSec) && rawDurationSec > 0.2 ? rawDurationSec : cfg.defaultDur;
+  const effectiveDur = Math.max(0.2, rawDur - trim);
   if (isTactical) {
     return {
-      playbackRate: 0.96,
-      maxPlaySec: Math.min(dur / 0.96, 0.95),
+      playbackRate: cfg.tactRate,
+      maxPlaySec: Math.min(effectiveDur / cfg.tactRate, cfg.tactMaxSec),
     };
   }
   return {
-    playbackRate: 0.80,
-    maxPlaySec: dur / 0.80,
+    playbackRate: cfg.emptyRate,
+    maxPlaySec: effectiveDur / cfg.emptyRate,
   };
+}
+
+/**
+ * Guard against flat DC-only or silent decoded AudioBuffers (e.g. constant -0.944 DC asset).
+ * Mock AudioBuffers without getChannelData() are trusted for pure Node unit tests.
+ */
+export function isAudibleWaveform(audioBuf) {
+  if (!audioBuf) return false;
+  if (typeof audioBuf.getChannelData !== "function") return true;
+  const data = audioBuf.getChannelData(0);
+  if (!data || data.length === 0) return false;
+  let min = data[0];
+  let max = data[0];
+  const step = Math.max(1, Math.floor(data.length / 512));
+  for (let i = 0; i < data.length; i += step) {
+    const v = data[i];
+    if (v < min) min = v;
+    if (v > max) max = v;
+  }
+  return max - min > 0.002;
 }
 
 export function createWeaponAudioBank({
@@ -80,6 +158,13 @@ export function createWeaponAudioBank({
 
   let activeReload = null;
   const activeTimers = new Set();
+
+  const allEntries = [];
+  for (const [wKey, bank] of Object.entries(WEAPON_SOUND_BANKS)) {
+    for (const [sType, url] of Object.entries(bank.paths)) {
+      allEntries.push([wKey, sType, `${wKey}:${sType}`, url]);
+    }
+  }
 
   function ensureMasterBus(ac) {
     if (!ac) return null;
@@ -101,7 +186,21 @@ export function createWeaponAudioBank({
     return masterBus;
   }
 
-  function routeGainNode(ac, gainNode, pan = 0, reverbWet = 0) {
+  function connectSourceChain(ac, src, gainNode, { dcHighpassHz = 0, pan = 0, reverbWet = 0, preGainNode = null } = {}) {
+    let head = src;
+    if (dcHighpassHz > 0 && typeof ac.createBiquadFilter === "function") {
+      const hpf = ac.createBiquadFilter();
+      hpf.type = "highpass";
+      hpf.frequency.value = dcHighpassHz;
+      head.connect(hpf);
+      head = hpf;
+    }
+    if (preGainNode) {
+      head.connect(preGainNode);
+      head = preGainNode;
+    }
+    head.connect(gainNode);
+
     const dest = ensureMasterBus(ac) || ac.destination;
     let out = gainNode;
     if (Math.abs(pan) > 0.02 && typeof ac.createStereoPanner === "function") {
@@ -123,17 +222,17 @@ export function createWeaponAudioBank({
     const doFetch = fetchFn || (typeof globalThis.fetch === "function" ? globalThis.fetch.bind(globalThis) : null);
     if (!doFetch) return;
     await Promise.all(
-      Object.entries(M416_SOUND_PATHS).map(async ([key, url]) => {
-        if (rawBytesCache.has(key) || decodedCache.has(key)) return;
+      allEntries.map(async ([, , cacheKey, url]) => {
+        if (rawBytesCache.has(cacheKey) || decodedCache.has(cacheKey)) return;
         try {
           const res = await doFetch(url);
           if (!res || !res.ok) return;
           const buf = await res.arrayBuffer();
           if (buf && buf.byteLength > 44) {
-            rawBytesCache.set(key, buf);
+            rawBytesCache.set(cacheKey, buf);
           }
         } catch (err) {
-          console.warn(`M416 audio fetch skipped for ${key}:`, err);
+          console.warn(`Weapon audio fetch skipped for ${cacheKey}:`, err);
         }
       }),
     );
@@ -144,14 +243,14 @@ export function createWeaponAudioBank({
     if (!ac || typeof ac.decodeAudioData !== "function") return 0;
     await fetchAllBytes();
     await Promise.all(
-      Array.from(rawBytesCache.entries()).map(async ([key, arrBuf]) => {
-        if (decodedCache.has(key)) return;
+      Array.from(rawBytesCache.entries()).map(async ([cacheKey, arrBuf]) => {
+        if (decodedCache.has(cacheKey)) return;
         try {
           // Clone slice because WebAudio decodeAudioData detaches the passed ArrayBuffer
           const audioBuf = await ac.decodeAudioData(arrBuf.slice(0));
-          if (audioBuf) decodedCache.set(key, audioBuf);
+          if (audioBuf) decodedCache.set(cacheKey, audioBuf);
         } catch (err) {
-          console.warn(`M416 audio decode skipped for ${key}:`, err);
+          console.warn(`Weapon audio decode skipped for ${cacheKey}:`, err);
         }
       }),
     );
@@ -164,7 +263,7 @@ export function createWeaponAudioBank({
     }
     await preloadPromise;
     const ac = typeof getAudioContext === "function" ? getAudioContext() : null;
-    if (ac && decodedCache.size < Object.keys(M416_SOUND_PATHS).length) {
+    if (ac && decodedCache.size < allEntries.length) {
       if (!decodePromise) {
         decodePromise = decodeAll().finally(() => {
           decodePromise = null;
@@ -176,44 +275,54 @@ export function createWeaponAudioBank({
   }
 
   function ensureDecodedOnGesture() {
-    if (decodedCache.size < Object.keys(M416_SOUND_PATHS).length && !decodePromise) {
+    if (decodedCache.size < allEntries.length && !decodePromise) {
       decodePromise = decodeAll().finally(() => {
         decodePromise = null;
       });
     }
   }
 
-  function playM416Shot() {
+  function getWeaponEntry(weaponId, soundType) {
+    const wKey = normalizeWeaponAudioKey(weaponId);
+    const bank = WEAPON_SOUND_BANKS[wKey];
+    const cfg = bank && bank.tuning[soundType];
+    if (!cfg) return null;
+    const cacheKey = `${wKey}:${soundType}`;
+    const buf = decodedCache.get(cacheKey);
+    return { wKey, cfg, buf };
+  }
+
+  function playShot(weaponId = "m416") {
     const ac = typeof getAudioContext === "function" ? getAudioContext() : null;
-    const buf = decodedCache.get("shot");
-    if (!ac || !buf) {
+    const entry = getWeaponEntry(weaponId, "shot");
+    if (!ac || !entry || !isAudibleWaveform(entry.buf)) {
       ensureDecodedOnGesture();
       return false;
     }
-    const cfg = M416_SOUND_TUNING.shot;
+    const { cfg, buf } = entry;
     const src = ac.createBufferSource();
     src.buffer = buf;
     src.playbackRate.value = computeAutoPitch(1.0, cfg.pitchJitter, Math.random());
 
     const g = ac.createGain();
     g.gain.value = cfg.gain;
-    src.connect(g);
-    routeGainNode(ac, g, 0, cfg.reverbWet);
+    connectSourceChain(ac, src, g, { dcHighpassHz: cfg.dcHighpassHz || 0, pan: 0, reverbWet: cfg.reverbWet });
 
-    const t = ac.currentTime;
     const trim = Math.min(cfg.trimStartSec, Math.max(0, buf.duration - 0.05));
-    src.start(t, trim);
+    src.start(ac.currentTime, trim);
     return true;
   }
 
-  function playM416RemoteShot(dist = 0, pan = 0) {
+  function playRemoteShot(weaponId = "m416", dist = 0, pan = 0) {
     const ac = typeof getAudioContext === "function" ? getAudioContext() : null;
-    const buf = decodedCache.get("shot");
-    if (!ac || !buf) {
+    const wKey = normalizeWeaponAudioKey(weaponId);
+    const bank = WEAPON_SOUND_BANKS[wKey];
+    const cfg = bank && bank.tuning.remoteShot;
+    const buf = decodedCache.get(`${wKey}:shot`);
+    if (!ac || !cfg || !isAudibleWaveform(buf)) {
       ensureDecodedOnGesture();
       return false;
     }
-    const cfg = M416_SOUND_TUNING.remoteShot;
     const att = computeDistanceGain(dist, cfg.refDist);
     const src = ac.createBufferSource();
     src.buffer = buf;
@@ -225,48 +334,54 @@ export function createWeaponAudioBank({
 
     const g = ac.createGain();
     g.gain.value = cfg.gain * att;
-    src.connect(lpf).connect(g);
-    routeGainNode(ac, g, pan, cfg.reverbWet * att);
+    connectSourceChain(ac, src, g, {
+      dcHighpassHz: cfg.dcHighpassHz || 0,
+      preGainNode: lpf,
+      pan,
+      reverbWet: cfg.reverbWet * att,
+    });
 
-    const t = ac.currentTime;
     const trim = Math.min(cfg.trimStartSec, Math.max(0, buf.duration - 0.05));
-    src.start(t, trim);
+    src.start(ac.currentTime, trim);
     return true;
   }
 
-  function playM416Shell({ isPuddle = false } = {}) {
+  function playShell(weaponId = "m416", { isPuddle = false } = {}) {
     const ac = typeof getAudioContext === "function" ? getAudioContext() : null;
-    const buf = decodedCache.get("shell");
-    if (!ac || !buf) {
+    const entry = getWeaponEntry(weaponId, "shell");
+    if (!ac || !entry || !isAudibleWaveform(entry.buf)) {
       ensureDecodedOnGesture();
       return false;
     }
-    const cfg = M416_SOUND_TUNING.shell;
+    const { wKey, cfg } = entry;
     const delayMs = (cfg.delayMin + Math.random() * (cfg.delayMax - cfg.delayMin)) * 1000;
     const tid = setTimeout(() => {
       activeTimers.delete(tid);
       const curAc = typeof getAudioContext === "function" ? getAudioContext() : null;
-      const curBuf = decodedCache.get("shell");
-      if (!curAc || !curBuf) return;
+      const curBuf = decodedCache.get(`${wKey}:shell`);
+      if (!curAc || !isAudibleWaveform(curBuf)) return;
 
       const src = curAc.createBufferSource();
       src.buffer = curBuf;
       src.playbackRate.value = computeAutoPitch(isPuddle ? 0.88 : 1.0, 0.07, Math.random());
 
-      let tailNode = src;
-      if (isPuddle) {
-        const lpf = curAc.createBiquadFilter();
-        lpf.type = "lowpass";
-        lpf.frequency.value = 1800;
-        src.connect(lpf);
-        tailNode = lpf;
+      let preFilter = null;
+      if (isPuddle && typeof curAc.createBiquadFilter === "function") {
+        preFilter = curAc.createBiquadFilter();
+        preFilter.type = "lowpass";
+        preFilter.frequency.value = 1800;
       }
 
       const g = curAc.createGain();
       g.gain.value = cfg.gain * (isPuddle ? 0.55 : 0.88 + Math.random() * 0.24);
-      tailNode.connect(g);
-      routeGainNode(curAc, g, cfg.panRight, cfg.reverbWet);
-      src.start(curAc.currentTime, cfg.trimStartSec);
+      connectSourceChain(curAc, src, g, {
+        dcHighpassHz: cfg.dcHighpassHz || 0,
+        preGainNode: preFilter,
+        pan: cfg.panRight,
+        reverbWet: cfg.reverbWet,
+      });
+      const trim = Math.min(cfg.trimStartSec, Math.max(0, curBuf.duration - 0.04));
+      src.start(curAc.currentTime, trim);
     }, delayMs);
     activeTimers.add(tid);
     return true;
@@ -289,16 +404,16 @@ export function createWeaponAudioBank({
     }
   }
 
-  function playM416Reload({ isTactical = false } = {}) {
+  function playReload(weaponId = "m416", { isTactical = false } = {}) {
     stopReload();
     const ac = typeof getAudioContext === "function" ? getAudioContext() : null;
-    const buf = decodedCache.get("reload");
-    if (!ac || !buf) {
+    const entry = getWeaponEntry(weaponId, "reload");
+    if (!ac || !entry || !isAudibleWaveform(entry.buf)) {
       ensureDecodedOnGesture();
       return false;
     }
-    const cfg = M416_SOUND_TUNING.reload;
-    const timing = computeReloadPlaybackConfig(buf.duration, isTactical);
+    const { wKey, cfg, buf } = entry;
+    const timing = computeReloadPlaybackConfig(buf.duration, isTactical, wKey);
     const src = ac.createBufferSource();
     src.buffer = buf;
     src.playbackRate.value = timing.playbackRate;
@@ -306,39 +421,39 @@ export function createWeaponAudioBank({
     const g = ac.createGain();
     const t = ac.currentTime;
     g.gain.setValueAtTime(cfg.gain, t);
-    if (isTactical && timing.maxPlaySec < buf.duration / timing.playbackRate - 0.05) {
+    const effectivePlayDur = Math.max(0.1, buf.duration - cfg.trimStartSec) / timing.playbackRate;
+    if (isTactical && timing.maxPlaySec < effectivePlayDur - 0.05) {
       g.gain.setValueAtTime(cfg.gain, t + Math.max(0.05, timing.maxPlaySec - 0.06));
       g.gain.linearRampToValueAtTime(0.0001, t + timing.maxPlaySec);
     }
 
-    src.connect(g);
-    routeGainNode(ac, g, 0.05, cfg.reverbWet);
+    connectSourceChain(ac, src, g, { dcHighpassHz: cfg.dcHighpassHz || 0, pan: 0.05, reverbWet: cfg.reverbWet });
 
     const token = { src, gain: g, ac };
     activeReload = token;
     src.onended = () => {
       if (activeReload === token) activeReload = null;
     };
-    src.start(t, cfg.trimStartSec, timing.maxPlaySec);
+    const trim = Math.min(cfg.trimStartSec, Math.max(0, buf.duration - 0.1));
+    src.start(t, trim, timing.maxPlaySec);
     return true;
   }
 
-  function playM416Dryfire() {
+  function playDryfire(weaponId = "m416") {
     const ac = typeof getAudioContext === "function" ? getAudioContext() : null;
-    const buf = decodedCache.get("dryfire");
-    if (!ac || !buf) {
+    const entry = getWeaponEntry(weaponId, "dryfire");
+    if (!ac || !entry || !isAudibleWaveform(entry.buf)) {
       ensureDecodedOnGesture();
       return false;
     }
-    const cfg = M416_SOUND_TUNING.dryfire;
+    const { cfg, buf } = entry;
     const src = ac.createBufferSource();
     src.buffer = buf;
     src.playbackRate.value = computeAutoPitch(1.0, 0.04, Math.random());
 
     const g = ac.createGain();
     g.gain.value = cfg.gain;
-    src.connect(g);
-    routeGainNode(ac, g, 0, cfg.reverbWet);
+    connectSourceChain(ac, src, g, { dcHighpassHz: cfg.dcHighpassHz || 0, pan: 0, reverbWet: cfg.reverbWet });
     src.start(ac.currentTime, cfg.trimStartSec);
     return true;
   }
@@ -349,15 +464,40 @@ export function createWeaponAudioBank({
     stopReload();
   }
 
+  function hasBuffer(weaponIdOrKey, maybeSoundType) {
+    if (typeof maybeSoundType === "string") {
+      const wKey = normalizeWeaponAudioKey(weaponIdOrKey);
+      const buf = decodedCache.get(`${wKey}:${maybeSoundType}`);
+      return isAudibleWaveform(buf);
+    }
+    return isAudibleWaveform(decodedCache.get(`m416:${weaponIdOrKey}`));
+  }
+
   function getStats() {
-    const keys = Object.keys(M416_SOUND_PATHS);
-    const loadedKeys = keys.filter((k) => decodedCache.has(k));
-    const fetchedKeys = keys.filter((k) => rawBytesCache.has(k) || decodedCache.has(k));
+    const loadedKeys = [];
+    const fetchedKeys = [];
+    const byWeapon = {};
+    for (const [wKey, bank] of Object.entries(WEAPON_SOUND_BANKS)) {
+      const types = Object.keys(bank.paths);
+      const wLoaded = types.filter((t) => decodedCache.has(`${wKey}:${t}`));
+      const wAudible = types.filter((t) => isAudibleWaveform(decodedCache.get(`${wKey}:${t}`)));
+      const wFetched = types.filter((t) => rawBytesCache.has(`${wKey}:${t}`) || decodedCache.has(`${wKey}:${t}`));
+      for (const t of wLoaded) loadedKeys.push(`${wKey}:${t}`);
+      for (const t of wFetched) fetchedKeys.push(`${wKey}:${t}`);
+      byWeapon[wKey] = {
+        totalCount: types.length,
+        fetchedCount: wFetched.length,
+        loadedCount: wLoaded.length,
+        audibleCount: wAudible.length,
+        loadedKeys: wLoaded,
+      };
+    }
     return {
-      totalCount: keys.length,
+      totalCount: allEntries.length,
       fetchedCount: fetchedKeys.length,
       loadedCount: loadedKeys.length,
       loadedKeys,
+      byWeapon,
       reloadPlaying: Boolean(activeReload),
     };
   }
@@ -365,16 +505,20 @@ export function createWeaponAudioBank({
   return {
     preload,
     ensureDecodedOnGesture,
-    playM416Shot,
-    playM416RemoteShot,
-    playM416Shell,
-    playM416Reload,
+    playShot,
+    playRemoteShot,
+    playShell,
+    playReload,
+    playDryfire,
+    playM416Shot: () => playShot("m416"),
+    playM416RemoteShot: (dist = 0, pan = 0) => playRemoteShot("m416", dist, pan),
+    playM416Shell: (opts = {}) => playShell("m416", opts),
+    playM416Reload: (opts = {}) => playReload("m416", opts),
+    playM416Dryfire: () => playDryfire("m416"),
     stopReload,
-    playM416Dryfire,
     clearScheduledTimers,
     isReloadPlaying: () => Boolean(activeReload),
-    hasBuffer: (key) => decodedCache.has(key),
+    hasBuffer,
     getStats,
   };
 }
-

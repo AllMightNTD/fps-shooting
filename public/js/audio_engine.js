@@ -210,24 +210,33 @@ export function createAudioEngine({ THREE, cam, yieldToUI, getActiveMapId }) {
 
   const snd = {
     shot() {
-      if (!weaponAudio.playM416Shot()) {
+      if (!weaponAudio.playShot("m416")) {
         nz(0.06, 9000, 2500, 0.45, 0.15);
         nz(0.28, 3500, 160, 0.55, 0.35);
         tone(140, 32, 0.2, 0.7);
       }
     },
     pistolShot() {
-      nz(0.05, 8200, 2200, 0.36, 0.12);
-      nz(0.18, 2800, 220, 0.42, 0.24);
-      tone(180, 48, 0.12, 0.52);
+      if (!weaponAudio.playShot("pistol")) {
+        nz(0.05, 8200, 2200, 0.36, 0.12);
+        nz(0.18, 2800, 220, 0.42, 0.24);
+        tone(180, 48, 0.12, 0.52);
+      }
     },
     sniperShot() {
-      nz(0.09, 10000, 1800, 0.6, 0.28);
-      nz(0.55, 3200, 90, 0.72, 0.48);
-      tone(105, 22, 0.36, 0.88);
+      if (!weaponAudio.playShot("sniper")) {
+        nz(0.09, 10000, 1800, 0.6, 0.28);
+        nz(0.55, 3200, 90, 0.72, 0.48);
+        tone(105, 22, 0.36, 0.88);
+      }
     },
     dryClick(weaponId = "m416") {
-      if (weaponId === "m416" && weaponAudio.playM416Dryfire()) return;
+      if (weaponAudio.playDryfire(weaponId)) return;
+      if (weaponId === "sniper") {
+        tone(1050, 480, 0.028, 0.16, "square");
+        tone(1900, 900, 0.016, 0.08, "triangle");
+        return;
+      }
       tone(1350, 720, 0.032, 0.14, "square");
     },
     hit() { tone(1300, 600, 0.07, 0.16, "square"); },
@@ -236,7 +245,7 @@ export function createAudioEngine({ THREE, cam, yieldToUI, getActiveMapId }) {
       setTimeout(() => tone(2450, 1500, 0.11, 0.18, "sine"), 35);
     },
     remoteShot(dist, pan = 0, weaponId = "m416") {
-      if (weaponId === "m416" && weaponAudio.playM416RemoteShot(dist, pan)) return;
+      if (weaponAudio.playRemoteShot(weaponId, dist, pan)) return;
       const a = Math.max(0.05, Math.min(0.6, 9 / (dist + 6)));
       nzPos(0.16, 4800, 260, 0.45 * a, 0.2 * a, pan);
       tonePos(135, 38, 0.14, 0.4 * a, "sine", pan);
@@ -279,7 +288,7 @@ export function createAudioEngine({ THREE, cam, yieldToUI, getActiveMapId }) {
       nz(0.45, 520, 45, 0.26, 0.32);
     },
     reload(weaponId = "m416", isTactical = false) {
-      if (weaponId === "m416" && weaponAudio.playM416Reload({ isTactical })) return;
+      if (weaponAudio.playReload(weaponId, { isTactical })) return;
       tone(300, 520, 0.09, 0.12, "square");
     },
     click(f) { tone(f, f * 0.5, 0.04, 0.1, "square"); },
@@ -296,8 +305,8 @@ export function createAudioEngine({ THREE, cam, yieldToUI, getActiveMapId }) {
       tone(f0, f1, 0.032, 0.11, "square");
       tone(920, 480, 0.028, 0.08, "triangle");
     },
-    shell(isPuddle = false) {
-      if (weaponAudio.playM416Shell({ isPuddle })) return;
+    shell(isPuddle = false, weaponId = "m416") {
+      if (weaponAudio.playShell(weaponId, { isPuddle })) return;
       tone(4300, 3200, 0.06, 0.06, "triangle");
     },
     thunder() { nz(2.8, 480, 30, 0.8, 0.7); },

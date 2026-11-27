@@ -607,13 +607,13 @@ export function createCombatSystem({
     }
     if (cfg.id === "sniper") audioEngine.snd.sniperShot();
     else if (cfg.id === "pistol") audioEngine.snd.pistolShot();
-    else {
-      audioEngine.snd.shot();
+    else audioEngine.snd.shot();
+    if (cfg.id !== "sniper" || st.mag > 0) {
       const militaryData = sceneMgr.getMilitaryData();
       const underWater =
         sceneMgr.getActiveMapId() === "harbor" ||
         Boolean(militaryData && militaryData.samplePuddle && militaryData.samplePuddle(ps.P.x, ps.P.z) > 0.35);
-      audioEngine.snd.shell(underWater);
+      audioEngine.snd.shell(underWater, cfg.id);
     }
     hudUi.hud();
 

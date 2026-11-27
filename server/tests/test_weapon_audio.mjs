@@ -9,13 +9,16 @@ import test from "node:test";
 
 import { createLanServer } from "../index.js";
 import {
+  AWM_SOUND_PATHS,
   M416_SOUND_PATHS,
+  PISTOL_SOUND_PATHS,
   computeAutoPitch,
   computeDistanceAirCutoffHz,
   computeDistanceGain,
   computeReloadPlaybackConfig,
   createWeaponAudioBank,
   extractAudioAssetPaths,
+  isAudibleWaveform,
 } from "../../public/js/weapon_audio.js";
 import {
   LOBBY_MUSIC_URL,
@@ -110,7 +113,7 @@ function makeFakeAudioContext() {
   return { ac, started };
 }
 
-test("Pure M416 audio math helpers handle valid and extreme/NaN inputs safely", () => {
+test("Pure weapon audio math helpers and flatline guard handle valid and extreme/NaN inputs safely", () => {
   // Arrange & Act
   const pMin = computeAutoPitch(1.0, 0.03, 0);
   const pMax = computeAutoPitch(1.0, 0.03, 1);
@@ -121,7 +124,12 @@ test("Pure M416 audio math helpers handle valid and extreme/NaN inputs safely", 
   const farCut = computeDistanceAirCutoffHz(90);
   const emptyReload = computeReloadPlaybackConfig(1.394, false);
   const tactReload = computeReloadPlaybackConfig(1.394, true);
+  const pistolTact = computeReloadPlaybackConfig(1.094, true, "pistol");
+  const awmEmpty = computeReloadPlaybackConfig(2.15, false, "sniper");
   const paths = extractAudioAssetPaths();
+  const m416Paths = extractAudioAssetPaths("m416");
+  const flatBuf = { duration: 0.16, getChannelData: () => new Float32Array(256).fill(-0.944) };
+  const acBuf = { duration: 0.16, getChannelData: () => new Float32Array([0, 0.4, -0.35, 0.1]) };
 
   // Assert
   assert.ok(Math.abs(pMin - 0.97) < 1e-6 && Math.abs(pMax - 1.03) < 1e-6);
@@ -133,17 +141,33 @@ test("Pure M416 audio math helpers handle valid and extreme/NaN inputs safely", 
   assert.ok(emptyReload.maxPlaySec > 1.7);
   assert.equal(tactReload.playbackRate, 0.96);
   assert.ok(tactReload.maxPlaySec <= 0.96);
-  assert.equal(paths.length, 4);
+  assert.equal(pistolTact.playbackRate, 0.9);
+  assert.ok(pistolTact.maxPlaySec <= 0.8);
+  assert.equal(awmEmpty.playbackRate, 0.76);
+  assert.ok(awmEmpty.maxPlaySec > 2.6);
+  assert.equal(paths.length, 11);
+  assert.equal(m416Paths.length, 4);
+  assert.equal(isAudibleWaveform(flatBuf), false);
+  assert.equal(isAudibleWaveform(acBuf), true);
+  assert.equal(isAudibleWaveform(null), false);
 });
 
-test("createWeaponAudioBank preloads, plays M416 shot/reload/shell/dryfire, interrupts reload cleanly, and falls back on errors", async () => {
+test("createWeaponAudioBank preloads M416/Pistol/AWM, handles flatline dryfire fallback, interrupts reload cleanly, and guards offline errors", async () => {
   // Arrange
   const { ac, started } = makeFakeAudioContext();
+  ac.decodeAudioData = async (arrBuf) => {
+    const marker = new Uint8Array(arrBuf)[0];
+    // Simulate flat DC waveform for AWM dryfire marker (255)
+    if (marker === 255) {
+      return { duration: 0.16, byteLength: arrBuf.byteLength, getChannelData: () => new Float32Array(128).fill(-0.944) };
+    }
+    return { duration: 1.8, byteLength: arrBuf.byteLength, getChannelData: () => new Float32Array([0, 0.5, -0.45, 0.1]) };
+  };
   const fakeFetch = async (url) => ({
     ok: true,
     async arrayBuffer() {
       const buf = new ArrayBuffer(128);
-      new Uint8Array(buf)[0] = url.length;
+      new Uint8Array(buf)[0] = url.includes("awm_dryfire.wav") ? 255 : url.length;
       return buf;
     },
   });
@@ -162,16 +186,45 @@ test("createWeaponAudioBank preloads, plays M416 shot/reload/shell/dryfire, inte
   const playingAfterStop = bank.isReloadPlaying();
   const okDry = bank.playM416Dryfire();
 
+  const okPistolShot = bank.playShot("pistol");
+  const okPistolRemote = bank.playRemoteShot("pistol", 15, 0.5);
+  const okPistolReload = bank.playReload("pistol", { isTactical: true });
+  const okPistolShell = bank.playShell("pistol", { isPuddle: false });
+  const okAwmShot = bank.playShot("sniper");
+  const okAwmRemote = bank.playRemoteShot("sniper", 45, -0.4);
+  const okAwmReload = bank.playReload("sniper", { isTactical: false });
+  const okAwmShell = bank.playShell("sniper", { isPuddle: true });
+  const awmFlatDrySkipped = bank.playDryfire("sniper");
+  const pistolNoDry = bank.playDryfire("pistol");
+
   // Assert (Happy path)
-  assert.equal(stats.loadedCount, 4);
+  assert.equal(stats.loadedCount, 11);
+  assert.equal(stats.byWeapon.m416.loadedCount, 4);
+  assert.equal(stats.byWeapon.pistol.loadedCount, 3);
+  assert.equal(stats.byWeapon.sniper.loadedCount, 4);
+  assert.equal(stats.byWeapon.sniper.audibleCount, 3);
   assert.equal(okShot, true);
   assert.equal(okRemote, true);
   assert.equal(okReload, true);
   assert.equal(playingBeforeStop, true);
   assert.equal(playingAfterStop, false);
   assert.equal(okDry, true);
-  assert.ok(started.some((s) => s.kind === "start" && s.offset > 0.008)); // Trim lead silence on shot
+  assert.equal(okPistolShot, true);
+  assert.equal(okPistolRemote, true);
+  assert.equal(okPistolReload, true);
+  assert.equal(okPistolShell, true);
+  assert.equal(okAwmShot, true);
+  assert.equal(okAwmRemote, true);
+  assert.equal(okAwmReload, true);
+  assert.equal(okAwmShell, true);
+  assert.equal(awmFlatDrySkipped, false);
+  assert.equal(pistolNoDry, false);
+  assert.equal(bank.hasBuffer("pistol", "reload"), true);
+  assert.equal(bank.hasBuffer("sniper", "dryfire"), false);
+  assert.ok(started.some((s) => s.kind === "start" && s.offset > 0.008)); // Trim lead silence on M416/Pistol shot
+  assert.ok(started.some((s) => s.kind === "start" && s.offset >= 0.05)); // Trim 55ms lead silence on AWM reload
   assert.ok(started.some((s) => s.kind === "stop")); // Interrupted reload stopped cleanly
+  bank.clearScheduledTimers();
 
   // Arrange & Act (Unhappy path: fetch fails & AudioContext unavailable)
   const brokenBank = createWeaponAudioBank({
@@ -183,18 +236,24 @@ test("createWeaponAudioBank preloads, plays M416 shot/reload/shell/dryfire, inte
   const brokenStats = await brokenBank.preload();
   assert.equal(brokenStats.loadedCount, 0);
   assert.equal(brokenBank.playM416Shot(), false);
+  assert.equal(brokenBank.playShot("pistol"), false);
+  assert.equal(brokenBank.playShot("sniper"), false);
   assert.equal(brokenBank.playM416Reload({ isTactical: true }), false);
   assert.equal(brokenBank.playM416Dryfire(), false);
   brokenBank.clearScheduledTimers();
 });
 
-test("HTTP server serves all 4 M416 WAV files with audio/wav MIME + RIFF header and blocks traversal", async () => {
+test("HTTP server serves all M416, Pistol & AWM WAV files with audio/wav MIME + RIFF header and blocks traversal", async () => {
   // Arrange
   const srv = createLanServer({ tickMs: 1000 });
   const port = await srv.start(0, "127.0.0.1");
   try {
-    // Act & Assert Happy Path for all 4 manifest paths
-    for (const urlPath of Object.values(M416_SOUND_PATHS)) {
+    // Act & Assert Happy Path for all 11 weapon manifest paths
+    for (const urlPath of [
+      ...Object.values(M416_SOUND_PATHS),
+      ...Object.values(PISTOL_SOUND_PATHS),
+      ...Object.values(AWM_SOUND_PATHS),
+    ]) {
       const res = await httpGetRaw(`http://127.0.0.1:${port}${urlPath}`);
       assert.equal(res.status, 200, `Expected 200 for ${urlPath}`);
       assert.equal(res.headers["content-type"], "audio/wav");

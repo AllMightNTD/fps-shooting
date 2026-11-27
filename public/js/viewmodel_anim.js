@@ -351,7 +351,7 @@ export function createViewmodelAnimator({
     const pull = !st.isTactical && rl >= 0.83 && rl < 0.94 ? smooth01((rl - 0.83) / 0.07) : 0;
     ch.position.z = CH_REST_Z + pull * 0.055;
     if (rl > 0 && !isPistol) bolt = pull;
-    if (!(cfg.id === "m416" && weaponAudio.hasBuffer("reload"))) {
+    if (!weaponAudio.hasBuffer(cfg.id, "reload")) {
       if (rlp < 0.28 && rl >= 0.28) snd.click(900);
       if (rlp < 0.68 && rl >= 0.68) snd.click(1400);
       if (!st.isTactical && rlp < 0.88 && rl >= 0.88) snd.click(620);
