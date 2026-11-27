@@ -4,9 +4,11 @@
  * Dependency-free ES module (runs identically in Browser and Node.js tests).
  */
 
-export function rayIntersectsAABB(ox, oy, oz, dx, dy, dz, box, maxDist = 200) {
+export function rayIntersectsAABBWithNormal(ox, oy, oz, dx, dy, dz, box, maxDist = 200) {
   let tmin = 0.0;
   let tmax = maxDist;
+  let hitAxis = -1;
+  let hitSign = 1;
   const axes = [
     [ox, dx, box.x0, box.x1],
     [oy, dy, box.y0, box.y1],
@@ -23,19 +25,44 @@ export function rayIntersectsAABB(ox, oy, oz, dx, dy, dz, box, maxDist = 200) {
     }
     let t1 = (b0 - o) / d;
     let t2 = (b1 - o) / d;
+    let s1 = -1;
     if (t1 > t2) {
       const tmp = t1;
       t1 = t2;
       t2 = tmp;
+      s1 = 1;
     }
-    if (t1 > tmin) tmin = t1;
+    if (t1 > tmin) {
+      tmin = t1;
+      hitAxis = i;
+      hitSign = s1;
+    }
     if (t2 < tmax) tmax = t2;
     if (tmin > tmax) return null;
   }
-  return tmin <= tmax && tmin >= 0 ? tmin : null;
+  if (tmin > tmax || tmin < 0) return null;
+  let nx = 0;
+  let ny = 0;
+  let nz = 0;
+  if (hitAxis === 0) nx = hitSign;
+  else if (hitAxis === 1) ny = hitSign;
+  else if (hitAxis === 2) nz = hitSign;
+  else {
+    // Ray originated inside box: fall back to opposing ray direction
+    const l = Math.hypot(dx, dy, dz) || 1;
+    nx = -dx / l;
+    ny = -dy / l;
+    nz = -dz / l;
+  }
+  return { dist: tmin, nx, ny, nz };
 }
 
-export function rayIntersectsOBB(ox, oy, oz, dx, dy, dz, obb, maxDist = 200) {
+export function rayIntersectsAABB(ox, oy, oz, dx, dy, dz, box, maxDist = 200) {
+  const hit = rayIntersectsAABBWithNormal(ox, oy, oz, dx, dy, dz, box, maxDist);
+  return hit ? hit.dist : null;
+}
+
+export function rayIntersectsOBBWithNormal(ox, oy, oz, dx, dy, dz, obb, maxDist = 200) {
   const c = Math.cos(obb.yaw);
   const s = Math.sin(obb.yaw);
   // World -> local (inverse rotation by -yaw around Y)
@@ -46,7 +73,7 @@ export function rayIntersectsOBB(ox, oy, oz, dx, dy, dz, obb, maxDist = 200) {
   const loz = rx * s + rz * c;
   const ldx = dx * c - dz * s;
   const ldz = dx * s + dz * c;
-  return rayIntersectsAABB(
+  const hit = rayIntersectsAABBWithNormal(
     lox,
     ry,
     loz,
@@ -56,6 +83,19 @@ export function rayIntersectsOBB(ox, oy, oz, dx, dy, dz, obb, maxDist = 200) {
     { x0: -obb.hx, x1: obb.hx, y0: -obb.hy, y1: obb.hy, z0: -obb.hz, z1: obb.hz },
     maxDist,
   );
+  if (!hit) return null;
+  // Local -> world normal rotation by +yaw around Y
+  return {
+    dist: hit.dist,
+    nx: hit.nx * c + hit.nz * s,
+    ny: hit.ny,
+    nz: -hit.nx * s + hit.nz * c,
+  };
+}
+
+export function rayIntersectsOBB(ox, oy, oz, dx, dy, dz, obb, maxDist = 200) {
+  const hit = rayIntersectsOBBWithNormal(ox, oy, oz, dx, dy, dz, obb, maxDist);
+  return hit ? hit.dist : null;
 }
 
 /**
@@ -430,18 +470,38 @@ export function createMapCollision({
       const b = boxes[i];
       if (b.moveOnly) continue;
       if (useBvh && b.tag && bvhTags.has(b.tag)) continue;
-      const t = rayIntersectsAABB(ox, oy, oz, dx, dy, dz, b, bestDist);
-      if (t !== null && t < bestDist) {
-        bestDist = t;
+      const hit = rayIntersectsAABBWithNormal(ox, oy, oz, dx, dy, dz, b, bestDist);
+      if (hit !== null && hit.dist < bestDist) {
+        bestDist = hit.dist;
         bestHit = {
-          dist: t,
-          x: ox + dx * t,
-          y: oy + dy * t,
-          z: oz + dz * t,
-          nx: -dx,
-          ny: -dy,
-          nz: -dz,
+          dist: hit.dist,
+          x: ox + dx * hit.dist,
+          y: oy + dy * hit.dist,
+          z: oz + dz * hit.dist,
+          nx: hit.nx,
+          ny: hit.ny,
+          nz: hit.nz,
           tag: b.tag || "box",
+        };
+      }
+    }
+
+    for (let i = 0; i < obbs.length; i++) {
+      const o = obbs[i];
+      if (o.moveOnly) continue;
+      if (useBvh && o.tag && bvhTags.has(o.tag)) continue;
+      const hit = rayIntersectsOBBWithNormal(ox, oy, oz, dx, dy, dz, o, bestDist);
+      if (hit !== null && hit.dist < bestDist) {
+        bestDist = hit.dist;
+        bestHit = {
+          dist: hit.dist,
+          x: ox + dx * hit.dist,
+          y: oy + dy * hit.dist,
+          z: oz + dz * hit.dist,
+          nx: hit.nx,
+          ny: hit.ny,
+          nz: hit.nz,
+          tag: o.tag || "obb",
         };
       }
     }
@@ -476,14 +536,27 @@ export function createMapCollision({
           const wDist = hit.dist / scaleLen;
           if (wDist < bestDist) {
             bestDist = wDist;
+            // Transform local face normal to world space via (invMatrix^T) and orient toward incoming ray
+            let wnx = m[0] * hit.nx + m[1] * hit.ny + m[2] * hit.nz;
+            let wny = m[4] * hit.nx + m[5] * hit.ny + m[6] * hit.nz;
+            let wnz = m[8] * hit.nx + m[9] * hit.ny + m[10] * hit.nz;
+            const nLen = Math.hypot(wnx, wny, wnz) || 1.0;
+            wnx /= nLen;
+            wny /= nLen;
+            wnz /= nLen;
+            if (wnx * dx + wny * dy + wnz * dz > 0) {
+              wnx = -wnx;
+              wny = -wny;
+              wnz = -wnz;
+            }
             bestHit = {
               dist: wDist,
               x: ox + dx * wDist,
               y: oy + dy * wDist,
               z: oz + dz * wDist,
-              nx: -dx,
-              ny: -dy,
-              nz: -dz,
+              nx: wnx,
+              ny: wny,
+              nz: wnz,
               tag: entry.tag || "bvh",
             };
           }

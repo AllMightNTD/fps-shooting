@@ -2,10 +2,24 @@
 <html lang="vi">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <title>Bến cảng mưa – Truy Kích Mạng LAN</title>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <title>BEFORE THE BREACH</title>
     <link rel="icon" href="data:," />
-    <link rel="preload" as="image" href="/assets/loading_bg.webp" fetchpriority="high" />
+    <link
+      rel="preload"
+      as="image"
+      href="/assets/loading_bg.webp"
+      fetchpriority="high"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600&family=Chakra+Petch:wght@600;700&family=Oswald:wght@600;700&display=swap"
+      rel="stylesheet"
+    />
     <style>
       :root {
         --panel: rgba(11, 18, 26, 0.94);
@@ -15,231 +29,1406 @@
         --hud: #e6f1f6;
         --field: rgba(18, 30, 42, 0.85);
       }
-      * { box-sizing: border-box; }
-      html, body {
-        height: 100%; margin: 0; overflow: hidden;
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
         background: #070c11;
         font-family: "Segoe UI", system-ui, sans-serif;
         color: var(--hud);
         user-select: none;
       }
-      canvas { position: fixed; inset: 0; display: block; }
+      canvas {
+        position: fixed;
+        inset: 0;
+        display: block;
+      }
       button {
-        padding: 9px 16px; border: 0; border-radius: 3px;
-        background: var(--amber); color: #1a1405;
-        font: 700 13.5px inherit; cursor: pointer;
+        padding: 9px 16px;
+        border: 0;
+        border-radius: 3px;
+        background: var(--amber);
+        color: #1a1405;
+        font: 700 13.5px inherit;
+        cursor: pointer;
       }
-      button:disabled { opacity: 0.45; cursor: not-allowed; }
-      button.sec { background: rgba(128, 150, 168, 0.24); color: var(--ink); font-weight: 600; }
-      button.btnSm { padding: 5px 11px; font-size: 12.5px; }
-      button.btnKick { padding: 3px 8px; font-size: 11.5px; background: #d64538; color: #fff; }
-      input, select {
-        padding: 7px 10px; border: 1px solid rgba(130, 155, 175, 0.45);
-        background: var(--field); color: var(--ink);
-        border-radius: 3px; font-family: inherit; font-size: 13px;
+      button:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
       }
-      select option { background: #101923; color: #e6f1f6; }
+      button.sec {
+        background: rgba(128, 150, 168, 0.24);
+        color: var(--ink);
+        font-weight: 600;
+      }
+      button.btnSm {
+        padding: 5px 11px;
+        font-size: 12.5px;
+      }
+      button.btnKick {
+        padding: 3px 8px;
+        font-size: 11.5px;
+        background: #d64538;
+        color: #fff;
+      }
+      input,
+      select {
+        padding: 7px 10px;
+        border: 1px solid rgba(130, 155, 175, 0.45);
+        background: var(--field);
+        color: var(--ink);
+        border-radius: 3px;
+        font-family: inherit;
+        font-size: 13px;
+      }
+      select option {
+        background: #101923;
+        color: #e6f1f6;
+      }
+
+      /* 3D Tactical Lobby & Practice Map Selection (AAA FPS Hub) */
+      #screenLobby {
+        display: none;
+        grid-template-rows: auto 1fr auto;
+        place-items: stretch;
+        padding: clamp(14px, 2.2vw, 26px);
+        background:
+          radial-gradient(
+            ellipse at center,
+            rgba(6, 11, 18, 0.14) 36%,
+            rgba(4, 8, 13, 0.68) 100%
+          ),
+          linear-gradient(
+            to bottom,
+            rgba(4, 8, 13, 0.58) 0%,
+            rgba(4, 8, 13, 0) 24%,
+            rgba(4, 8, 13, 0.45) 100%
+          );
+      }
+      .lobbyTopHud {
+        width: 100%;
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 14px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 6;
+      }
+      .lobbyOperatorWrap {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        max-width: min(460px, 92vw);
+      }
+      .lobbyOperatorCard {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        padding: 8px 14px;
+        background: rgba(8, 14, 22, 0.86);
+        border: 1px solid rgba(148, 163, 184, 0.24);
+        border-left: 3px solid var(--amber);
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+      }
+      .lobbyOpTag {
+        font-family: "Chakra Petch", sans-serif;
+        font-size: 10.5px;
+        font-weight: 700;
+        letter-spacing: 1.6px;
+        color: var(--amber);
+        text-transform: uppercase;
+      }
+      .lobbyNickInput {
+        width: 148px;
+        padding: 5px 8px;
+        background: rgba(16, 26, 38, 0.85);
+        border: 1px solid rgba(148, 163, 184, 0.28);
+        border-radius: 2px;
+        color: #f8fafc;
+        font-weight: 700;
+        font-size: 13px;
+        transition:
+          border-color 0.2s,
+          box-shadow 0.2s;
+      }
+      .lobbyNickInput:focus {
+        outline: none;
+        border-color: var(--amber);
+        box-shadow: 0 0 0 2px rgba(240, 180, 41, 0.22);
+      }
+      .lobbyTopActions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .btnLobbyHud {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 9px 15px;
+        background: rgba(9, 15, 24, 0.86);
+        border: 1px solid rgba(148, 163, 184, 0.28);
+        border-radius: 2px;
+        color: #e2e8f0;
+        font-family: "Chakra Petch", "Be Vietnam Pro", sans-serif;
+        font-size: 12.5px;
+        font-weight: 700;
+        letter-spacing: 0.9px;
+        text-transform: uppercase;
+        transition:
+          border-color 0.2s ease,
+          background-color 0.2s ease,
+          color 0.2s ease;
+      }
+      .btnLobbyHud:hover {
+        background: rgba(240, 180, 41, 0.18);
+        border-color: rgba(240, 180, 41, 0.82);
+        color: #ffffff;
+      }
+      .lobbyLanShareCompact {
+        display: none;
+        align-items: center;
+        gap: 8px;
+        padding: 5px 10px;
+        background: rgba(14, 34, 38, 0.88);
+        border: 1px solid rgba(78, 195, 176, 0.32);
+        font-size: 11.5px;
+        color: #cceee8;
+      }
+
+      /* Multi-View Stage (Zero-Flicker Composited Transitions) */
+      .lobbyStage {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        display: grid;
+        place-items: center;
+        pointer-events: none;
+      }
+      .lobbyView {
+        grid-area: 1 / 1;
+        width: 100%;
+        max-width: 1080px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        opacity: 0;
+        visibility: hidden;
+        pointer-events: none;
+        transform: translate3d(0, 12px, 0);
+        transition:
+          opacity 0.14s ease-out,
+          transform 0.16s ease-out,
+          visibility 0s linear 0.14s;
+      }
+      .lobbyView.active {
+        opacity: 1;
+        visibility: visible;
+        pointer-events: auto;
+        transform: translate3d(0, 0, 0);
+        transition:
+          opacity 0.24s cubic-bezier(0.22, 1, 0.36, 1) 0.08s,
+          transform 0.26s cubic-bezier(0.22, 1, 0.36, 1) 0.08s,
+          visibility 0s linear 0s;
+      }
+      .lobbyHeroHeader {
+        text-align: center;
+        margin-bottom: clamp(18px, 3vh, 30px);
+      }
+      .lobbyEyebrow {
+        font-family: "Chakra Petch", sans-serif;
+        font-size: 11.5px;
+        font-weight: 700;
+        letter-spacing: 3.4px;
+        color: var(--amber);
+        text-shadow: 0 2px 12px rgba(0, 0, 0, 0.9);
+        margin-bottom: 6px;
+      }
+      .lobbyHeroTitle {
+        margin: 0;
+        font-family: "Oswald", "Chakra Petch", sans-serif;
+        font-size: clamp(2.1rem, 4.2vw, 3.25rem);
+        font-weight: 700;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: #f8fafc;
+        text-shadow: 0 6px 28px rgba(0, 0, 0, 0.88);
+      }
+
+      /* Center 3 Mode Cards (ĐẤU ĐƠN / ĐẤU ĐỘI / LUYỆN TẬP) — Stationary Hitbox + Inner Lift */
+      .modeCardGrid {
+        width: min(980px, 94vw);
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: clamp(14px, 2vw, 24px);
+        align-items: stretch;
+      }
+      .modeCard {
+        --accent: #f0b429;
+        --accent-glow: rgba(240, 180, 41, 0.28);
+        position: relative;
+        display: flex;
+        align-items: stretch;
+        padding: 0;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        outline: none;
+        text-align: left;
+      }
+      .modeCard.mode-tdm {
+        --accent: #3b82f6;
+        --accent-glow: rgba(59, 130, 246, 0.32);
+      }
+      .modeCard.mode-practice {
+        --accent: #10b981;
+        --accent-glow: rgba(16, 185, 129, 0.3);
+      }
+      .modeCardFace {
+        position: relative;
+        width: 100%;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        min-height: clamp(220px, 31vh, 276px);
+        padding: 22px 22px 20px;
+        background: linear-gradient(
+          155deg,
+          rgba(11, 18, 28, 0.88) 0%,
+          rgba(7, 12, 20, 0.94) 100%
+        );
+        border: 1px solid rgba(148, 163, 184, 0.28);
+        border-radius: 3px;
+        color: #f1f5f9;
+        box-shadow: 0 18px 40px rgba(0, 0, 0, 0.52);
+        overflow: hidden;
+        transform: translate3d(0, 0, 0);
+        transition:
+          transform 0.22s cubic-bezier(0.22, 1, 0.36, 1),
+          border-color 0.22s ease,
+          box-shadow 0.24s ease;
+      }
+      .modeCardFace::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: radial-gradient(
+          circle at 82% 16%,
+          var(--accent-glow) 0%,
+          transparent 64%
+        );
+        opacity: 0.45;
+        transition: opacity 0.24s ease;
+        pointer-events: none;
+      }
+      .modeCard:hover .modeCardFace,
+      .modeCard:focus-visible .modeCardFace {
+        border-color: var(--accent);
+        box-shadow:
+          0 24px 48px rgba(0, 0, 0, 0.68),
+          0 0 24px var(--accent-glow);
+        transform: translate3d(0, -5px, 0);
+      }
+      .modeCard:hover .modeCardFace::before,
+      .modeCard:focus-visible .modeCardFace::before {
+        opacity: 0.95;
+      }
+      .modeCard:active .modeCardFace {
+        transform: translate3d(0, -2px, 0);
+        transition-duration: 0.08s;
+      }
+
+      .tacCorner {
+        position: absolute;
+        width: 10px;
+        height: 10px;
+        pointer-events: none;
+        z-index: 3;
+        transition:
+          width 0.22s ease,
+          height 0.22s ease,
+          border-color 0.22s ease;
+      }
+      .tacCorner.tl {
+        top: 0;
+        left: 0;
+        border-top: 2px solid var(--accent, var(--amber));
+        border-left: 2px solid var(--accent, var(--amber));
+      }
+      .tacCorner.tr {
+        top: 0;
+        right: 0;
+        border-top: 2px solid rgba(226, 232, 240, 0.45);
+        border-right: 2px solid rgba(226, 232, 240, 0.45);
+      }
+      .tacCorner.bl {
+        bottom: 0;
+        left: 0;
+        border-bottom: 2px solid rgba(226, 232, 240, 0.45);
+        border-left: 2px solid rgba(226, 232, 240, 0.45);
+      }
+      .tacCorner.br {
+        bottom: 0;
+        right: 0;
+        border-bottom: 2px solid var(--accent, var(--amber));
+        border-right: 2px solid var(--accent, var(--amber));
+      }
+      .modeCard:hover .tacCorner,
+      .modeCard:focus-visible .tacCorner,
+      .mapThumbCard:hover .tacCorner,
+      .mapThumbCard.selected .tacCorner,
+      .mapThumbCard:focus-visible .tacCorner {
+        width: 15px;
+        height: 15px;
+      }
+      .modeCardTag {
+        position: relative;
+        z-index: 2;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-family: "Chakra Petch", sans-serif;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 1.8px;
+        color: var(--accent);
+        text-transform: uppercase;
+      }
+      .modeCardDot {
+        width: 7px;
+        height: 7px;
+        border-radius: 1px;
+        background: var(--accent);
+        box-shadow: 0 0 10px var(--accent);
+      }
+      .modeCardTitle {
+        position: relative;
+        z-index: 2;
+        margin: 14px 0 8px;
+        font-family: "Oswald", "Chakra Petch", sans-serif;
+        font-size: clamp(1.7rem, 2.7vw, 2.2rem);
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        color: #ffffff;
+      }
+      .modeCardDesc {
+        position: relative;
+        z-index: 2;
+        margin: 0;
+        font-family: "Be Vietnam Pro", sans-serif;
+        font-size: 13px;
+        line-height: 1.5;
+        color: #b6c4d1;
+        font-weight: 400;
+      }
+      .modeCardFooter {
+        position: relative;
+        z-index: 2;
+        margin-top: 18px;
+        padding-top: 12px;
+        border-top: 1px solid rgba(148, 163, 184, 0.16);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-family: "Chakra Petch", sans-serif;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 1.3px;
+        color: var(--accent);
+        text-transform: uppercase;
+      }
+      .modeCardArrow {
+        display: inline-block;
+        transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+      }
+      .modeCard:hover .modeCardArrow {
+        transform: translate3d(5px, 0, 0);
+      }
+
+      /* View 2: 3D Practice Map Thumbnail Selection */
+      .practiceHeader {
+        width: min(920px, 94vw);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-bottom: 18px;
+      }
+      .practiceTitleGroup {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+        flex: 1;
+      }
+      .practiceTitle {
+        margin: 0;
+        font-family: "Oswald", "Chakra Petch", sans-serif;
+        font-size: clamp(1.55rem, 3vw, 2.25rem);
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: #f8fafc;
+        text-shadow: 0 4px 18px rgba(0, 0, 0, 0.85);
+      }
+      .mapSelectGrid {
+        width: min(920px, 94vw);
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: clamp(16px, 2.5vw, 28px);
+      }
+      .mapThumbCard {
+        --accent: #f0b429;
+        position: relative;
+        display: block;
+        padding: 0;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        outline: none;
+        aspect-ratio: 16 / 10;
+        min-height: 235px;
+        text-align: left;
+      }
+      .mapThumbFace {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-end;
+        border: 1.5px solid rgba(148, 163, 184, 0.3);
+        border-radius: 3px;
+        background: #080f18;
+        color: #f8fafc;
+        overflow: hidden;
+        box-shadow: 0 18px 42px rgba(0, 0, 0, 0.58);
+        transform: translate3d(0, 0, 0);
+        transition:
+          transform 0.24s cubic-bezier(0.22, 1, 0.36, 1),
+          border-color 0.22s ease,
+          box-shadow 0.24s ease;
+      }
+      .mapThumbFace img {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        transform: scale(1);
+        transition:
+          transform 0.45s cubic-bezier(0.22, 1, 0.36, 1),
+          filter 0.28s ease;
+        filter: brightness(0.84) saturate(1.04);
+      }
+      .mapThumbScrim {
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(
+          to top,
+          rgba(4, 9, 15, 0.94) 8%,
+          rgba(4, 9, 15, 0.52) 52%,
+          rgba(4, 9, 15, 0.14) 100%
+        );
+        pointer-events: none;
+      }
+      .mapThumbCard:hover .mapThumbFace,
+      .mapThumbCard:focus-visible .mapThumbFace {
+        border-color: rgba(240, 180, 41, 0.78);
+        box-shadow:
+          0 22px 48px rgba(0, 0, 0, 0.74),
+          0 0 20px rgba(240, 180, 41, 0.2);
+        transform: translate3d(0, -4px, 0);
+      }
+      .mapThumbCard:hover .mapThumbFace img,
+      .mapThumbCard:focus-visible .mapThumbFace img {
+        transform: scale(1.05);
+        filter: brightness(0.95) saturate(1.08);
+      }
+      .mapThumbCard.selected .mapThumbFace {
+        border-color: var(--amber);
+        box-shadow:
+          0 24px 52px rgba(0, 0, 0, 0.76),
+          0 0 28px rgba(240, 180, 41, 0.34);
+        transform: translate3d(0, -4px, 0);
+      }
+      .mapThumbCard.selected .mapThumbFace img {
+        transform: scale(1.04);
+        filter: brightness(1) saturate(1.08);
+      }
+      .mapThumbCard:active .mapThumbFace {
+        transform: translate3d(0, -2px, 0);
+        transition-duration: 0.08s;
+      }
+      .mapThumbBody {
+        position: relative;
+        z-index: 2;
+        padding: 16px 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .mapThumbBadges {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+      }
+      .mapTag {
+        font-family: "Chakra Petch", sans-serif;
+        font-size: 10.5px;
+        font-weight: 700;
+        letter-spacing: 1.4px;
+        text-transform: uppercase;
+        color: #93c5fd;
+      }
+      .mapStatusPill {
+        font-family: "Chakra Petch", sans-serif;
+        font-size: 10.5px;
+        font-weight: 700;
+        letter-spacing: 1px;
+        padding: 3px 8px;
+        background: rgba(15, 23, 42, 0.78);
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        color: #cbd5e1;
+      }
+      .mapThumbCard.selected .mapStatusPill {
+        background: rgba(240, 180, 41, 0.22);
+        border-color: var(--amber);
+        color: #fde68a;
+      }
+      .mapThumbTitle {
+        margin: 0;
+        font-family: "Oswald", "Chakra Petch", sans-serif;
+        font-size: clamp(1.35rem, 2.2vw, 1.75rem);
+        letter-spacing: 0.08em;
+        color: #ffffff;
+        text-shadow: 0 2px 10px rgba(0, 0, 0, 0.85);
+      }
+      .mapThumbDesc {
+        margin: 0;
+        font-family: "Be Vietnam Pro", sans-serif;
+        font-size: 12.5px;
+        color: #cbd5e1;
+        line-height: 1.42;
+      }
+      .practiceActionBar {
+        margin-top: 22px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 8px;
+      }
+      .btnPrimaryLaunch {
+        position: relative;
+        min-width: 270px;
+        padding: 13px 34px;
+        background: linear-gradient(
+          90deg,
+          #d98e16 0%,
+          #f0b429 50%,
+          #f7cb57 100%
+        );
+        border: 1px solid rgba(255, 240, 190, 0.55);
+        border-radius: 2px;
+        color: #161004;
+        font-family: "Chakra Petch", "Oswald", sans-serif;
+        font-size: 15px;
+        font-weight: 700;
+        letter-spacing: 2.2px;
+        text-transform: uppercase;
+        box-shadow: 0 14px 36px rgba(240, 180, 41, 0.34);
+        transition:
+          transform 0.2s ease,
+          box-shadow 0.24s ease,
+          filter 0.2s ease;
+      }
+      .btnPrimaryLaunch:hover:not(:disabled) {
+        transform: translateY(-2px) scale(1.02);
+        box-shadow: 0 18px 42px rgba(240, 180, 41, 0.48);
+        filter: brightness(1.06);
+      }
+
+      /* View 3: Filtered LAN Room Panel over 3D Backdrop */
+      .lanGlassCard {
+        width: min(860px, 95vw);
+        max-height: 76vh;
+        overflow-y: auto;
+        padding: 20px 24px;
+        background: rgba(9, 15, 24, 0.92);
+        border: 1px solid rgba(148, 163, 184, 0.28);
+        border-left: 5px solid var(--amber);
+        box-shadow: 0 26px 60px rgba(0, 0, 0, 0.68);
+      }
+      .lanTabBar {
+        display: inline-flex;
+        gap: 4px;
+        padding: 3px;
+        background: rgba(5, 10, 16, 0.65);
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        border-radius: 3px;
+      }
+      .lanModeTab {
+        padding: 6px 12px;
+        background: transparent;
+        color: #94a3b8;
+        font-size: 12px;
+        font-weight: 700;
+        border-radius: 2px;
+      }
+      .lanModeTab.active {
+        background: var(--amber);
+        color: #161004;
+      }
+      .createMapGrid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+        margin-bottom: 10px;
+      }
+      .createMapThumb {
+        position: relative;
+        display: flex;
+        align-items: flex-end;
+        height: 82px;
+        padding: 8px 12px;
+        border: 1.5px solid rgba(148, 163, 184, 0.3);
+        border-radius: 3px;
+        overflow: hidden;
+        background: #0b141e;
+        color: #f8fafc;
+        text-align: left;
+        transition:
+          border-color 0.2s,
+          transform 0.2s;
+      }
+      .createMapThumb img {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        filter: brightness(0.72);
+        transition:
+          transform 0.35s ease,
+          filter 0.25s ease;
+      }
+      .createMapThumb::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(
+          to top,
+          rgba(4, 9, 15, 0.92),
+          transparent 85%
+        );
+      }
+      .createMapThumb span {
+        position: relative;
+        z-index: 2;
+        font-size: 12.5px;
+        font-weight: 700;
+      }
+      .createMapThumb.selected {
+        border-color: var(--amber);
+        box-shadow: 0 0 18px rgba(240, 180, 41, 0.3);
+      }
+      .createMapThumb.selected img {
+        filter: brightness(0.92);
+        transform: scale(1.04);
+      }
+      .srOnlySelect {
+        position: absolute !important;
+        width: 1px !important;
+        height: 1px !important;
+        opacity: 0 !important;
+        pointer-events: none !important;
+        overflow: hidden !important;
+      }
+      .lobbyBottomFoot {
+        display: flex;
+        justify-content: center;
+        font-size: 11.5px;
+        color: rgba(186, 204, 220, 0.72);
+        letter-spacing: 0.6px;
+        text-shadow: 0 1px 6px rgba(0, 0, 0, 0.9);
+      }
+      @media (max-width: 780px) {
+        .modeCardGrid {
+          grid-template-columns: 1fr;
+        }
+        .modeCard {
+          min-height: 145px;
+          padding: 16px;
+        }
+        .mapSelectGrid {
+          grid-template-columns: 1fr;
+        }
+      }
 
       /* Screen Container Overlay */
       .screenLayer {
-        position: fixed; inset: 0; display: none;
-        place-items: center; padding: 16px;
-        background: rgba(4, 9, 14, 0.62); z-index: 20;
+        position: fixed;
+        inset: 0;
+        display: none;
+        place-items: center;
+        padding: 16px;
+        background: rgba(4, 9, 14, 0.62);
+        z-index: 20;
       }
       .card {
-        background: var(--panel); color: var(--ink);
-        padding: 22px 26px; width: min(760px, 95vw);
-        max-height: 92vh; overflow-y: auto;
+        background: var(--panel);
+        color: var(--ink);
+        padding: 22px 26px;
+        width: min(760px, 95vw);
+        max-height: 92vh;
+        overflow-y: auto;
         border-left: 6px solid var(--amber);
         box-shadow: 0 20px 50px rgba(0, 0, 0, 0.55);
       }
       .topBar {
-        display: flex; justify-content: space-between; align-items: center;
-        flex-wrap: wrap; gap: 10px; margin-bottom: 12px;
-        border-bottom: 1px solid rgba(130, 155, 175, 0.22); padding-bottom: 10px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-bottom: 12px;
+        border-bottom: 1px solid rgba(130, 155, 175, 0.22);
+        padding-bottom: 10px;
       }
-      .statusPill { font-size: 12.5px; font-weight: 700; color: #4ec3b0; }
-      .statusPill.warn { color: #f0b429; }
-      .statusPill.err { color: #ff6b4a; }
-      .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      .statusPill {
+        font-size: 12.5px;
+        font-weight: 700;
+        color: #4ec3b0;
+      }
+      .statusPill.warn {
+        color: #f0b429;
+      }
+      .statusPill.err {
+        color: #ff6b4a;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
       .lanShare {
-        display: none; justify-content: space-between; align-items: center; gap: 8px;
-        background: rgba(78, 195, 176, 0.12); border: 1px solid rgba(78, 195, 176, 0.35);
-        padding: 7px 10px; border-radius: 3px; font-size: 12.5px; margin-bottom: 10px;
+        display: none;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+        background: rgba(78, 195, 176, 0.12);
+        border: 1px solid rgba(78, 195, 176, 0.35);
+        padding: 7px 10px;
+        border-radius: 3px;
+        font-size: 12.5px;
+        margin-bottom: 10px;
       }
       .errBox {
-        display: none; background: rgba(214, 69, 56, 0.16);
-        border-left: 3px solid #d64538; padding: 7px 10px;
-        font-size: 13px; color: #ff6b5b; margin: 8px 0;
+        display: none;
+        background: rgba(214, 69, 56, 0.16);
+        border-left: 3px solid #d64538;
+        padding: 7px 10px;
+        font-size: 13px;
+        color: #ff6b5b;
+        margin: 8px 0;
       }
-      table.cleanTable { width: 100%; border-collapse: collapse; font-size: 13px; margin: 8px 0; }
-      table.cleanTable th, table.cleanTable td {
-        padding: 7px 8px; text-align: left;
+      table.cleanTable {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+        margin: 8px 0;
+      }
+      table.cleanTable th,
+      table.cleanTable td {
+        padding: 7px 8px;
+        text-align: left;
         border-bottom: 1px solid rgba(130, 155, 175, 0.18);
       }
       .subPanel {
-        display: none; margin: 10px 0; padding: 12px;
-        background: rgba(128, 150, 168, 0.1); border-radius: 4px;
+        display: none;
+        margin: 10px 0;
+        padding: 12px;
+        background: rgba(128, 150, 168, 0.1);
+        border-radius: 4px;
       }
 
       /* Room Columns */
-      .teamCols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 10px 0; }
+      .teamCols {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+        margin: 10px 0;
+      }
       .teamBox {
         background: rgba(128, 150, 168, 0.08);
         border: 1px solid rgba(130, 155, 175, 0.25);
-        padding: 10px; border-radius: 4px; min-height: 150px;
+        padding: 10px;
+        border-radius: 4px;
+        min-height: 150px;
       }
-      .teamBox h3 { margin: 0 0 8px; font-size: 14px; }
+      .teamBox h3 {
+        margin: 0 0 8px;
+        font-size: 14px;
+      }
       .rosterRow {
-        display: flex; justify-content: space-between; align-items: center;
-        padding: 6px 8px; margin-bottom: 5px; background: rgba(128, 150, 168, 0.12);
-        border-radius: 3px; font-size: 13px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 6px 8px;
+        margin-bottom: 5px;
+        background: rgba(128, 150, 168, 0.12);
+        border-radius: 3px;
+        font-size: 13px;
       }
-      .rosterActions { display: flex; gap: 6px; align-items: center; }
-      .badgeHost { font-size: 11px; padding: 2px 6px; border-radius: 3px; background: var(--amber); color: #1a1405; font-weight: 700; }
-      .badgeReady { font-size: 11px; padding: 2px 6px; border-radius: 3px; background: #2c8f73; color: #fff; font-weight: 700; }
-      .badgeWait { font-size: 11px; padding: 2px 6px; border-radius: 3px; background: rgba(128, 150, 168, 0.35); color: var(--ink); }
+      .rosterActions {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+      }
+      .badgeHost {
+        font-size: 11px;
+        padding: 2px 6px;
+        border-radius: 3px;
+        background: var(--amber);
+        color: #1a1405;
+        font-weight: 700;
+      }
+      .badgeReady {
+        font-size: 11px;
+        padding: 2px 6px;
+        border-radius: 3px;
+        background: #2c8f73;
+        color: #fff;
+        font-weight: 700;
+      }
+      .badgeWait {
+        font-size: 11px;
+        padding: 2px 6px;
+        border-radius: 3px;
+        background: rgba(128, 150, 168, 0.35);
+        color: var(--ink);
+      }
       .countdownBanner {
-        display: none; text-align: center; font-size: 20px; font-weight: 800;
-        color: var(--amber); padding: 10px; margin: 8px 0;
-        background: rgba(240, 180, 41, 0.14); border-radius: 4px;
+        display: none;
+        text-align: center;
+        font-size: 20px;
+        font-weight: 800;
+        color: var(--amber);
+        padding: 10px;
+        margin: 8px 0;
+        background: rgba(240, 180, 41, 0.14);
+        border-radius: 4px;
       }
       .chatBox {
-        margin-top: 10px; border-top: 1px solid rgba(130, 155, 175, 0.2); padding-top: 8px;
+        margin-top: 10px;
+        border-top: 1px solid rgba(130, 155, 175, 0.2);
+        padding-top: 8px;
       }
       #roomChatLog {
-        height: 92px; overflow-y: auto; padding: 6px;
-        background: rgba(0, 0, 0, 0.16); border-radius: 3px; font-size: 12.5px; margin-bottom: 6px;
+        height: 92px;
+        overflow-y: auto;
+        padding: 6px;
+        background: rgba(0, 0, 0, 0.16);
+        border-radius: 3px;
+        font-size: 12.5px;
+        margin-bottom: 6px;
       }
-      .chatLine { margin-bottom: 3px; line-height: 1.35; }
+      .chatLine {
+        margin-bottom: 3px;
+        line-height: 1.35;
+      }
 
       /* In-Game HUD */
-      #hud { position: fixed; inset: 0; pointer-events: none; font-weight: 600; display: none; z-index: 10; }
-      #top { position: absolute; left: 16px; top: 14px; font-size: 18px; text-shadow: 0 1px 4px #000; }
-      #top b { color: var(--amber); font-size: 24px; }
-      #pvpTop {
-        position: absolute; left: 50%; top: 12px; transform: translateX(-50%);
-        display: none; align-items: center; gap: 14px;
-        background: rgba(7, 13, 20, 0.72); border: 1px solid rgba(255, 255, 255, 0.16);
-        padding: 6px 16px; border-radius: 4px; font-size: 15px;
+      #hud {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        font-weight: 600;
+        display: none;
+        z-index: 10;
       }
-      .scA { color: #2F80FF; font-size: 22px; font-weight: 800; }
-      .scB { color: #FF4D2E; font-size: 22px; font-weight: 800; }
-      #killfeed { position: absolute; right: 16px; top: 14px; display: flex; flex-direction: column; gap: 4px; align-items: flex-end; font-size: 13px; }
-      .kfRow { background: rgba(7, 13, 20, 0.74); padding: 4px 10px; border-radius: 3px; border-right: 3px solid var(--amber); }
+      #top {
+        position: absolute;
+        left: 16px;
+        top: 14px;
+        font-size: 18px;
+        text-shadow: 0 1px 4px #000;
+      }
+      #top b {
+        color: var(--amber);
+        font-size: 24px;
+      }
+      #pvpTop {
+        position: absolute;
+        left: 50%;
+        top: 12px;
+        transform: translateX(-50%);
+        display: none;
+        align-items: center;
+        gap: 14px;
+        background: rgba(7, 13, 20, 0.72);
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        padding: 6px 16px;
+        border-radius: 4px;
+        font-size: 15px;
+      }
+      .scA {
+        color: #2f80ff;
+        font-size: 22px;
+        font-weight: 800;
+      }
+      .scB {
+        color: #ff4d2e;
+        font-size: 22px;
+        font-weight: 800;
+      }
+      #killfeed {
+        position: absolute;
+        right: 16px;
+        top: 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        align-items: flex-end;
+        font-size: 13px;
+      }
+      .kfRow {
+        background: rgba(7, 13, 20, 0.74);
+        padding: 4px 10px;
+        border-radius: 3px;
+        border-right: 3px solid var(--amber);
+      }
       #radarCanvas {
-        position: absolute; left: 16px; top: 14px; width: 124px; height: 124px;
-        border-radius: 50%; background: rgba(6, 12, 18, 0.74);
-        border: 2px solid rgba(180, 210, 230, 0.28); display: none;
+        position: absolute;
+        left: 16px;
+        top: 14px;
+        width: 124px;
+        height: 124px;
+        border-radius: 50%;
+        background: rgba(6, 12, 18, 0.74);
+        border: 2px solid rgba(180, 210, 230, 0.28);
+        display: none;
       }
       #hudChatLog {
-        position: absolute; left: 16px; bottom: 84px; width: 320px;
-        display: flex; flex-direction: column; gap: 3px; font-size: 12.5px;
+        position: absolute;
+        left: 16px;
+        bottom: 84px;
+        width: 320px;
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        font-size: 12.5px;
         text-shadow: 0 1px 3px #000;
       }
-      .hudChatRow { background: rgba(7, 13, 20, 0.55); padding: 3px 8px; border-radius: 3px; }
+      .hudChatRow {
+        background: rgba(7, 13, 20, 0.55);
+        padding: 3px 8px;
+        border-radius: 3px;
+      }
       #hudChatInput {
-        position: fixed; left: 16px; bottom: 52px; width: 320px; display: none;
-        z-index: 25; background: rgba(8, 15, 22, 0.9); color: #fff;
+        position: fixed;
+        left: 16px;
+        bottom: 52px;
+        width: 320px;
+        display: none;
+        z-index: 25;
+        background: rgba(8, 15, 22, 0.9);
+        color: #fff;
+      }
+      #perfHud {
+        position: fixed;
+        left: 16px;
+        top: 146px;
+        z-index: 26;
+        display: none;
+        pointer-events: none;
+        padding: 6px 9px;
+        border-radius: 4px;
+        background: rgba(7, 13, 20, 0.8);
+        border: 1px solid rgba(130, 165, 195, 0.35);
+        font:
+          600 11.5px/1.45 ui-monospace,
+          SFMono-Regular,
+          Consolas,
+          monospace;
+        color: #d6ecf8;
+        white-space: pre;
+        text-shadow: 0 1px 2px #000;
       }
       #killAlert {
-        position: absolute; left: 50%; top: 34%; transform: translateX(-50%);
-        font-size: 20px; font-weight: 800; color: #ff4747;
-        text-shadow: 0 2px 10px rgba(0, 0, 0, 0.9); opacity: 0; transition: opacity 0.18s;
+        position: absolute;
+        left: 50%;
+        top: 34%;
+        transform: translateX(-50%);
+        font-size: 20px;
+        font-weight: 800;
+        color: #ff4747;
+        text-shadow: 0 2px 10px rgba(0, 0, 0, 0.9);
+        opacity: 0;
+        transition: opacity 0.18s;
       }
       #respawnBanner {
-        position: absolute; left: 50%; top: 62%; transform: translateX(-50%);
-        background: rgba(9, 15, 22, 0.86); border: 1px solid rgba(255, 90, 60, 0.55);
-        padding: 10px 20px; border-radius: 4px; font-size: 16px; display: none;
+        position: absolute;
+        left: 50%;
+        top: 62%;
+        transform: translateX(-50%);
+        background: rgba(9, 15, 22, 0.86);
+        border: 1px solid rgba(255, 90, 60, 0.55);
+        padding: 10px 20px;
+        border-radius: 4px;
+        font-size: 16px;
+        display: none;
       }
       #sniperScope {
-        position: fixed; inset: 0; display: none; pointer-events: none; z-index: 9;
-        background: radial-gradient(circle at center, transparent 22%, rgba(2, 5, 9, 0.96) 24.5%, #020408 100%);
+        position: fixed;
+        inset: 0;
+        display: none;
+        pointer-events: none;
+        z-index: 9;
+        background: radial-gradient(
+          circle at center,
+          rgba(16, 26, 30, 0.04) 24%,
+          rgba(2, 5, 9, 0.96) 27%,
+          #020408 100%
+        );
       }
-      #sniperScope::before, #sniperScope::after {
-        content: ""; position: absolute; background: rgba(15, 20, 24, 0.9);
+      #scopeReticleWrap {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        will-change: filter, opacity;
       }
-      #sniperScope::before { left: 50%; top: 24%; bottom: 24%; width: 1.5px; transform: translateX(-50%); }
-      #sniperScope::after { top: 50%; left: 32%; right: 32%; height: 1.5px; transform: translateY(-50%); }
-      #cross { position: absolute; left: 50%; top: 50%; width: 22px; height: 22px; margin: -11px 0 0 -11px; transition: opacity 0.1s, transform 0.08s; }
-      #cross::before, #cross::after { content: ""; position: absolute; background: #fff; opacity: 0.85; transition: background 0.08s; }
-      #cross.targetEnemy::before, #cross.targetEnemy::after { background: #ff3838; opacity: 1; }
-      #cross::before { left: 10px; top: 0; width: 2px; height: 22px; clip-path: polygon(0 0, 100% 0, 100% 35%, 0 35%, 0 65%, 100% 65%, 100% 100%, 0 100%); }
-      #cross::after { top: 10px; left: 0; height: 2px; width: 22px; clip-path: polygon(0 0, 35% 0, 35% 100%, 0 100%, 65% 0, 100% 0, 100% 100%, 65% 100%); }
+      #scopeReticleSvg {
+        width: min(62vh, 62vw);
+        height: min(62vh, 62vw);
+        overflow: visible;
+      }
+      #scopeHudMeta {
+        position: absolute;
+        left: 50%;
+        bottom: 13%;
+        transform: translateX(-50%);
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 6px 14px;
+        background: rgba(6, 11, 18, 0.78);
+        border: 1px solid rgba(148, 163, 184, 0.28);
+        border-radius: 3px;
+        font-family: "Chakra Petch", sans-serif;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.9px;
+        color: #e2e8f0;
+      }
+      #scopeZoomBadge {
+        color: #f0b429;
+      }
+      #scopeZeroBadge {
+        color: #7dd3fc;
+      }
+      #scopeBreathWrap {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 11px;
+        color: #cbd5e1;
+      }
+      .scopeBreathTrack {
+        width: 72px;
+        height: 6px;
+        background: rgba(148, 163, 184, 0.24);
+        border-radius: 999px;
+        overflow: hidden;
+      }
+      #scopeBreathFill {
+        width: 100%;
+        height: 100%;
+        background: #4ec3b0;
+        transition: background-color 0.15s ease;
+      }
+      #cross {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 22px;
+        height: 22px;
+        margin: -11px 0 0 -11px;
+        transition:
+          opacity 0.1s,
+          transform 0.08s;
+      }
+      #cross::before,
+      #cross::after {
+        content: "";
+        position: absolute;
+        background: #fff;
+        opacity: 0.85;
+        transition: background 0.08s;
+      }
+      #cross.targetEnemy::before,
+      #cross.targetEnemy::after {
+        background: #ff3838;
+        opacity: 1;
+      }
+      #cross::before {
+        left: 10px;
+        top: 0;
+        width: 2px;
+        height: 22px;
+        clip-path: polygon(
+          0 0,
+          100% 0,
+          100% 35%,
+          0 35%,
+          0 65%,
+          100% 65%,
+          100% 100%,
+          0 100%
+        );
+      }
+      #cross::after {
+        top: 10px;
+        left: 0;
+        height: 2px;
+        width: 22px;
+        clip-path: polygon(
+          0 0,
+          35% 0,
+          35% 100%,
+          0 100%,
+          65% 0,
+          100% 0,
+          100% 100%,
+          65% 100%
+        );
+      }
       #reloadRingWrap {
-        position: absolute; left: 50%; top: 50%; width: 46px; height: 46px;
-        margin: -23px 0 0 -23px; display: none; pointer-events: none;
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 46px;
+        height: 46px;
+        margin: -23px 0 0 -23px;
+        display: none;
+        pointer-events: none;
       }
       #reloadHint {
-        position: absolute; left: 50%; top: calc(50% + 28px); transform: translateX(-50%);
-        font-size: 12.5px; font-weight: 700; color: #ff5b4a;
-        text-shadow: 0 1px 4px #000; display: none;
+        position: absolute;
+        left: 50%;
+        top: calc(50% + 28px);
+        transform: translateX(-50%);
+        font-size: 12.5px;
+        font-weight: 700;
+        color: #ff5b4a;
+        text-shadow: 0 1px 4px #000;
+        display: none;
       }
-      #hm { position: absolute; left: 50%; top: 50%; width: 30px; height: 30px; margin: -15px 0 0 -15px; border: 2px solid var(--amber); transform: rotate(45deg); opacity: 0; }
-      #dmg { position: absolute; inset: 0; box-shadow: inset 0 0 140px 30px #c0291e; opacity: 0; }
+      #hm {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 30px;
+        height: 30px;
+        margin: -15px 0 0 -15px;
+        border: 2px solid var(--amber);
+        transform: rotate(45deg);
+        opacity: 0;
+      }
+      #dmg {
+        position: absolute;
+        inset: 0;
+        box-shadow: inset 0 0 140px 30px #c0291e;
+        opacity: 0;
+      }
       #lowHpOverlay {
-        position: fixed; inset: 0; pointer-events: none; opacity: 0;
-        background: radial-gradient(ellipse at center, rgba(130, 14, 10, 0) 40%, rgba(165, 20, 14, 0.62) 78%, rgba(95, 6, 6, 0.90) 100%);
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        opacity: 0;
+        background: radial-gradient(
+          ellipse at center,
+          rgba(130, 14, 10, 0) 40%,
+          rgba(165, 20, 14, 0.62) 78%,
+          rgba(95, 6, 6, 0.9) 100%
+        );
         box-shadow: inset 0 0 130px 26px rgba(155, 16, 12, 0.72);
         transition: opacity 0.12s linear;
       }
-      #bot { position: absolute; left: 16px; right: 16px; bottom: 16px; display: flex; justify-content: space-between; align-items: flex-end; }
+      #bot {
+        position: absolute;
+        left: 16px;
+        right: 16px;
+        bottom: 16px;
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-end;
+      }
       #vignette {
-        position: fixed; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.25s;
-        background: radial-gradient(ellipse at center, rgba(0,0,0,0) 56%, rgba(6,9,13,0.38) 100%);
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.25s;
+        background: radial-gradient(
+          ellipse at center,
+          rgba(0, 0, 0, 0) 56%,
+          rgba(6, 9, 13, 0.38) 100%
+        );
       }
-      #hpWrap { display: flex; flex-direction: column; gap: 5px; }
-      #postureBadge { font-size: 12px; color: #b5cbd8; text-shadow: 0 1px 3px #000; }
-      #hpRow { display: flex; align-items: center; gap: 8px; }
-      #hp { width: 200px; height: 12px; background: rgba(0, 0, 0, 0.52); border: 1px solid #ffffff55; }
-      #hpb { height: 100%; width: 100%; background: #4ec3b0; transition: width 0.15s; }
-      #hpLabel { font-size: 12px; color: #e6f1f6; text-shadow: 0 1px 3px #000; letter-spacing: 0.3px; }
-      #ammoWrap { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
-      #weaponBar { display: flex; gap: 6px; }
+      #hpWrap {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+      }
+      #postureBadge {
+        font-size: 12px;
+        color: #b5cbd8;
+        text-shadow: 0 1px 3px #000;
+      }
+      #hpRow {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      #hp {
+        width: 200px;
+        height: 12px;
+        background: rgba(0, 0, 0, 0.52);
+        border: 1px solid #ffffff55;
+      }
+      #hpb {
+        height: 100%;
+        width: 100%;
+        background: #4ec3b0;
+        transition: width 0.15s;
+      }
+      #hpLabel {
+        font-size: 12px;
+        color: #e6f1f6;
+        text-shadow: 0 1px 3px #000;
+        letter-spacing: 0.3px;
+      }
+      #ammoWrap {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 6px;
+      }
+      #weaponBar {
+        display: flex;
+        gap: 6px;
+      }
       .wSlot {
-        font-size: 11.5px; padding: 3px 8px; border-radius: 3px;
-        background: rgba(7, 13, 20, 0.65); border: 1px solid rgba(255, 255, 255, 0.16); color: #9ab0be;
+        font-size: 11.5px;
+        padding: 3px 8px;
+        border-radius: 3px;
+        background: rgba(7, 13, 20, 0.65);
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        color: #9ab0be;
       }
-      .wSlot.active { background: rgba(240, 180, 41, 0.22); border-color: var(--amber); color: #fff; font-weight: 700; }
-      #am { font-size: 32px; text-shadow: 0 1px 4px #000; }
-      #am.amLow { color: #ff4747; }
+      .wSlot.active {
+        background: rgba(240, 180, 41, 0.22);
+        border-color: var(--amber);
+        color: #fff;
+        font-weight: 700;
+      }
+      #am {
+        font-size: 32px;
+        text-shadow: 0 1px 4px #000;
+      }
+      #am.amLow {
+        color: #ff4747;
+      }
       .bindRow {
-        display: flex; justify-content: space-between; align-items: center;
-        padding: 4px 6px; border-bottom: 1px solid rgba(130, 155, 175, 0.14); font-size: 13px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 4px 6px;
+        border-bottom: 1px solid rgba(130, 155, 175, 0.14);
+        font-size: 13px;
       }
       #scoreboard {
-        position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
-        width: min(640px, 90vw); background: rgba(9, 16, 24, 0.92);
-        border: 1px solid rgba(240, 180, 41, 0.45); padding: 14px 18px;
-        display: none; z-index: 15; pointer-events: none; color: #eef6fa;
+        position: fixed;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        width: min(640px, 90vw);
+        background: rgba(9, 16, 24, 0.92);
+        border: 1px solid rgba(240, 180, 41, 0.45);
+        padding: 14px 18px;
+        display: none;
+        z-index: 15;
+        pointer-events: none;
+        color: #eef6fa;
       }
-      #scoreboard h2 { margin: 0 0 8px; font-size: 16px; color: var(--amber); }
-      #scoreboard th, #scoreboard td { padding: 6px 8px; text-align: left; border-bottom: 1px solid rgba(255, 255, 255, 0.08); font-size: 13px; }
+      #scoreboard h2 {
+        margin: 0 0 8px;
+        font-size: 16px;
+        color: var(--amber);
+      }
+      #scoreboard th,
+      #scoreboard td {
+        padding: 6px 8px;
+        text-align: left;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        font-size: 13px;
+      }
 
       /* Startup & Map-Switch Loading Overlay (Full-bleed 3D Squad + Bottom Progress Bar) */
       @keyframes loadingKenBurns {
-        from { transform: scale(1.0); }
-        to { transform: scale(1.045); }
+        from {
+          transform: scale(1);
+        }
+        to {
+          transform: scale(1.045);
+        }
       }
       @keyframes loadingSheen {
-        from { transform: translateX(-120%); }
-        to { transform: translateX(320%); }
+        from {
+          transform: translateX(-120%);
+        }
+        to {
+          transform: translateX(320%);
+        }
       }
       #loadingOverlay {
-        position: fixed; inset: 0; z-index: 100;
-        display: grid; grid-template-rows: auto 1fr auto;
+        position: fixed;
+        inset: 0;
+        z-index: 100;
+        display: grid;
+        grid-template-rows: auto 1fr auto;
         overflow: hidden;
         background: radial-gradient(circle at 50% 34%, #132230 0%, #070c11 72%);
       }
       .loadingBgImg {
-        position: absolute; inset: 0; width: 100%; height: 100%;
-        object-fit: cover; object-position: center 26%;
-        pointer-events: none; user-select: none;
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        object-position: center 26%;
+        pointer-events: none;
+        user-select: none;
         will-change: transform;
         animation: loadingKenBurns 18s ease-out forwards;
       }
       .loadingScrim {
-        position: absolute; inset: 0; pointer-events: none;
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
         background:
           linear-gradient(
             to top,
@@ -249,84 +1438,628 @@
             rgba(6, 11, 18, 0.08) 62%,
             rgba(4, 8, 13, 0.42) 100%
           ),
-          radial-gradient(ellipse at center 42%, rgba(0, 0, 0, 0) 52%, rgba(3, 6, 10, 0.58) 100%);
+          radial-gradient(
+            ellipse at center 42%,
+            rgba(0, 0, 0, 0) 52%,
+            rgba(3, 6, 10, 0.58) 100%
+          );
       }
       .loadingTopBrand {
-        position: relative; z-index: 2;
+        position: relative;
+        z-index: 2;
         padding: 20px 28px 0;
-        display: flex; align-items: center; gap: 10px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
       }
       .loadingBrandAccent {
-        width: 4px; height: 22px; background: var(--amber);
+        width: 4px;
+        height: 22px;
+        background: var(--amber);
         box-shadow: 0 0 12px rgba(240, 180, 41, 0.7);
       }
       .loadingTag {
-        font-size: 12px; letter-spacing: 2px; font-weight: 800;
+        font-size: 12px;
+        letter-spacing: 2px;
+        font-weight: 800;
         color: rgba(235, 244, 250, 0.92);
         text-shadow: 0 2px 10px rgba(0, 0, 0, 0.85);
       }
       .loadingBottomDock {
-        position: relative; z-index: 2;
+        position: relative;
+        z-index: 2;
         width: min(960px, calc(100vw - 48px));
         margin: 0 auto;
         padding: 0 0 26px;
       }
       .loadingMetaRow {
-        display: flex; justify-content: space-between; align-items: flex-end;
-        gap: 16px; margin-bottom: 9px;
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-end;
+        gap: 16px;
+        margin-bottom: 9px;
       }
       .loadingTitleGroup {
-        display: flex; flex-direction: column; gap: 2px; min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        min-width: 0;
       }
       #loadingTitle {
-        margin: 0; font-size: 18px; font-weight: 800; letter-spacing: 0.4px;
+        margin: 0;
+        font-size: 18px;
+        font-weight: 800;
+        letter-spacing: 0.4px;
         color: #f3f8fc;
         text-shadow: 0 2px 12px rgba(0, 0, 0, 0.9);
       }
       #loadingStatus {
-        font-size: 13px; font-weight: 600; color: rgba(215, 229, 238, 0.92);
+        font-size: 13px;
+        font-weight: 600;
+        color: rgba(215, 229, 238, 0.92);
         text-shadow: 0 1px 6px rgba(0, 0, 0, 0.9);
       }
       #loadingPercent {
-        color: var(--amber); font-size: 24px; font-weight: 800; line-height: 1;
+        color: var(--amber);
+        font-size: 24px;
+        font-weight: 800;
+        line-height: 1;
         font-variant-numeric: tabular-nums;
-        text-shadow: 0 0 16px rgba(240, 180, 41, 0.45), 0 2px 8px rgba(0, 0, 0, 0.9);
+        text-shadow:
+          0 0 16px rgba(240, 180, 41, 0.45),
+          0 2px 8px rgba(0, 0, 0, 0.9);
       }
       .loadingTrack {
-        position: relative; width: 100%; height: 7px; border-radius: 999px; overflow: hidden;
+        position: relative;
+        width: 100%;
+        height: 7px;
+        border-radius: 999px;
+        overflow: hidden;
         background: rgba(255, 255, 255, 0.14);
         border: 1px solid rgba(255, 255, 255, 0.12);
         box-shadow: 0 2px 12px rgba(0, 0, 0, 0.65);
       }
       #loadingBarFill {
-        position: relative; height: 100%; width: 4%; border-radius: 999px; overflow: hidden;
-        background: linear-gradient(90deg, #d98e16 0%, #f5c242 65%, #ffe699 100%);
+        position: relative;
+        height: 100%;
+        width: 4%;
+        border-radius: 999px;
+        overflow: hidden;
+        background: linear-gradient(
+          90deg,
+          #d98e16 0%,
+          #f5c242 65%,
+          #ffe699 100%
+        );
         box-shadow: 0 0 14px rgba(245, 194, 66, 0.65);
         transition: width 0.12s ease-out;
       }
       #loadingBarFill::after {
-        content: ""; position: absolute; inset: 0; width: 35%;
-        background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.65), transparent);
+        content: "";
+        position: absolute;
+        inset: 0;
+        width: 35%;
+        background: linear-gradient(
+          90deg,
+          transparent,
+          rgba(255, 255, 255, 0.65),
+          transparent
+        );
         animation: loadingSheen 1.6s linear infinite;
       }
       .loadingFootRow {
-        margin-top: 8px; display: flex; justify-content: space-between; align-items: center;
-        flex-wrap: wrap; gap: 8px 16px;
-        font-size: 12px; color: rgba(186, 206, 220, 0.84);
+        margin-top: 8px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px 16px;
+        font-size: 12px;
+        color: rgba(186, 206, 220, 0.84);
         text-shadow: 0 1px 6px rgba(0, 0, 0, 0.9);
       }
-      #loadingDetail { min-height: 16px; }
-      .loadingTip { color: rgba(240, 180, 41, 0.82); font-weight: 600; }
+      #loadingDetail {
+        min-height: 16px;
+      }
+      .loadingTip {
+        color: rgba(240, 180, 41, 0.82);
+        font-weight: 600;
+      }
+
+      /* Solo Offline Defeat Screen ("TỬ TRẬN") — Minimalist Cinematic Tactical Overlay */
+      #defeatOverlay {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        background-color: #050608;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 45;
+        overflow: hidden;
+        opacity: 1;
+        visibility: visible;
+        transition:
+          opacity 0.85s cubic-bezier(0.22, 1, 0.36, 1),
+          visibility 0.85s ease;
+      }
+      #defeatOverlay.hidden-screen {
+        opacity: 0;
+        visibility: hidden;
+        pointer-events: none;
+      }
+      #defeatAtmosphereCanvas {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        z-index: 1;
+        pointer-events: none;
+      }
+      .defeatAmbientGlow {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: min(88vw, 820px);
+        height: min(64vh, 500px);
+        transform: translate(-50%, -50%);
+        background: radial-gradient(
+          ellipse at center,
+          rgba(153, 27, 27, 0.28) 0%,
+          rgba(69, 10, 10, 0.14) 44%,
+          rgba(5, 6, 8, 0) 74%
+        );
+        z-index: 2;
+        pointer-events: none;
+        will-change: transform, opacity;
+        animation: defeatBreatheGlow 5.5s ease-in-out infinite;
+      }
+      @keyframes defeatBreatheGlow {
+        0%,
+        100% {
+          opacity: 0.7;
+          transform: translate(-50%, -50%) scale(0.96);
+        }
+        50% {
+          opacity: 1;
+          transform: translate(-50%, -50%) scale(1.06);
+        }
+      }
+      .defeatVignette {
+        position: absolute;
+        inset: 0;
+        z-index: 3;
+        pointer-events: none;
+        background: radial-gradient(
+          circle at center,
+          rgba(5, 6, 8, 0) 32%,
+          rgba(5, 6, 8, 0.72) 76%,
+          rgba(0, 0, 0, 0.96) 100%
+        );
+      }
+      .defeatFilmGrain {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        z-index: 4;
+        pointer-events: none;
+        opacity: 0.04;
+        background-image: url("data:image/svg+xml,%3Csvg width='140' height='140' viewBox='0 0 140 140' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+        background-size: 140px 140px;
+      }
+      #defeatRedFlash {
+        position: absolute;
+        inset: 0;
+        z-index: 15;
+        pointer-events: none;
+        opacity: 0;
+        background: radial-gradient(
+          circle,
+          rgba(185, 28, 28, 0.42) 0%,
+          rgba(69, 10, 10, 0.68) 70%,
+          rgba(0, 0, 0, 0.85) 100%
+        );
+      }
+      #defeatRedFlash.flash-active {
+        animation: defeatRedFlashAnim 0.95s ease-out forwards;
+      }
+      @keyframes defeatRedFlashAnim {
+        0% {
+          opacity: 0.92;
+        }
+        25% {
+          opacity: 0.4;
+        }
+        100% {
+          opacity: 0;
+        }
+      }
+      #defeatLightSweep {
+        position: absolute;
+        top: 50%;
+        left: 0;
+        width: 100%;
+        height: 2px;
+        z-index: 14;
+        pointer-events: none;
+        opacity: 0;
+        transform: translateY(-50%) scaleX(0);
+        background: linear-gradient(
+          90deg,
+          transparent 0%,
+          rgba(239, 68, 68, 0.25) 25%,
+          rgba(255, 255, 255, 0.85) 50%,
+          rgba(239, 68, 68, 0.25) 75%,
+          transparent 100%
+        );
+        box-shadow: 0 0 22px 4px rgba(239, 68, 68, 0.55);
+      }
+      #defeatLightSweep.sweep-active {
+        animation: defeatSweepAnim 0.85s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+      }
+      @keyframes defeatSweepAnim {
+        0% {
+          opacity: 0;
+          transform: translateY(-50%) scaleX(0.05);
+        }
+        25% {
+          opacity: 1;
+          transform: translateY(-50%) scaleX(1.1);
+        }
+        100% {
+          opacity: 0;
+          transform: translateY(-50%) scaleX(1.4);
+        }
+      }
+      .defeatImpactStage {
+        position: relative;
+        z-index: 10;
+        width: 100%;
+        max-width: 900px;
+        padding: 2rem 1.5rem;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+        will-change: transform;
+      }
+      .defeatImpactStage.shake-active {
+        animation: defeatImpactShake 0.65s cubic-bezier(0.36, 0.07, 0.19, 0.97)
+          both;
+      }
+      @keyframes defeatImpactShake {
+        0%,
+        100% {
+          transform: translate3d(0, 0, 0);
+        }
+        12% {
+          transform: translate3d(-9px, -5px, 0) rotate(-0.45deg);
+        }
+        26% {
+          transform: translate3d(8px, 6px, 0) rotate(0.4deg);
+        }
+        40% {
+          transform: translate3d(-6px, 3px, 0) rotate(-0.25deg);
+        }
+        56% {
+          transform: translate3d(4px, -3px, 0) rotate(0.15deg);
+        }
+        74% {
+          transform: translate3d(-2px, 1px, 0);
+        }
+      }
+      .defeatTitleBlock {
+        width: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        margin-bottom: 3.1rem;
+      }
+      .defeatLine {
+        width: min(72vw, 480px);
+        height: 1px;
+        background: linear-gradient(
+          90deg,
+          transparent 0%,
+          rgba(148, 163, 184, 0.28) 22%,
+          rgba(220, 38, 38, 0.85) 50%,
+          rgba(148, 163, 184, 0.28) 78%,
+          transparent 100%
+        );
+        transform: scaleX(0);
+        opacity: 0;
+        transition:
+          transform 1.25s cubic-bezier(0.16, 1, 0.3, 1),
+          opacity 1s ease;
+      }
+      .defeatLine.expanded {
+        transform: scaleX(1);
+        opacity: 1;
+      }
+      .defeatTitle {
+        position: relative;
+        font-family:
+          "Oswald", "Chakra Petch", "Bahnschrift", "Impact", sans-serif;
+        font-weight: 700;
+        font-size: clamp(3.4rem, 10vw, 6.8rem);
+        line-height: 1.1;
+        text-transform: uppercase;
+        color: #f8fafc;
+        margin: 1.15rem 0;
+        padding-left: 0.22em;
+        letter-spacing: 0.04em;
+        opacity: 0;
+        filter: blur(14px);
+        transform: scale(1.16);
+        text-shadow:
+          0 0 28px rgba(220, 38, 38, 0.48),
+          0 0 65px rgba(127, 29, 29, 0.42);
+        will-change: transform, filter, letter-spacing, opacity;
+      }
+      .defeatTitle.reveal-active {
+        animation: defeatTitleReveal 1.55s cubic-bezier(0.16, 1, 0.3, 1)
+          forwards;
+      }
+      @keyframes defeatTitleReveal {
+        0% {
+          opacity: 0;
+          filter: blur(12px);
+          transform: scale(1.16);
+          letter-spacing: 0.02em;
+        }
+        40% {
+          opacity: 0.9;
+          filter: blur(2px);
+          transform: scale(1.03);
+        }
+        100% {
+          opacity: 1;
+          filter: none;
+          transform: scale(1);
+          letter-spacing: 0.24em;
+        }
+      }
+      .defeatTitle::before,
+      .defeatTitle::after {
+        content: attr(data-text);
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        padding-left: 0.22em;
+        opacity: 0;
+        pointer-events: none;
+      }
+      .defeatTitle.reveal-active::before {
+        color: #ef4444;
+        z-index: -1;
+        clip-path: polygon(0 12%, 100% 12%, 100% 42%, 0 42%);
+        animation: defeatGlitchRed 4.6s infinite linear;
+      }
+      .defeatTitle.reveal-active::after {
+        color: #38bdf8;
+        z-index: -2;
+        clip-path: polygon(0 58%, 100% 58%, 100% 88%, 0 88%);
+        animation: defeatGlitchCyan 5.2s infinite linear;
+      }
+      @keyframes defeatGlitchRed {
+        0%,
+        84%,
+        100% {
+          opacity: 0;
+          transform: translate(0, 0);
+        }
+        86% {
+          opacity: 0.75;
+          transform: translate(-4px, -1px);
+        }
+        88% {
+          opacity: 0.4;
+          transform: translate(3px, 1px);
+        }
+        90% {
+          opacity: 0.85;
+          transform: translate(-2px, 0);
+        }
+        92% {
+          opacity: 0;
+          transform: translate(0, 0);
+        }
+      }
+      @keyframes defeatGlitchCyan {
+        0%,
+        80%,
+        100% {
+          opacity: 0;
+          transform: translate(0, 0);
+        }
+        82% {
+          opacity: 0.65;
+          transform: translate(4px, 1px);
+        }
+        85% {
+          opacity: 0.35;
+          transform: translate(-3px, -1px);
+        }
+        87% {
+          opacity: 0.7;
+          transform: translate(2px, 0);
+        }
+        89% {
+          opacity: 0;
+          transform: translate(0, 0);
+        }
+      }
+      .defeatActionArea {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 1.1rem;
+        opacity: 0;
+        transform: translateY(16px);
+        transition:
+          opacity 0.8s ease,
+          transform 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+      }
+      .defeatActionArea.visible {
+        opacity: 1;
+        transform: translateY(0);
+      }
+      .btnDefeatTactical {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 240px;
+        padding: 0.95rem 2.4rem;
+        background: rgba(15, 18, 25, 0.72);
+        border: 1px solid rgba(148, 163, 184, 0.24);
+        border-radius: 0;
+        color: #f1f5f9;
+        font-family: "Chakra Petch", "Be Vietnam Pro", "Segoe UI", sans-serif;
+        font-weight: 600;
+        font-size: 0.95rem;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        cursor: pointer;
+        overflow: hidden;
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        transition:
+          background 0.28s ease,
+          border-color 0.28s ease,
+          box-shadow 0.28s ease,
+          color 0.28s ease,
+          transform 0.2s ease;
+      }
+      .btnDefeatTactical .corner {
+        position: absolute;
+        width: 9px;
+        height: 9px;
+        pointer-events: none;
+        transition:
+          border-color 0.28s ease,
+          width 0.25s ease,
+          height 0.25s ease;
+      }
+      .btnDefeatTactical .c-tl {
+        top: -1px;
+        left: -1px;
+        border-top: 2px solid #dc2626;
+        border-left: 2px solid #dc2626;
+      }
+      .btnDefeatTactical .c-tr {
+        top: -1px;
+        right: -1px;
+        border-top: 2px solid rgba(248, 250, 252, 0.5);
+        border-right: 2px solid rgba(248, 250, 252, 0.5);
+      }
+      .btnDefeatTactical .c-bl {
+        bottom: -1px;
+        left: -1px;
+        border-bottom: 2px solid rgba(248, 250, 252, 0.5);
+        border-left: 2px solid rgba(248, 250, 252, 0.5);
+      }
+      .btnDefeatTactical .c-br {
+        bottom: -1px;
+        right: -1px;
+        border-bottom: 2px solid #dc2626;
+        border-right: 2px solid #dc2626;
+      }
+      .btnDefeatTactical .defeatBtnProgress {
+        position: absolute;
+        left: 0;
+        bottom: 0;
+        height: 2px;
+        width: 100%;
+        background: linear-gradient(90deg, #991b1b, #ef4444, #fca5a5);
+        transform-origin: left center;
+        transform: scaleX(1);
+      }
+      .btnDefeatTactical:hover {
+        background: rgba(127, 29, 29, 0.38);
+        border-color: rgba(239, 68, 68, 0.72);
+        color: #ffffff;
+        box-shadow:
+          0 0 26px rgba(220, 38, 38, 0.35),
+          inset 0 0 14px rgba(255, 255, 255, 0.08);
+        transform: translateY(-1px);
+      }
+      .btnDefeatTactical:hover .corner {
+        width: 13px;
+        height: 13px;
+        border-color: #ffffff;
+      }
+      .btnDefeatTactical:active {
+        transform: translateY(0) scale(0.985);
+      }
+      .defeatCountdownWrap {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.55rem;
+        width: 240px;
+      }
+      .defeatCountdownText {
+        margin: 0;
+        font-family: "Be Vietnam Pro", "Segoe UI", sans-serif;
+        font-size: 0.8rem;
+        font-weight: 400;
+        letter-spacing: 0.06em;
+        color: #94a3b8;
+      }
+      .defeatCountdownText span {
+        color: #f87171;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+      }
+      .defeatProgressTrack {
+        width: 100%;
+        height: 2px;
+        background: rgba(148, 163, 184, 0.16);
+        overflow: hidden;
+        border-radius: 999px;
+      }
+      .defeatProgressFill {
+        width: 100%;
+        height: 100%;
+        background: linear-gradient(
+          90deg,
+          rgba(185, 28, 28, 0.85),
+          rgba(248, 113, 113, 0.95)
+        );
+        transform-origin: left center;
+        transform: scaleX(1);
+      }
+      @media (max-width: 480px) {
+        .btnDefeatTactical {
+          min-width: 215px;
+          padding: 0.85rem 1.8rem;
+          font-size: 0.88rem;
+        }
+        .defeatCountdownWrap {
+          width: 215px;
+        }
+      }
     </style>
   </head>
   <body>
     <!-- Màn hình Loading khởi động & chuyển bản đồ (hiển thị ngay từ 0ms với ảnh đội đặc nhiệm 3D + thanh tiến độ dưới đáy) -->
     <div id="loadingOverlay" role="status" aria-live="polite">
-      <img class="loadingBgImg" src="/assets/loading_bg.webp" alt="" decoding="sync" fetchpriority="high" />
+      <img
+        class="loadingBgImg"
+        src="/assets/loading_bg.webp"
+        alt=""
+        decoding="sync"
+        fetchpriority="high"
+      />
       <div class="loadingScrim"></div>
       <div class="loadingTopBrand">
         <span class="loadingBrandAccent"></span>
-        <span class="loadingTag">BẾN CẢNG MƯA • TRUY KÍCH MẠNG LAN</span>
+        <span class="loadingTag">BEFORE THE BREACH • Multiplayer</span>
       </div>
       <div></div>
       <div class="loadingBottomDock">
@@ -341,11 +2074,19 @@
           <div id="loadingBarFill"></div>
         </div>
         <div class="loadingFootRow">
-          <span id="loadingDetail">Đang giải mã tài nguyên — vui lòng chờ trong giây lát...</span>
-          <span class="loadingTip">Mẹo: Phím 1 / 2 / 3 đổi súng • Chuột phải ngắm ADS • C / Ctrl ngồi</span>
+          <span id="loadingDetail"
+            >Đang giải mã tài nguyên — vui lòng chờ trong giây lát...</span
+          >
+          <span class="loadingTip"
+            >Mẹo: Phím 1 / 2 / 3 đổi súng • Chuột phải ngắm ADS • C / Ctrl
+            ngồi</span
+          >
         </div>
       </div>
     </div>
+
+    <!-- Bảng đo hiệu năng tùy chọn (bật/tắt bằng phím F3 hoặc trong Cài đặt) -->
+    <div id="perfHud" aria-live="off"></div>
 
     <!-- HUD trong trận -->
     <div id="hud">
@@ -353,9 +2094,13 @@
       <div id="top">Đợt <b id="wv">0</b> &nbsp; Điểm <b id="sc">0</b></div>
       <canvas id="radarCanvas" width="124" height="124"></canvas>
       <div id="pvpTop">
-        <span style="color:#2F80FF">▲ Đặc Nhiệm <b class="scA" id="scA">0</b></span>
+        <span style="color: #2f80ff"
+          >▲ Đặc Nhiệm <b class="scA" id="scA">0</b></span
+        >
         <span id="pvpMeta">10:00 | 30 Mạng</span>
-        <span style="color:#FF4D2E"><b class="scB" id="scB">0</b> Nổi Loạn ●</span>
+        <span style="color: #ff4d2e"
+          ><b class="scB" id="scB">0</b> Nổi Loạn ●</span
+        >
       </div>
       <div id="killfeed"></div>
       <div id="hudChatLog"></div>
@@ -363,20 +2108,122 @@
       <div id="respawnBanner"></div>
       <div id="lowHpOverlay"></div>
       <div id="dmg"></div>
-      <div id="sniperScope"></div>
+      <div id="sniperScope">
+        <div id="scopeReticleWrap">
+          <svg
+            id="scopeReticleSvg"
+            viewBox="-200 -200 400 400"
+            aria-hidden="true"
+          >
+            <line
+              x1="-200"
+              y1="0"
+              x2="-12"
+              y2="0"
+              stroke="rgba(18,24,30,0.92)"
+              stroke-width="1.6"
+            />
+            <line
+              x1="12"
+              y1="0"
+              x2="200"
+              y2="0"
+              stroke="rgba(18,24,30,0.92)"
+              stroke-width="1.6"
+            />
+            <line
+              x1="0"
+              y1="-200"
+              x2="0"
+              y2="-12"
+              stroke="rgba(18,24,30,0.92)"
+              stroke-width="1.6"
+            />
+            <line
+              x1="0"
+              y1="12"
+              x2="0"
+              y2="200"
+              stroke="rgba(18,24,30,0.92)"
+              stroke-width="1.6"
+            />
+            <line
+              x1="-200"
+              y1="0"
+              x2="-92"
+              y2="0"
+              stroke="rgba(12,16,20,0.96)"
+              stroke-width="3.4"
+            />
+            <line
+              x1="92"
+              y1="0"
+              x2="200"
+              y2="0"
+              stroke="rgba(12,16,20,0.96)"
+              stroke-width="3.4"
+            />
+            <line
+              x1="0"
+              y1="92"
+              x2="0"
+              y2="200"
+              stroke="rgba(12,16,20,0.96)"
+              stroke-width="3.4"
+            />
+            <circle cx="-48" cy="0" r="2" fill="rgba(22,28,34,0.92)" />
+            <circle cx="-24" cy="0" r="1.6" fill="rgba(22,28,34,0.92)" />
+            <circle cx="24" cy="0" r="1.6" fill="rgba(22,28,34,0.92)" />
+            <circle cx="48" cy="0" r="2" fill="rgba(22,28,34,0.92)" />
+            <circle cx="0" cy="-48" r="2" fill="rgba(22,28,34,0.92)" />
+            <circle cx="0" cy="-24" r="1.6" fill="rgba(22,28,34,0.92)" />
+            <circle cx="0" cy="24" r="1.6" fill="rgba(22,28,34,0.92)" />
+            <circle cx="0" cy="48" r="2" fill="rgba(22,28,34,0.92)" />
+            <circle cx="0" cy="0" r="2.2" fill="#ef4444" />
+          </svg>
+        </div>
+        <div id="scopeHudMeta">
+          <span id="scopeZoomBadge">2.5x</span>
+          <span id="scopeZeroBadge">ZERO 100m [ / ]</span>
+          <div id="scopeBreathWrap">
+            <span>THỞ [SHIFT]</span>
+            <div class="scopeBreathTrack"><div id="scopeBreathFill"></div></div>
+          </div>
+        </div>
+      </div>
       <div id="cross"></div>
       <svg id="reloadRingWrap" viewBox="0 0 46 46">
-        <circle cx="23" cy="23" r="17" fill="none" stroke="rgba(255,255,255,0.22)" stroke-width="3"></circle>
-        <circle id="reloadArc" cx="23" cy="23" r="17" fill="none" stroke="#f0b429" stroke-width="3"
-                stroke-linecap="round" stroke-dasharray="106.81" stroke-dashoffset="106.81"
-                transform="rotate(-90 23 23)"></circle>
+        <circle
+          cx="23"
+          cy="23"
+          r="17"
+          fill="none"
+          stroke="rgba(255,255,255,0.22)"
+          stroke-width="3"
+        ></circle>
+        <circle
+          id="reloadArc"
+          cx="23"
+          cy="23"
+          r="17"
+          fill="none"
+          stroke="#f0b429"
+          stroke-width="3"
+          stroke-linecap="round"
+          stroke-dasharray="106.81"
+          stroke-dashoffset="106.81"
+          transform="rotate(-90 23 23)"
+        ></circle>
       </svg>
       <div id="reloadHint">Nạp đạn (R)</div>
       <div id="hm"></div>
       <div id="bot">
         <div id="hpWrap">
           <div id="postureBadge">Đứng</div>
-          <div id="hpRow"><div id="hp"><div id="hpb"></div></div><span id="hpLabel">MÁU 100 / 100</span></div>
+          <div id="hpRow">
+            <div id="hp"><div id="hpb"></div></div>
+            <span id="hpLabel">MÁU 100 / 100</span>
+          </div>
         </div>
         <div id="ammoWrap">
           <div id="weaponBar">
@@ -388,85 +2235,466 @@
         </div>
       </div>
     </div>
-    <input id="hudChatInput" maxlength="120" placeholder="Nhắn nhanh trong trận (Enter gửi, Esc đóng)..." />
+    <input
+      id="hudChatInput"
+      maxlength="120"
+      placeholder="Nhắn nhanh trong trận (Enter gửi, Esc đóng)..."
+    />
 
     <div id="scoreboard">
       <h2 id="sbTitle">Bảng điểm</h2>
-      <table style="width:100%;border-collapse:collapse">
-        <thead><tr><th>Chiến binh</th><th>Phe</th><th>Hạ</th><th>Tử</th><th>HS</th><th>Trạng thái</th></tr></thead>
+      <table style="width: 100%; border-collapse: collapse">
+        <thead>
+          <tr>
+            <th>Chiến binh</th>
+            <th>Phe</th>
+            <th>Hạ</th>
+            <th>Tử</th>
+            <th>HS</th>
+            <th>Trạng thái</th>
+          </tr>
+        </thead>
         <tbody id="sbBody"></tbody>
       </table>
     </div>
 
-    <!-- Màn 1: LOBBY -->
-    <div id="screenLobby" class="screenLayer" style="display:grid">
-      <div class="card">
-        <div class="topBar">
-          <div>
-            <h1 style="margin:0;font-size:24px">Bến Cảng Mưa — Truy Kích Mạng LAN</h1>
-            <span id="netStatusBadge" class="statusPill warn">Đang kết nối máy chủ LAN...</span>
+    <!-- Màn 1: SẢNH CHÍNH 3D (Top-Left Tên, Top-Right Cài đặt, Center 3 Chế độ & Màn Chọn Map 3D) -->
+    <div
+      id="screenLobby"
+      class="screenLayer"
+      style="display: grid"
+      data-lobby-view="home"
+    >
+      <header class="lobbyTopHud">
+        <div class="lobbyOperatorWrap">
+          <div class="lobbyOperatorCard">
+            <span class="lobbyOpTag">CHIẾN BINH</span>
+            <input
+              id="nickInput"
+              class="lobbyNickInput"
+              maxlength="16"
+              placeholder="Tên chiến binh"
+            />
+            <span id="netStatusBadge" class="statusPill warn"
+              >Đang kết nối LAN...</span
+            >
           </div>
-          <div class="row">
-            <label style="font-size:12.5px;color:var(--sub)">Tên:</label>
-            <input id="nickInput" maxlength="16" placeholder="Tên chiến binh" style="width:150px" />
-            <button id="btnOpenSettingsLobby" type="button" class="sec btnSm">Cài đặt</button>
-          </div>
-        </div>
-
-        <div id="lanShare" class="lanShare">
-          <span id="lanShareText"></span>
-          <button id="btnCopyUrl" type="button" class="sec btnSm">Copy link</button>
-        </div>
-
-        <div id="lobbyError" class="errBox"></div>
-
-        <div class="row" style="justify-content:space-between;margin-bottom:8px">
-          <div class="row">
-            <button id="btnOpenCreate" type="button">+ Tạo phòng</button>
-            <button id="btnQuickJoin" type="button" class="sec">Vào trận nhanh</button>
-          </div>
-          <div class="row">
-            <select id="soloMapSelect" title="Chọn bản đồ luyện tập">
-              <option value="military" selected>Khu Quân Sự Cũ</option>
-              <option value="harbor">Bến Cảng Mưa</option>
-            </select>
-            <button id="btnSoloMode" type="button" class="sec">Luyện tập Offline (Drone)</button>
+          <div id="lanShare" class="lobbyLanShareCompact">
+            <span id="lanShareText"></span>
+            <button id="btnCopyUrl" type="button" class="sec btnSm">
+              Copy link
+            </button>
           </div>
         </div>
+        <div class="lobbyTopActions">
+          <button
+            id="btnLobbyMusicToggle"
+            type="button"
+            class="btnLobbyHud"
+            title="Bật/tắt nhạc nền sảnh chính"
+          >
+            ♪ Nhạc: Bật
+          </button>
+          <button id="btnOpenSettingsLobby" type="button" class="btnLobbyHud">
+            ⚙ Cài đặt
+          </button>
+        </div>
+      </header>
 
-        <div id="createRoomPanel" class="subPanel">
-          <div class="row" style="margin-bottom:8px">
-            <input id="createRoomName" maxlength="24" placeholder="Tên phòng" value="Khu Quân Sự TDM" style="flex:1.4;min-width:140px" />
-            <select id="createMap"><option value="military" selected>Khu Quân Sự Cũ (5v5)</option><option value="harbor">Bến Cảng Mưa</option></select>
-            <select id="createMode"><option value="TDM">Đấu Đội (TDM)</option><option value="FFA">Đấu Đơn (FFA)</option></select>
-            <select id="createKills"><option value="10">10 Mạng</option><option value="20">20 Mạng</option><option value="30" selected>30 Mạng</option><option value="50">50 Mạng</option></select>
-            <select id="createTime"><option value="300">5 Phút</option><option value="600" selected>10 Phút</option></select>
-            <select id="createMaxPlayers"><option value="4">4 Người</option><option value="6">6 Người</option><option value="10" selected>10 Người</option></select>
+      <main class="lobbyStage">
+        <!-- View 1: Trung tâm Sảnh chính — 3 Chế độ chơi -->
+        <section
+          id="lobbyHomeView"
+          class="lobbyView active"
+          aria-label="Chọn chế độ chơi"
+        >
+          <div class="lobbyHeroHeader">
+            <div class="lobbyEyebrow">TRUY KÍCH MẠNG LAN • KHU QUÂN SỰ CŨ</div>
+            <h1 class="lobbyHeroTitle">CHỌN CHẾ ĐỘ CHIẾN ĐẤU</h1>
           </div>
-          <div class="row" style="justify-content:space-between">
-            <div class="row">
-              <input id="createPassword" maxlength="24" placeholder="Mật khẩu (tùy chọn)" style="width:170px" />
-              <label style="font-size:12.5px;display:flex;align-items:center;gap:4px">
-                <input id="createAllowSolo" type="checkbox" /> Cho phép test 1 người (Dev)
-              </label>
+          <div class="modeCardGrid">
+            <button id="btnModeFFA" type="button" class="modeCard">
+              <span class="modeCardFace">
+                <span class="tacCorner tl"></span
+                ><span class="tacCorner tr"></span>
+                <span class="tacCorner bl"></span
+                ><span class="tacCorner br"></span>
+                <div>
+                  <div class="modeCardTag">
+                    <span class="modeCardDot"></span
+                    ><span>FFA • SINH TỬ MẠNG LAN</span>
+                  </div>
+                  <h2 class="modeCardTitle">ĐẤU ĐƠN</h2>
+                  <p class="modeCardDesc">
+                    Không đồng minh — Mỗi phát súng đều là cuộc đua điểm số cá
+                    nhân trong mạng LAN.
+                  </p>
+                </div>
+                <div class="modeCardFooter">
+                  <span>PHÒNG ĐẤU ĐƠN</span><span class="modeCardArrow">→</span>
+                </div>
+              </span>
+            </button>
+
+            <button id="btnModeTDM" type="button" class="modeCard mode-tdm">
+              <span class="modeCardFace">
+                <span class="tacCorner tl"></span
+                ><span class="tacCorner tr"></span>
+                <span class="tacCorner bl"></span
+                ><span class="tacCorner br"></span>
+                <div>
+                  <div class="modeCardTag">
+                    <span class="modeCardDot"></span
+                    ><span>5v5 • ĐẶC NHIỆM VS NỔI LOẠN</span>
+                  </div>
+                  <h2 class="modeCardTitle">ĐẤU ĐỘI</h2>
+                  <p class="modeCardDesc">
+                    Tác chiến theo đội 5v5 cân bằng — Chiếm lĩnh tháp canh, nhà
+                    kho & bãi container.
+                  </p>
+                </div>
+                <div class="modeCardFooter">
+                  <span>PHÒNG ĐẤU ĐỘI</span><span class="modeCardArrow">→</span>
+                </div>
+              </span>
+            </button>
+
+            <button
+              id="btnModePractice"
+              type="button"
+              class="modeCard mode-practice"
+            >
+              <span class="modeCardFace">
+                <span class="tacCorner tl"></span
+                ><span class="tacCorner tr"></span>
+                <span class="tacCorner bl"></span
+                ><span class="tacCorner br"></span>
+                <div>
+                  <div class="modeCardTag">
+                    <span class="modeCardDot"></span
+                    ><span>OFFLINE • SINH TỒN DRONE</span>
+                  </div>
+                  <h2 class="modeCardTitle">LUYỆN TẬP</h2>
+                  <p class="modeCardDesc">
+                    Chọn bản đồ trực quan 3D, rèn phản xạ bắn M416 / Glock-17 /
+                    AWM trước các đợt Drone.
+                  </p>
+                </div>
+                <div class="modeCardFooter">
+                  <span>CHỌN BẢN ĐỒ</span><span class="modeCardArrow">→</span>
+                </div>
+              </span>
+            </button>
+          </div>
+        </section>
+
+        <!-- View 2: Màn 3D Chọn Map Thu Nhỏ khi click Luyện Tập -->
+        <section
+          id="lobbyPracticeView"
+          class="lobbyView"
+          aria-label="Chọn bản đồ luyện tập"
+        >
+          <div class="practiceHeader">
+            <button id="btnPracticeBack" type="button" class="btnLobbyHud">
+              ← Quay lại Sảnh
+            </button>
+            <div class="practiceTitleGroup">
+              <div class="lobbyEyebrow" style="margin-bottom: 2px">
+                CHẾ ĐỘ LUYỆN TẬP OFFLINE
+              </div>
+              <h2 class="practiceTitle">CHỌN BẢN ĐỒ TÁC CHIẾN</h2>
             </div>
-            <button id="btnCreateSubmit" type="button">Xác nhận tạo</button>
+            <div style="width: 140px"></div>
           </div>
-        </div>
 
-        <div id="pwModal" class="subPanel" style="gap:8px;align-items:center">
-          <span style="font-size:13px;font-weight:600">Nhập mật khẩu phòng:</span>
-          <input id="pwJoinInput" type="password" maxlength="24" placeholder="Mật khẩu" />
-          <button id="btnPwConfirm" type="button" class="btnSm">Vào</button>
-          <button id="btnPwCancel" type="button" class="sec btnSm">Hủy</button>
-        </div>
+          <div id="practiceMapGrid" class="mapSelectGrid">
+            <button
+              type="button"
+              class="mapThumbCard selected"
+              data-map="military"
+              aria-pressed="true"
+            >
+              <span class="mapThumbFace">
+                <span class="tacCorner tl"></span
+                ><span class="tacCorner tr"></span>
+                <span class="tacCorner bl"></span
+                ><span class="tacCorner br"></span>
+                <img
+                  src="/assets/map_military_thumb.webp"
+                  alt="Khu Quân Sự Cũ"
+                />
+                <div class="mapThumbScrim"></div>
+                <div class="mapThumbBody">
+                  <div class="mapThumbBadges">
+                    <span class="mapTag">BAN NGÀY • NÚI ALPINE</span>
+                    <span id="milReadyChip" class="mapStatusPill"
+                      >ĐANG CHỌN • SẴN SÀNG</span
+                    >
+                  </div>
+                  <h3 class="mapThumbTitle">KHU QUÂN SỰ CŨ</h3>
+                  <p class="mapThumbDesc">
+                    Căn cứ huấn luyện đối xứng 5v5 • Tháp canh 4m, hai nhà kho
+                    và bãi container.
+                  </p>
+                </div>
+              </span>
+            </button>
 
-        <table class="cleanTable">
-          <thead><tr><th>Tên phòng</th><th>Chế độ</th><th>Bản đồ</th><th>Sĩ số</th><th>Trạng thái</th><th></th></tr></thead>
-          <tbody id="lobbyRoomBody"></tbody>
-        </table>
-        <p id="lobbyEmpty" style="font-size:13px;color:var(--sub)">Chưa có phòng nào đang mở. Bấm <b>+ Tạo phòng</b> hoặc <b>Vào trận nhanh</b> để khởi tạo.</p>
-      </div>
+            <button
+              type="button"
+              class="mapThumbCard"
+              data-map="harbor"
+              aria-pressed="false"
+            >
+              <span class="mapThumbFace">
+                <span class="tacCorner tl"></span
+                ><span class="tacCorner tr"></span>
+                <span class="tacCorner bl"></span
+                ><span class="tacCorner br"></span>
+                <img
+                  src="/assets/map_harbor_thumb.webp"
+                  alt="BEFORE THE BREACH"
+                />
+                <div class="mapThumbScrim"></div>
+                <div class="mapThumbBody">
+                  <div class="mapThumbBadges">
+                    <span class="mapTag">ĐÊM MƯA • ĐÈN SODIUM</span>
+                    <span id="harborReadyChip" class="mapStatusPill"
+                      >CHỌN ĐỂ NẠP</span
+                    >
+                  </div>
+                  <h3 class="mapThumbTitle">BEFORE THE BREACH</h3>
+                  <p class="mapThumbDesc">
+                    Bãi container ẩm ướt giữa màn mưa • Vũng nước phản chiếu và
+                    ánh đèn vàng đêm.
+                  </p>
+                </div>
+              </span>
+            </button>
+          </div>
+
+          <select
+            id="soloMapSelect"
+            class="srOnlySelect"
+            aria-hidden="true"
+            tabindex="-1"
+          >
+            <option value="military" selected>Khu Quân Sự Cũ</option>
+            <option value="harbor">Bến Cảng Mưa</option>
+          </select>
+
+          <div class="practiceActionBar">
+            <button id="btnSoloMode" type="button" class="btnPrimaryLaunch">
+              BẮT ĐẦU LUYỆN TẬP
+            </button>
+            <span
+              style="
+                font-size: 12px;
+                color: #b8c7d4;
+                text-shadow: 0 1px 6px #000;
+              "
+              >Nhấp đúp vào bản đồ để vào trận ngay</span
+            >
+          </div>
+        </section>
+
+        <!-- View 3: Màn Danh Sách Phòng LAN đã lọc sẵn chế độ ĐẤU ĐƠN / ĐẤU ĐỘI -->
+        <section
+          id="lobbyLanView"
+          class="lobbyView"
+          aria-label="Danh sách phòng LAN"
+        >
+          <div class="lanGlassCard">
+            <div class="topBar">
+              <div class="row">
+                <button id="btnLanBack" type="button" class="sec btnSm">
+                  ← Quay lại Sảnh
+                </button>
+                <h2 id="lanViewTitle" style="margin: 0; font-size: 19px">
+                  Phòng Đấu Đội (TDM)
+                </h2>
+              </div>
+              <div
+                class="lanTabBar"
+                role="tablist"
+                aria-label="Lọc chế độ phòng"
+              >
+                <button
+                  id="btnTabFFA"
+                  type="button"
+                  class="lanModeTab"
+                  data-filter="FFA"
+                >
+                  Đấu Đơn (FFA)
+                </button>
+                <button
+                  id="btnTabTDM"
+                  type="button"
+                  class="lanModeTab active"
+                  data-filter="TDM"
+                >
+                  Đấu Đội (TDM)
+                </button>
+                <button
+                  id="btnTabAll"
+                  type="button"
+                  class="lanModeTab"
+                  data-filter="ALL"
+                >
+                  Tất cả
+                </button>
+              </div>
+            </div>
+
+            <div id="lobbyError" class="errBox"></div>
+
+            <div
+              class="row"
+              style="justify-content: space-between; margin-bottom: 10px"
+            >
+              <div class="row">
+                <button id="btnOpenCreate" type="button">+ Tạo phòng</button>
+                <button id="btnQuickJoin" type="button" class="sec">
+                  Vào trận nhanh
+                </button>
+              </div>
+              <span
+                id="lanModeHint"
+                style="font-size: 12.5px; color: var(--sub)"
+                >Hiển thị phòng theo chế độ đã chọn</span
+              >
+            </div>
+
+            <div id="createRoomPanel" class="subPanel">
+              <div class="createMapGrid" id="createMapPicker">
+                <button
+                  type="button"
+                  class="createMapThumb selected"
+                  data-create-map="military"
+                >
+                  <img
+                    src="/assets/map_military_thumb.webp"
+                    alt="Khu Quân Sự Cũ"
+                  />
+                  <span>✓ Khu Quân Sự Cũ (5v5)</span>
+                </button>
+                <button
+                  type="button"
+                  class="createMapThumb"
+                  data-create-map="harbor"
+                >
+                  <img src="/assets/map_harbor_thumb.webp" alt="Bến Cảng Mưa" />
+                  <span>BEFORE THE BREACH</span>
+                </button>
+              </div>
+              <select
+                id="createMap"
+                class="srOnlySelect"
+                aria-hidden="true"
+                tabindex="-1"
+              >
+                <option value="military" selected>Khu Quân Sự Cũ (5v5)</option>
+                <option value="harbor">Bến Cảng Mưa</option>
+              </select>
+              <div class="row" style="margin-bottom: 8px">
+                <input
+                  id="createRoomName"
+                  maxlength="24"
+                  placeholder="Tên phòng"
+                  value="Khu Quân Sự TDM"
+                  style="flex: 1.4; min-width: 140px"
+                />
+                <select id="createMode">
+                  <option value="TDM">Đấu Đội (TDM)</option>
+                  <option value="FFA">Đấu Đơn (FFA)</option>
+                </select>
+                <select id="createKills">
+                  <option value="10">10 Mạng</option>
+                  <option value="20">20 Mạng</option>
+                  <option value="30" selected>30 Mạng</option>
+                  <option value="50">50 Mạng</option>
+                </select>
+                <select id="createTime">
+                  <option value="300">5 Phút</option>
+                  <option value="600" selected>10 Phút</option>
+                </select>
+                <select id="createMaxPlayers">
+                  <option value="4">4 Người</option>
+                  <option value="6">6 Người</option>
+                  <option value="10" selected>10 Người</option>
+                </select>
+              </div>
+              <div class="row" style="justify-content: space-between">
+                <div class="row">
+                  <input
+                    id="createPassword"
+                    maxlength="24"
+                    placeholder="Mật khẩu (tùy chọn)"
+                    style="width: 170px"
+                  />
+                  <label
+                    style="
+                      font-size: 12.5px;
+                      display: flex;
+                      align-items: center;
+                      gap: 4px;
+                    "
+                  >
+                    <input id="createAllowSolo" type="checkbox" /> Cho phép test
+                    1 người (Dev)
+                  </label>
+                </div>
+                <button id="btnCreateSubmit" type="button">Xác nhận tạo</button>
+              </div>
+            </div>
+
+            <div
+              id="pwModal"
+              class="subPanel"
+              style="gap: 8px; align-items: center"
+            >
+              <span style="font-size: 13px; font-weight: 600"
+                >Nhập mật khẩu phòng:</span
+              >
+              <input
+                id="pwJoinInput"
+                type="password"
+                maxlength="24"
+                placeholder="Mật khẩu"
+              />
+              <button id="btnPwConfirm" type="button" class="btnSm">Vào</button>
+              <button id="btnPwCancel" type="button" class="sec btnSm">
+                Hủy
+              </button>
+            </div>
+
+            <table class="cleanTable">
+              <thead>
+                <tr>
+                  <th>Tên phòng</th>
+                  <th>Chế độ</th>
+                  <th>Bản đồ</th>
+                  <th>Sĩ số</th>
+                  <th>Trạng thái</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="lobbyRoomBody"></tbody>
+            </table>
+            <p id="lobbyEmpty" style="font-size: 13px; color: var(--sub)">
+              Chưa có phòng nào đang mở cho chế độ này. Bấm
+              <b>+ Tạo phòng</b> hoặc <b>Vào trận nhanh</b> để khởi tạo.
+            </p>
+          </div>
+        </section>
+      </main>
+
+      <footer class="lobbyBottomFoot">
+        <span
+          >SẢNH 3D TRỰC TIẾP • KHU QUÂN SỰ CŨ 5v5 & BẾN CẢNG MƯA • F3 HIỆN
+          FPS</span
+        >
+      </footer>
     </div>
 
     <!-- Màn 2: PHÒNG CHỜ & CÀI ĐẶT -->
@@ -474,8 +2702,11 @@
       <div class="card">
         <div class="topBar">
           <div>
-            <h2 id="roomTitle" style="margin:0;font-size:22px">Phòng chờ</h2>
-            <span id="roomMeta" style="font-size:13px;color:var(--sub)"></span>
+            <h2 id="roomTitle" style="margin: 0; font-size: 22px">Phòng chờ</h2>
+            <span
+              id="roomMeta"
+              style="font-size: 13px; color: var(--sub)"
+            ></span>
           </div>
           <button id="btnRoomLeave" type="button" class="sec">Rời phòng</button>
         </div>
@@ -483,30 +2714,87 @@
         <div id="roomError" class="errBox"></div>
         <div id="roomCountdown" class="countdownBanner"></div>
 
-        <div class="row" style="padding:8px;background:rgba(128,150,168,0.1);border-radius:4px;margin-bottom:8px">
-          <select id="roomSetMap"><option value="military">Khu Quân Sự Cũ</option><option value="harbor">Bến Cảng Mưa</option></select>
-          <select id="roomSetMode"><option value="TDM">Đấu Đội (TDM)</option><option value="FFA">Đấu Đơn (FFA)</option></select>
-          <select id="roomSetKills"><option value="1">1 Mạng</option><option value="10">10 Mạng</option><option value="20">20 Mạng</option><option value="30">30 Mạng</option><option value="50">50 Mạng</option></select>
-          <select id="roomSetTime"><option value="300">5 Phút</option><option value="600">10 Phút</option></select>
-          <select id="roomSetMax"><option value="2">2 Người</option><option value="4">4 Người</option><option value="6">6 Người</option><option value="10">10 Người</option></select>
-          <input id="roomSetPassword" maxlength="24" placeholder="Đổi mật khẩu (trống = bỏ)" style="width:155px" />
-          <label style="font-size:12px;display:flex;align-items:center;gap:4px">
+        <div
+          class="row"
+          style="
+            padding: 8px;
+            background: rgba(128, 150, 168, 0.1);
+            border-radius: 4px;
+            margin-bottom: 8px;
+          "
+        >
+          <select id="roomSetMap">
+            <option value="military">Khu Quân Sự Cũ</option>
+            <option value="harbor">Bến Cảng Mưa</option>
+          </select>
+          <select id="roomSetMode">
+            <option value="TDM">Đấu Đội (TDM)</option>
+            <option value="FFA">Đấu Đơn (FFA)</option>
+          </select>
+          <select id="roomSetKills">
+            <option value="1">1 Mạng</option>
+            <option value="10">10 Mạng</option>
+            <option value="20">20 Mạng</option>
+            <option value="30">30 Mạng</option>
+            <option value="50">50 Mạng</option>
+          </select>
+          <select id="roomSetTime">
+            <option value="300">5 Phút</option>
+            <option value="600">10 Phút</option>
+          </select>
+          <select id="roomSetMax">
+            <option value="2">2 Người</option>
+            <option value="4">4 Người</option>
+            <option value="6">6 Người</option>
+            <option value="10">10 Người</option>
+          </select>
+          <input
+            id="roomSetPassword"
+            maxlength="24"
+            placeholder="Đổi mật khẩu (trống = bỏ)"
+            style="width: 155px"
+          />
+          <label
+            style="
+              font-size: 12px;
+              display: flex;
+              align-items: center;
+              gap: 4px;
+            "
+          >
             <input id="roomSetSolo" type="checkbox" /> Test 1 người
           </label>
-          <button id="btnSaveRoomSettings" type="button" class="sec btnSm">Lưu cài đặt</button>
+          <button id="btnSaveRoomSettings" type="button" class="sec btnSm">
+            Lưu cài đặt
+          </button>
         </div>
 
         <div id="roomTeamCols" class="teamCols">
-          <div class="teamBox"><h3 style="color:#2F80FF">▲ Phe Đặc Nhiệm (Đội A)</h3><div id="teamAList"></div></div>
-          <div class="teamBox"><h3 style="color:#FF4D2E">● Phe Nổi Loạn (Đội B)</h3><div id="teamBList"></div></div>
+          <div class="teamBox">
+            <h3 style="color: #2f80ff">▲ Phe Đặc Nhiệm (Đội A)</h3>
+            <div id="teamAList"></div>
+          </div>
+          <div class="teamBox">
+            <h3 style="color: #ff4d2e">● Phe Nổi Loạn (Đội B)</h3>
+            <div id="teamBList"></div>
+          </div>
         </div>
-        <div id="roomFfaCol" class="teamBox" style="display:none;margin:10px 0">
-          <h3 style="color:var(--amber)">Danh sách Đấu Đơn (FFA)</h3>
+        <div
+          id="roomFfaCol"
+          class="teamBox"
+          style="display: none; margin: 10px 0"
+        >
+          <h3 style="color: var(--amber)">Danh sách Đấu Đơn (FFA)</h3>
           <div id="ffaList"></div>
         </div>
 
-        <div class="row" style="justify-content:space-between;margin-top:10px">
-          <button id="btnRoomSwitchTeam" type="button" class="sec">Đổi phe</button>
+        <div
+          class="row"
+          style="justify-content: space-between; margin-top: 10px"
+        >
+          <button id="btnRoomSwitchTeam" type="button" class="sec">
+            Đổi phe
+          </button>
           <div class="row">
             <button id="btnRoomReady" type="button">Sẵn sàng</button>
             <button id="btnRoomStart" type="button">Bắt đầu trận</button>
@@ -516,8 +2804,15 @@
         <div class="chatBox">
           <div id="roomChatLog"></div>
           <div class="row">
-            <input id="roomChatInput" maxlength="120" placeholder="Chat với phòng..." style="flex:1" />
-            <button id="btnRoomChatSend" type="button" class="sec btnSm">Gửi</button>
+            <input
+              id="roomChatInput"
+              maxlength="120"
+              placeholder="Chat với phòng..."
+              style="flex: 1"
+            />
+            <button id="btnRoomChatSend" type="button" class="sec btnSm">
+              Gửi
+            </button>
           </div>
         </div>
       </div>
@@ -526,43 +2821,132 @@
     <!-- Màn 3: TỔNG KẾT TRẬN (ENDING) -->
     <div id="screenEnding" class="screenLayer">
       <div class="card">
-        <h2 id="endTitle" style="margin:0 0 6px;font-size:24px;color:var(--amber)">Kết quả trận đấu</h2>
-        <p id="endAutoReturn" style="font-size:13.5px;color:var(--sub);margin:0 0 10px"></p>
+        <h2
+          id="endTitle"
+          style="margin: 0 0 6px; font-size: 24px; color: var(--amber)"
+        >
+          Kết quả trận đấu
+        </h2>
+        <p
+          id="endAutoReturn"
+          style="font-size: 13.5px; color: var(--sub); margin: 0 0 10px"
+        ></p>
         <table class="cleanTable">
-          <thead><tr><th>#</th><th>Chiến binh</th><th>Phe</th><th>Hạ</th><th>Tử</th><th>HS</th></tr></thead>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Chiến binh</th>
+              <th>Phe</th>
+              <th>Hạ</th>
+              <th>Tử</th>
+              <th>HS</th>
+            </tr>
+          </thead>
           <tbody id="endScoreBody"></tbody>
         </table>
-        <div class="row" style="justify-content:flex-end;margin-top:12px">
+        <div class="row" style="justify-content: flex-end; margin-top: 12px">
           <button id="btnReturnRoom" type="button">Về phòng ngay</button>
         </div>
       </div>
     </div>
 
+    <!-- Màn hình Tử Trận (Sinh tồn Offline — tự động về Sảnh sau 5s) -->
+    <section
+      id="defeatOverlay"
+      class="hidden-screen"
+      aria-label="Màn hình Tử Trận"
+    >
+      <canvas id="defeatAtmosphereCanvas"></canvas>
+      <div class="defeatAmbientGlow"></div>
+      <div class="defeatVignette"></div>
+      <div class="defeatFilmGrain"></div>
+      <div id="defeatRedFlash"></div>
+      <div id="defeatLightSweep"></div>
+
+      <div id="defeatImpactStage" class="defeatImpactStage">
+        <div class="defeatTitleBlock">
+          <div id="defeatLineTop" class="defeatLine"></div>
+          <h1 id="defeatTitle" class="defeatTitle" data-text="TỬ TRẬN">
+            TỬ TRẬN
+          </h1>
+          <div id="defeatLineBottom" class="defeatLine"></div>
+        </div>
+
+        <div id="defeatActionArea" class="defeatActionArea">
+          <button
+            id="btnDefeatReturnLobby"
+            class="btnDefeatTactical"
+            type="button"
+          >
+            <span class="corner c-tl"></span>
+            <span class="corner c-tr"></span>
+            <span class="corner c-bl"></span>
+            <span class="corner c-br"></span>
+            <span>QUAY VỀ SẢNH</span>
+            <span id="defeatBtnProgressBar" class="defeatBtnProgress"></span>
+          </button>
+
+          <div class="defeatCountdownWrap">
+            <p class="defeatCountdownText">
+              Tự động quay về sảnh sau
+              <span id="defeatCountdownSeconds">5</span>s...
+            </p>
+            <div class="defeatProgressTrack">
+              <div id="defeatProgressFill" class="defeatProgressFill"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- Màn Tạm Dừng / Mở khóa chuột Trong Trận -->
     <div id="pauseOverlay" class="screenLayer">
-      <div class="card" style="width:min(460px,92vw)">
-        <h2 id="pauseTitle" style="margin:0 0 6px">Menu trận đấu</h2>
-        <p id="pauseSub" style="font-size:13.5px;color:var(--sub)"></p>
-        <p style="font-size:12.5px;color:var(--sub)">WASD di chuyển • C / Ctrl ngồi • Shift chạy • Space nhảy • Chuột trái bắn • Chuột phải ngắm • R nạp • 1/2/3/Q/Cuộn đổi súng • L laser • Tab bảng điểm • Enter chat</p>
+      <div class="card" style="width: min(460px, 92vw)">
+        <h2 id="pauseTitle" style="margin: 0 0 6px">Menu trận đấu</h2>
+        <p id="pauseSub" style="font-size: 13.5px; color: var(--sub)"></p>
+        <p style="font-size: 12.5px; color: var(--sub)">
+          WASD di chuyển • C / Ctrl ngồi • Shift chạy (hoặc nín thở khi ngắm
+          AWM) • Space nhảy • Chuột trái bắn • Chuột phải bật/đổi zoom ngắm • [
+          / ] Zeroing AWM • R nạp • 1/2/3/Q/Cuộn đổi súng • L laser • Tab bảng
+          điểm • Enter chat
+        </p>
         <div class="row">
           <button id="btnPauseResume" type="button">Tiếp tục</button>
-          <button id="btnOpenSettingsPause" type="button" class="sec">Cài đặt</button>
-          <button id="btnPauseLeave" type="button" class="sec">Rời phòng</button>
+          <button id="btnOpenSettingsPause" type="button" class="sec">
+            Cài đặt
+          </button>
+          <button id="btnPauseLeave" type="button" class="sec">
+            Rời phòng
+          </button>
         </div>
       </div>
     </div>
 
     <!-- Modal Cài Đặt -->
-    <div id="settingsModal" class="screenLayer" style="z-index:35">
-      <div class="card" style="width:min(540px,94vw)">
+    <div id="settingsModal" class="screenLayer" style="z-index: 35">
+      <div class="card" style="width: min(540px, 94vw)">
         <div class="topBar">
-          <h2 style="margin:0;font-size:20px">Cài đặt Đồ họa & Điều khiển</h2>
+          <h2 style="margin: 0; font-size: 20px">
+            Cài đặt Đồ họa & Điều khiển
+          </h2>
           <button id="btnSetClose" type="button" class="btnSm">Đóng</button>
         </div>
-        <div style="display:grid;gap:8px;font-size:13px;margin-bottom:10px">
-          <div style="padding:8px 10px;background:rgba(128,150,168,0.12);border-radius:4px;display:grid;gap:5px">
-            <div class="row" style="justify-content:space-between">
-              <label for="setGraphicsQuality" style="font-weight:700">Chất lượng đồ họa:</label>
+        <div
+          style="display: grid; gap: 8px; font-size: 13px; margin-bottom: 10px"
+        >
+          <div
+            style="
+              padding: 8px 10px;
+              background: rgba(128, 150, 168, 0.12);
+              border-radius: 4px;
+              display: grid;
+              gap: 5px;
+            "
+          >
+            <div class="row" style="justify-content: space-between">
+              <label for="setGraphicsQuality" style="font-weight: 700"
+                >Chất lượng đồ họa:</label
+              >
               <select id="setGraphicsQuality">
                 <option value="auto">Tự động (Nhận diện phần cứng)</option>
                 <option value="low">Thấp (Máy yếu / FPS cao)</option>
@@ -570,56 +2954,116 @@
                 <option value="high">Cao (Đầy đủ hiệu ứng)</option>
               </select>
             </div>
-            <div id="setGraphicsHint" style="font-size:11.5px;color:var(--sub)"></div>
+            <div
+              id="setGraphicsHint"
+              style="font-size: 11.5px; color: var(--sub)"
+            ></div>
+            <label
+              style="
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                font-size: 12px;
+                margin-top: 2px;
+              "
+            >
+              <input id="setShowPerfHud" type="checkbox" /> Hiển thị thông số
+              FPS / GPU (phím F3)
+            </label>
           </div>
-          <div class="row" style="justify-content:space-between">
+          <div class="row" style="justify-content: space-between">
+            <label style="display: flex; align-items: center; gap: 6px"
+              ><input id="setLobbyMusic" type="checkbox" /> Nhạc nền sảnh
+              chính</label
+            >
+            <div class="row" style="gap: 8px">
+              <span style="font-size: 12px; color: var(--sub)"
+                ><b id="setLobbyMusicVolVal">45%</b></span
+              >
+              <input
+                id="setLobbyMusicVol"
+                type="range"
+                min="0"
+                max="1"
+                step="0.05"
+                style="width: 140px"
+              />
+            </div>
+          </div>
+          <div class="row" style="justify-content: space-between">
             <span>Độ nhạy chuột: <b id="setSensVal">1.00</b></span>
-            <input id="setSens" type="range" min="0.2" max="3.0" step="0.05" style="width:200px" />
+            <input
+              id="setSens"
+              type="range"
+              min="0.2"
+              max="3.0"
+              step="0.05"
+              style="width: 200px"
+            />
           </div>
-          <div class="row" style="justify-content:space-between">
+          <div class="row" style="justify-content: space-between">
             <span>Độ nhạy ngắm (ADS): <b id="setAdsSensVal">0.58</b></span>
-            <input id="setAdsSens" type="range" min="0.2" max="1.2" step="0.02" style="width:200px" />
+            <input
+              id="setAdsSens"
+              type="range"
+              min="0.2"
+              max="1.2"
+              step="0.02"
+              style="width: 200px"
+            />
           </div>
-          <div class="row" style="justify-content:space-between">
+          <div class="row" style="justify-content: space-between">
             <span>Góc nhìn FOV: <b id="setFovVal">75°</b></span>
-            <input id="setFov" type="range" min="65" max="95" step="1" style="width:200px" />
+            <input
+              id="setFov"
+              type="range"
+              min="65"
+              max="95"
+              step="1"
+              style="width: 200px"
+            />
           </div>
-          <div class="row" style="justify-content:space-between">
-            <label style="display:flex;align-items:center;gap:6px"><input id="setInvertY" type="checkbox" /> Đảo ngược trục dọc Y</label>
+          <div class="row" style="justify-content: space-between">
+            <label style="display: flex; align-items: center; gap: 6px"
+              ><input id="setInvertY" type="checkbox" /> Đảo ngược trục dọc
+              Y</label
+            >
             <div class="row">
-              <label>Ngồi: <select id="setCrouchMode"><option value="hold">Giữ (Hold)</option><option value="toggle">Bật/tắt (Toggle)</option></select></label>
-              <label>Ngắm: <select id="setAdsMode"><option value="hold">Giữ (Hold)</option><option value="toggle">Bật/tắt (Toggle)</option></select></label>
+              <label
+                >Ngồi:
+                <select id="setCrouchMode">
+                  <option value="hold">Giữ (Hold)</option>
+                  <option value="toggle">Bật/tắt (Toggle)</option>
+                </select></label
+              >
+              <label
+                >Ngắm:
+                <select id="setAdsMode">
+                  <option value="hold">Giữ (Hold)</option>
+                  <option value="toggle">Bật/tắt (Toggle)</option>
+                </select></label
+              >
             </div>
           </div>
         </div>
-        <h3 style="margin:8px 0 4px;font-size:14px">Gán phím điều khiển</h3>
-        <div id="setBindList" style="max-height:220px;overflow-y:auto;margin-bottom:10px"></div>
-        <div class="row" style="justify-content:space-between">
-          <span style="font-size:12px;color:var(--sub)">Bấm vào nút phím rồi nhấn phím mới (Esc để hủy)</span>
-          <button id="btnSetReset" type="button" class="sec btnSm">Khôi phục mặc định</button>
+        <h3 style="margin: 8px 0 4px; font-size: 14px">Gán phím điều khiển</h3>
+        <div
+          id="setBindList"
+          style="max-height: 220px; overflow-y: auto; margin-bottom: 10px"
+        ></div>
+        <div class="row" style="justify-content: space-between">
+          <span style="font-size: 12px; color: var(--sub)"
+            >Bấm vào nút phím rồi nhấn phím mới (Esc để hủy)</span
+          >
+          <button id="btnSetReset" type="button" class="sec btnSm">
+            Khôi phục mặc định
+          </button>
         </div>
       </div>
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
-    <script src="/model/dist/m416.bundle.js"></script>
-    <script src="/model/dist/pistol.bundle.js"></script>
-    <script src="/model/dist/awm.bundle.js"></script>
-    <script src="/model/dist/fps_arms.bundle.js"></script>
-    <script src="/model/dist/soldier.bundle.js"></script>
-    <script src="/model/dist/map_container.bundle.js"></script>
-    <script src="/model/dist/map_warehouse.bundle.js"></script>
-    <script src="/model/dist/map_wrecked_truck.bundle.js"></script>
-    <script src="/model/dist/map_watchtower.bundle.js"></script>
-    <script src="/model/dist/map_sandbag.bundle.js"></script>
-    <script src="/model/dist/map_concrete_wall.bundle.js"></script>
-    <script src="/model/dist/map_fence.bundle.js"></script>
-    <script src="/model/dist/map_wood_crate.bundle.js"></script>
-    <script src="/model/dist/map_oil_barrel.bundle.js"></script>
-    <script src="/model/dist/map_wood_pallet.bundle.js"></script>
-    <script src="/model/dist/map_tire_stack.bundle.js"></script>
-    <script src="/model/dist/map_barbed_wire.bundle.js"></script>
     <script type="module">
       import { MSG, ROOM_STATE, sanitizeText } from "/js/protocol.js";
       import { createNetClient } from "/js/net.js";
@@ -628,18 +3072,24 @@
       import { createSettingsStore, mountSettingsUI } from "/js/settings.js";
       import { InputController } from "/js/input.js";
       import { createGameEngine } from "/js/game.js";
+      import { createDefeatScreenController } from "/js/defeat_screen.js";
+      import { createLobbyMusicController } from "/js/lobby_music.js";
 
       const nickInput = document.getElementById("nickInput");
       try {
         const saved = localStorage.getItem("fpsNick");
-        nickInput.value = saved ? sanitizeText(saved, "ChienBinh", 16) : "Linh_" + ((100 + Math.random() * 899) | 0);
+        nickInput.value = saved
+          ? sanitizeText(saved, "ChienBinh", 16)
+          : "Linh_" + ((100 + Math.random() * 899) | 0);
       } catch {
         nickInput.value = "Linh_" + ((100 + Math.random() * 899) | 0);
       }
       function getNick() {
         const v = sanitizeText(nickInput.value, "ChienBinh", 16);
         nickInput.value = v;
-        try { localStorage.setItem("fpsNick", v); } catch {}
+        try {
+          localStorage.setItem("fpsNick", v);
+        } catch {}
         return v;
       }
 
@@ -658,12 +3108,17 @@
         if (!loadingOverlay || !st) return;
         if (st.done || st.visible === false) {
           loadingOverlay.style.display = "none";
+          lobbyMusic.setLoadingVisible(false);
           return;
         }
         loadingOverlay.style.display = "grid";
-        if (typeof st.title === "string" && st.title) loadingTitle.textContent = st.title;
-        if (typeof st.label === "string" && st.label) loadingStatus.textContent = st.label;
-        if (typeof st.detail === "string") loadingDetail.textContent = st.detail;
+        lobbyMusic.setLoadingVisible(true);
+        if (typeof st.title === "string" && st.title)
+          loadingTitle.textContent = st.title;
+        if (typeof st.label === "string" && st.label)
+          loadingStatus.textContent = st.label;
+        if (typeof st.detail === "string")
+          loadingDetail.textContent = st.detail;
         const pct = Math.max(0, Math.min(100, Number(st.percent) || 0));
         loadingPercent.textContent = `${Math.round(pct)}%`;
         loadingBarFill.style.width = `${pct.toFixed(1)}%`;
@@ -673,6 +3128,8 @@
         screenLobby.style.display = name === "lobby" ? "grid" : "none";
         screenRoom.style.display = name === "room" ? "grid" : "none";
         screenEnding.style.display = name === "ending" ? "grid" : "none";
+        lobbyMusic.setScreen(name);
+        if (name !== "none") lobbyMusic.setInMatch(false);
       }
 
       function showErrorBanner(msgText) {
@@ -688,10 +3145,39 @@
       const net = createNetClient(getNick);
       net.onStatus((st, detail) => {
         statusBadge.textContent = detail;
-        statusBadge.className = "statusPill" + (st === "connected" ? "" : st === "offline" ? " err" : " warn");
+        statusBadge.className =
+          "statusPill" +
+          (st === "connected" ? "" : st === "offline" ? " err" : " warn");
       });
 
       const settings = createSettingsStore();
+      const lobbyMusic = createLobbyMusicController({
+        initialEnabled: settings.get().lobbyMusicEnabled,
+        initialVolume: settings.get().lobbyMusicVolume,
+      });
+      const btnLobbyMusicToggle = document.getElementById(
+        "btnLobbyMusicToggle",
+      );
+      function syncLobbyMusicBtn() {
+        if (!btnLobbyMusicToggle) return;
+        const on = Boolean(settings.get().lobbyMusicEnabled);
+        btnLobbyMusicToggle.textContent = on ? "♪ Nhạc: Bật" : "♪ Nhạc: Tắt";
+      }
+      syncLobbyMusicBtn();
+      if (btnLobbyMusicToggle) {
+        btnLobbyMusicToggle.onclick = () => {
+          settings.update({
+            lobbyMusicEnabled: !settings.get().lobbyMusicEnabled,
+          });
+        };
+      }
+      settings.onChange((st) => {
+        lobbyMusic.applySettings({
+          lobbyMusicEnabled: st.lobbyMusicEnabled,
+          lobbyMusicVolume: st.lobbyMusicVolume,
+        });
+        syncLobbyMusicBtn();
+      });
       let game = null;
       const input = new InputController({
         settings,
@@ -713,11 +3199,17 @@
       });
       const settingsUI = mountSettingsUI(settings, input);
 
-      document.getElementById("btnOpenSettingsLobby").onclick = () => settingsUI.open();
-      document.getElementById("btnOpenSettingsPause").onclick = () => settingsUI.open();
+      document.getElementById("btnOpenSettingsLobby").onclick = () =>
+        settingsUI.open();
+      document.getElementById("btnOpenSettingsPause").onclick = () =>
+        settingsUI.open();
 
       window.addEventListener("beforeunload", (e) => {
-        if (game && game.getState().engineMode === "lan" && game.getState().activeState === "play") {
+        if (
+          game &&
+          game.getState().engineMode === "lan" &&
+          game.getState().activeState === "play"
+        ) {
           e.preventDefault();
           e.returnValue = "";
         }
@@ -726,11 +3218,22 @@
       const lobby = createLobbyController({
         net,
         getNickFn: getNick,
+        onViewChange: (viewName) => {
+          if (game && game.getState && game.getState().setLobbyViewState) {
+            game.getState().setLobbyViewState(viewName);
+          }
+        },
+        isMapCachedFn: (mapId) =>
+          game && game.isMapCached
+            ? game.isMapCached(mapId)
+            : mapId === "military",
         onSelectSoloMap: (mapId) => {
           if (!game) return Promise.resolve();
-          return game.prepareMap(mapId, { showOverlay: true });
+          return game.prepareMap(mapId, { showOverlay: false });
         },
         onEnterSolo: (mapId) => {
+          defeatScreen.hideImmediate();
+          lobbyMusic.setInMatch(true);
           // Step 2 & 4: Selected map is already cached & active -> 0ms synchronous start preserving Pointer Lock gesture!
           if (game.isMapCached(mapId)) {
             showScreen("none");
@@ -745,7 +3248,9 @@
             })
             .catch((err) => {
               console.error("Failed to prepare solo map:", err);
-              showErrorBanner("Không thể tải bản đồ đã chọn, vui lòng thử lại.");
+              showErrorBanner(
+                "Không thể tải bản đồ đã chọn, vui lòng thử lại.",
+              );
             });
         },
         onError: showErrorBanner,
@@ -756,16 +3261,32 @@
         onNotice: showErrorBanner,
       });
 
+      const defeatScreen = createDefeatScreenController({
+        durationMs: 5000,
+        onReturnToLobby: () => {
+          if (game) game.stopEngine();
+          showScreen("lobby");
+        },
+      });
+
       game = createGameEngine({
         net,
         settings,
         input,
         onLoadingUpdate: updateLoadingOverlay,
+        onQualityStatusChange: ({ pending, resolved }) => {
+          settingsUI.setQualityApplying(pending, resolved);
+        },
+        onSoloDefeated: () => {
+          defeatScreen.trigger();
+        },
         onRequestExitToRoom: () => {
+          defeatScreen.hideImmediate();
           game.stopEngine();
           showScreen("room");
         },
         onRequestExitToLobby: () => {
+          defeatScreen.hideImmediate();
           game.stopEngine();
           if (roomCtrl.getRoom()) net.send(MSG.ROOM_LEAVE);
           roomCtrl.clearRoom();
@@ -773,10 +3294,13 @@
         },
       });
       if (game && game.getState && game.getState().getGraphicsQuality) {
-        settingsUI.setDetectedTier(game.getState().getGraphicsQuality().detectedTier);
+        settingsUI.setDetectedTier(
+          game.getState().getGraphicsQuality().detectedTier,
+        );
       }
 
       function handleRoomStateView(room, snapshot = null) {
+        defeatScreen.hideImmediate();
         if (!room) {
           roomCtrl.stopEndTimer();
           game.stopEngine();
@@ -784,10 +3308,15 @@
           return;
         }
         roomCtrl.renderRoom(room);
+        if (game.syncRoomRoster) game.syncRoomRoster(room);
         if (room.state === ROOM_STATE.PLAYING) {
           roomCtrl.stopEndTimer();
+          lobbyMusic.setInMatch(true);
           showScreen("none");
-          if (game.getState().engineMode !== "lan" || game.getState().activeState !== "play") {
+          if (
+            game.getState().engineMode !== "lan" ||
+            game.getState().activeState !== "play"
+          ) {
             game.startLanMatch(room, snapshot);
           } else if (snapshot) {
             game.applySnapshot(snapshot);
@@ -815,15 +3344,21 @@
         }
       }
 
-      net.on(MSG.ROOM_JOINED, (msg) => handleRoomStateView(msg.room, msg.snapshot));
+      net.on(MSG.ROOM_JOINED, (msg) =>
+        handleRoomStateView(msg.room, msg.snapshot),
+      );
       net.on(MSG.ROOM_UPDATE, (msg) => handleRoomStateView(msg.room, null));
-      net.on(MSG.MATCH_START, (msg) => handleRoomStateView(msg.room, msg.snapshot));
+      net.on(MSG.MATCH_START, (msg) =>
+        handleRoomStateView(msg.room, msg.snapshot),
+      );
       net.on(MSG.MATCH_END, (msg) => {
         game.stopEngine();
         roomCtrl.renderMatchEnd(msg);
         showScreen("ending");
       });
-      net.on(MSG.ROOM_HOST_CHANGED, (msg) => showErrorBanner(`Chủ phòng mới: ${msg.hostName}`));
+      net.on(MSG.ROOM_HOST_CHANGED, (msg) =>
+        showErrorBanner(`Chủ phòng mới: ${msg.hostName}`),
+      );
       net.on(MSG.ROOM_KICKED, (msg) => {
         game.stopEngine();
         roomCtrl.clearRoom();
@@ -831,10 +3366,14 @@
         showErrorBanner(msg.reason || "Bạn đã bị mời khỏi phòng");
       });
       net.on(MSG.ROOM_LIST, () => {
-        if (!roomCtrl.getRoom() && game.getState().engineMode !== "solo") showScreen("lobby");
+        if (!roomCtrl.getRoom() && game.getState().engineMode !== "solo")
+          showScreen("lobby");
       });
       net.on(MSG.CHAT, (msg) => {
-        if (roomCtrl.getRoom() && roomCtrl.getRoom().state !== ROOM_STATE.PLAYING) {
+        if (
+          roomCtrl.getRoom() &&
+          roomCtrl.getRoom().state !== ROOM_STATE.PLAYING
+        ) {
           roomCtrl.appendChat(msg);
         }
       });
@@ -847,7 +3386,17 @@
       });
 
       net.connect();
-      window.__fpsApp = { net, lobby, roomCtrl, game, settings, input, settingsUI };
+      window.__fpsApp = {
+        net,
+        lobby,
+        roomCtrl,
+        game,
+        settings,
+        input,
+        settingsUI,
+        defeatScreen,
+        lobbyMusic,
+      };
     </script>
   </body>
 </html>

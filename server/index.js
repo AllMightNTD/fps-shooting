@@ -8,6 +8,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import zlib from "node:zlib";
 
 import { PING_INTERVAL_MS, RoomManager } from "./RoomManager.js";
 import { ERR, MSG, ROOM_STATE } from "./protocol.js";
@@ -23,6 +24,12 @@ const MODEL_ASSET_RE = /^\/model\/dist\/([a-z0-9_]+)\.(glb|bundle\.js)$/;
 const PUBLIC_JS_RE = /^\/js\/([a-z0-9_]+)\.js$/;
 const PUBLIC_ASSET_RE = /^\/assets\/([a-z0-9_]+)\.(webp|png|jpg|jpeg)$/;
 const SHARED_MAP_RE = /^\/shared\/maps\/([a-z0-9_]+)\.json$/;
+const SOUND_ASSET_RE = /^\/sound\/(?:([a-zA-Z0-9_]+)\/)?([a-zA-Z0-9_]+)\.(wav|mp3)$/;
+
+const AUDIO_MIME = {
+  wav: "audio/wav",
+  mp3: "audio/mpeg",
+};
 
 const IMAGE_MIME = {
   webp: "image/webp",
@@ -30,6 +37,10 @@ const IMAGE_MIME = {
   jpg: "image/jpeg",
   jpeg: "image/jpeg",
 };
+
+const COMPRESSIBLE_EXTS = new Set([".html", ".js", ".json", ".glb"]);
+const MAX_COMPRESSED_CACHE_BYTES = 48 * 1024 * 1024;
+const COMPRESS_MIN_BYTES = 512;
 
 export function getLanUrls(port) {
   const ifaces = os.networkInterfaces();
@@ -56,6 +67,7 @@ export function createLanServer(options = {}) {
   const weaponsPath = path.join(rootDir, "server", "weapons.js");
   const distDir = path.resolve(rootDir, "model", "dist");
   const sharedMapsDir = path.resolve(rootDir, "shared", "maps");
+  const soundDir = path.resolve(rootDir, "sound");
   const nowFn = options.nowFn || Date.now;
   const tickMs = options.tickMs || TICK_MS;
 
@@ -120,7 +132,7 @@ export function createLanServer(options = {}) {
     }
 
     if (msg.type === MSG.ROOM_QUICK) {
-      const res = roomManager.quickJoin(session, msg.playerName);
+      const res = roomManager.quickJoin(session, msg.playerName, msg.mode);
       if (!res.ok) sendError(state.ws, res.code, res.message);
       return;
     }
@@ -191,6 +203,11 @@ export function createLanServer(options = {}) {
         if (p) room.match.handleSwitchWeapon(p, msg, now);
         break;
       }
+      case MSG.SCOPE: {
+        const p = room.players.get(session.id);
+        if (p) room.match.handleScope(p, msg);
+        break;
+      }
       case MSG.FIRE: {
         const p = room.players.get(session.id);
         if (p) {
@@ -226,15 +243,141 @@ export function createLanServer(options = {}) {
     res.end(body);
   }
 
-  function streamFile(res, method, filePath, contentType, cacheControl) {
+  const compressedCache = new Map(); // `${filePath}:${encoding}` -> { mtimeMs, size, data }
+  let compressedCacheBytes = 0;
+
+  function pickCompression(reqHeaders, filePath, stat, method, rangeHeader) {
+    if (method !== "GET" || rangeHeader || stat.size < COMPRESS_MIN_BYTES) return null;
+    const ext = path.extname(filePath).toLowerCase();
+    if (!COMPRESSIBLE_EXTS.has(ext)) return null;
+    const ae = reqHeaders && typeof reqHeaders["accept-encoding"] === "string" ? reqHeaders["accept-encoding"] : "";
+    if (/\bbr\b/i.test(ae)) return "br";
+    if (/\bgzip\b/i.test(ae)) return "gzip";
+    return null;
+  }
+
+  function compressAsync(rawBuf, encoding) {
+    return new Promise((resolve, reject) => {
+      if (encoding === "br") {
+        zlib.brotliCompress(
+          rawBuf,
+          { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 4 } },
+          (err, out) => (err ? reject(err) : resolve(out)),
+        );
+      } else {
+        zlib.gzip(rawBuf, { level: 6 }, (err, out) => (err ? reject(err) : resolve(out)));
+      }
+    });
+  }
+
+  async function getCompressedAsset(filePath, stat, encoding) {
+    const cacheKey = `${filePath}:${encoding}`;
+    const hit = compressedCache.get(cacheKey);
+    if (hit && hit.mtimeMs === stat.mtimeMs && hit.size === stat.size) {
+      compressedCache.delete(cacheKey);
+      compressedCache.set(cacheKey, hit);
+      return hit.data;
+    }
+    if (hit) {
+      compressedCacheBytes -= hit.data.length;
+      compressedCache.delete(cacheKey);
+    }
+    const rawBuf = await fs.promises.readFile(filePath);
+    const out = await compressAsync(rawBuf, encoding);
+    if (out.length <= MAX_COMPRESSED_CACHE_BYTES) {
+      while (compressedCacheBytes + out.length > MAX_COMPRESSED_CACHE_BYTES && compressedCache.size > 0) {
+        const oldestKey = compressedCache.keys().next().value;
+        const oldest = compressedCache.get(oldestKey);
+        compressedCacheBytes -= oldest ? oldest.data.length : 0;
+        compressedCache.delete(oldestKey);
+      }
+      compressedCache.set(cacheKey, { mtimeMs: stat.mtimeMs, size: stat.size, data: out });
+      compressedCacheBytes += out.length;
+    }
+    return out;
+  }
+
+  function streamFile(res, method, filePath, contentType, cacheControl, reqHeaders = null) {
     if (!fs.existsSync(filePath)) {
       sendJsonHttp(res, 404, { error: "Not found" });
       return;
     }
     const stat = fs.statSync(filePath);
+    const rangeHeader = reqHeaders && typeof reqHeaders.range === "string" ? reqHeaders.range : "";
+    if (rangeHeader && method === "GET" && stat.size > 0) {
+      const m = /^bytes=(\d+)-(\d*)$/.exec(rangeHeader.trim());
+      if (m) {
+        const start = Number(m[1]);
+        const end = m[2] ? Math.min(stat.size - 1, Number(m[2])) : stat.size - 1;
+        if (Number.isInteger(start) && Number.isInteger(end) && start >= 0 && start <= end && start < stat.size) {
+          res.writeHead(206, {
+            "Content-Type": contentType,
+            "Content-Length": end - start + 1,
+            "Content-Range": `bytes ${start}-${end}/${stat.size}`,
+            "Accept-Ranges": "bytes",
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": cacheControl,
+          });
+          fs.createReadStream(filePath, { start, end }).pipe(res);
+          return;
+        }
+        res.writeHead(416, { "Content-Range": `bytes */${stat.size}` });
+        res.end();
+        return;
+      }
+    }
+
+    const etag = `W/"${stat.size.toString(16)}-${Math.trunc(stat.mtimeMs).toString(16)}"`;
+    const ifNoneMatch = reqHeaders && typeof reqHeaders["if-none-match"] === "string" ? reqHeaders["if-none-match"].trim() : "";
+    if (ifNoneMatch && ifNoneMatch === etag) {
+      res.writeHead(304, {
+        ETag: etag,
+        "Cache-Control": cacheControl,
+        Vary: "Accept-Encoding",
+        "X-Content-Type-Options": "nosniff",
+      });
+      res.end();
+      return;
+    }
+
+    const encoding = pickCompression(reqHeaders, filePath, stat, method, rangeHeader);
+    if (encoding) {
+      getCompressedAsset(filePath, stat, encoding)
+        .then((buf) => {
+          if (res.writableEnded || res.destroyed) return;
+          res.writeHead(200, {
+            "Content-Type": contentType,
+            "Content-Encoding": encoding,
+            "Content-Length": buf.length,
+            ETag: etag,
+            Vary: "Accept-Encoding",
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": cacheControl,
+          });
+          res.end(buf);
+        })
+        .catch(() => {
+          if (res.writableEnded || res.destroyed) return;
+          res.writeHead(200, {
+            "Content-Type": contentType,
+            "Content-Length": stat.size,
+            "Accept-Ranges": "bytes",
+            ETag: etag,
+            Vary: "Accept-Encoding",
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": cacheControl,
+          });
+          fs.createReadStream(filePath).pipe(res);
+        });
+      return;
+    }
+
     res.writeHead(200, {
       "Content-Type": contentType,
       "Content-Length": stat.size,
+      "Accept-Ranges": "bytes",
+      ETag: etag,
+      Vary: "Accept-Encoding",
       "X-Content-Type-Options": "nosniff",
       "Cache-Control": cacheControl,
     });
@@ -271,17 +414,17 @@ export function createLanServer(options = {}) {
     }
 
     if (pathname === "/" || pathname === "/FPS.html" || pathname === "/public/FPS.html") {
-      streamFile(res, req.method, fpsPath, "text/html; charset=utf-8", "no-store");
+      streamFile(res, req.method, fpsPath, "text/html; charset=utf-8", "public, max-age=300", req.headers);
       return;
     }
 
     if (pathname === "/js/protocol.js") {
-      streamFile(res, req.method, protocolPath, "application/javascript; charset=utf-8", "no-store");
+      streamFile(res, req.method, protocolPath, "application/javascript; charset=utf-8", "public, max-age=300", req.headers);
       return;
     }
 
     if (pathname === "/js/weapons.js") {
-      streamFile(res, req.method, weaponsPath, "application/javascript; charset=utf-8", "no-store");
+      streamFile(res, req.method, weaponsPath, "application/javascript; charset=utf-8", "public, max-age=300", req.headers);
       return;
     }
 
@@ -289,7 +432,7 @@ export function createLanServer(options = {}) {
     if (jsMatch) {
       const candidate = path.resolve(publicJsDir, `${jsMatch[1]}.js`);
       if (candidate.startsWith(publicJsDir + path.sep)) {
-        streamFile(res, req.method, candidate, "application/javascript; charset=utf-8", "no-store");
+        streamFile(res, req.method, candidate, "application/javascript; charset=utf-8", "public, max-age=300", req.headers);
         return;
       }
     }
@@ -299,7 +442,7 @@ export function createLanServer(options = {}) {
       const ext = publicAssetMatch[2];
       const candidate = path.resolve(publicAssetsDir, `${publicAssetMatch[1]}.${ext}`);
       if (candidate.startsWith(publicAssetsDir + path.sep)) {
-        streamFile(res, req.method, candidate, IMAGE_MIME[ext] || "application/octet-stream", "public, max-age=3600");
+        streamFile(res, req.method, candidate, IMAGE_MIME[ext] || "application/octet-stream", "public, max-age=86400", req.headers);
         return;
       }
     }
@@ -313,7 +456,7 @@ export function createLanServer(options = {}) {
           assetMatch[2] === "glb"
             ? "model/gltf-binary"
             : "application/javascript; charset=utf-8";
-        streamFile(res, req.method, candidate, mime, "public, max-age=60");
+        streamFile(res, req.method, candidate, mime, "public, max-age=86400", req.headers);
         return;
       }
     }
@@ -322,7 +465,28 @@ export function createLanServer(options = {}) {
     if (mapJsonMatch) {
       const candidate = path.resolve(sharedMapsDir, `${mapJsonMatch[1]}.json`);
       if (candidate.startsWith(sharedMapsDir + path.sep)) {
-        streamFile(res, req.method, candidate, "application/json; charset=utf-8", "public, max-age=60");
+        streamFile(res, req.method, candidate, "application/json; charset=utf-8", "public, max-age=86400", req.headers);
+        return;
+      }
+    }
+
+    const soundMatch = SOUND_ASSET_RE.exec(pathname);
+    if (soundMatch) {
+      const subDir = soundMatch[1];
+      const baseName = soundMatch[2];
+      const ext = soundMatch[3];
+      const candidate = subDir
+        ? path.resolve(soundDir, subDir, `${baseName}.${ext}`)
+        : path.resolve(soundDir, `${baseName}.${ext}`);
+      if (candidate.startsWith(soundDir + path.sep)) {
+        streamFile(
+          res,
+          req.method,
+          candidate,
+          AUDIO_MIME[ext] || "application/octet-stream",
+          "public, max-age=86400",
+          req.headers,
+        );
         return;
       }
     }

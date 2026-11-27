@@ -655,6 +655,24 @@ export const MILITARY_LAYOUT = {
       "bvhCollision": false
     },
     {
+      "id": "lane_a_flank_cont",
+      "asset": "container",
+      "position": [
+        -25.5,
+        -0.025,
+        0.0
+      ],
+      "rotationY": 1.590796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 1,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
       "id": "lane_a_flank_wall_n",
       "asset": "concrete_wall",
       "position": [
@@ -946,14 +964,14 @@ export const MILITARY_LAYOUT = {
       "id": "jersey_a_west",
       "asset": "concrete_wall",
       "position": [
-        -11.5,
+        -8.8,
         0.0,
-        -28.0
+        -29.0
       ],
-      "rotationY": 0.45,
+      "rotationY": 0.36,
       "scale": [
-        0.85,
-        0.52,
+        1.05,
+        1.0,
         1.0
       ],
       "variant": 0,
@@ -964,14 +982,14 @@ export const MILITARY_LAYOUT = {
       "id": "jersey_a_east",
       "asset": "concrete_wall",
       "position": [
-        10.5,
+        9.6,
         0.0,
-        -28.0
+        -29.0
       ],
-      "rotationY": -0.4,
+      "rotationY": -0.22,
       "scale": [
-        0.85,
-        0.52,
+        1.05,
+        1.0,
         1.0
       ],
       "variant": 0,
@@ -982,14 +1000,14 @@ export const MILITARY_LAYOUT = {
       "id": "jersey_b_west",
       "asset": "concrete_wall",
       "position": [
-        -10.5,
+        -8.8,
         0.0,
-        28.0
+        29.0
       ],
-      "rotationY": -0.45,
+      "rotationY": -0.36,
       "scale": [
-        0.85,
-        0.52,
+        1.05,
+        1.0,
         1.0
       ],
       "variant": 0,
@@ -1000,14 +1018,14 @@ export const MILITARY_LAYOUT = {
       "id": "jersey_b_east",
       "asset": "concrete_wall",
       "position": [
-        11.5,
+        9.6,
         0.0,
-        28.0
+        29.0
       ],
-      "rotationY": 0.4,
+      "rotationY": 0.22,
       "scale": [
-        0.85,
-        0.52,
+        1.05,
+        1.0,
         1.0
       ],
       "variant": 0,
@@ -1774,9 +1792,9 @@ export const MILITARY_LAYOUT = {
       "id": "cont_b4",
       "asset": "container",
       "position": [
-        25.0,
+        24.5,
         -0.025,
-        4.0
+        0.0
       ],
       "rotationY": 1.592796,
       "scale": [
@@ -1794,7 +1812,7 @@ export const MILITARY_LAYOUT = {
       "position": [
         17.0,
         -0.025,
-        15.0
+        14.0
       ],
       "rotationY": 1.586796,
       "scale": [
@@ -1812,7 +1830,7 @@ export const MILITARY_LAYOUT = {
       "position": [
         17.0,
         2.575,
-        15.0
+        14.0
       ],
       "rotationY": 1.586796,
       "scale": [
@@ -1828,9 +1846,9 @@ export const MILITARY_LAYOUT = {
       "id": "cont_b6",
       "asset": "container",
       "position": [
-        25.0,
+        17.0,
         -0.025,
-        23.0
+        22.0
       ],
       "rotationY": -0.028,
       "scale": [
@@ -1857,6 +1875,24 @@ export const MILITARY_LAYOUT = {
         1.0
       ],
       "variant": 1,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "cont_b8",
+      "asset": "container",
+      "position": [
+        29.0,
+        -0.025,
+        28.0
+      ],
+      "rotationY": 1.595796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
       "castShadow": true,
       "bvhCollision": false
     },
@@ -5662,6 +5698,15 @@ export const MILITARY_COLLIDERS = {
       "tag": "sandbag"
     },
     {
+      "x0": -26.7598,
+      "x1": -24.2402,
+      "y0": -0.025,
+      "y1": 2.575,
+      "z0": -3.0234,
+      "z1": 3.0234,
+      "tag": "container"
+    },
+    {
       "x0": -33.5,
       "x1": -29.5,
       "y0": 0.0,
@@ -5743,15 +5788,6 @@ export const MILITARY_COLLIDERS = {
       "tag": "watchtower_deck"
     },
     {
-      "x0": 5.44,
-      "x1": 5.6,
-      "y0": 4.0,
-      "y1": 5.1,
-      "z0": -1.6,
-      "z1": 1.6,
-      "tag": "watchtower_parapet"
-    },
-    {
       "x0": 2.4,
       "x1": 5.6,
       "y0": 4.0,
@@ -5770,10 +5806,19 @@ export const MILITARY_COLLIDERS = {
       "tag": "watchtower_parapet"
     },
     {
+      "x0": 5.44,
+      "x1": 5.6,
+      "y0": 4.0,
+      "y1": 4.72,
+      "z0": -1.6,
+      "z1": 1.6,
+      "tag": "watchtower_parapet"
+    },
+    {
       "x0": 2.4,
       "x1": 2.56,
       "y0": 4.0,
-      "y1": 5.1,
+      "y1": 4.72,
       "z0": -1.6,
       "z1": -0.55,
       "tag": "watchtower_parapet"
@@ -5782,7 +5827,7 @@ export const MILITARY_COLLIDERS = {
       "x0": 2.4,
       "x1": 2.56,
       "y0": 4.0,
-      "y1": 5.1,
+      "y1": 4.72,
       "z0": 0.55,
       "z1": 1.6,
       "tag": "watchtower_parapet"
@@ -5970,39 +6015,39 @@ export const MILITARY_COLLIDERS = {
       "tag": "fence"
     },
     {
-      "x0": -13.1286,
-      "x1": -9.8714,
+      "x0": -10.8446,
+      "x1": -6.7554,
       "y0": 0.0,
-      "y1": 1.248,
-      "z0": -28.942,
-      "z1": -27.058,
+      "y1": 2.4,
+      "z0": -29.9504,
+      "z1": -28.0496,
       "tag": "concrete_wall"
     },
     {
-      "x0": 8.8466,
-      "x1": 12.1534,
+      "x0": 7.5015,
+      "x1": 11.6985,
       "y0": 0.0,
-      "y1": 1.248,
-      "z0": -28.8692,
-      "z1": -27.1308,
+      "y1": 2.4,
+      "z0": -29.6779,
+      "z1": -28.3221,
       "tag": "concrete_wall"
     },
     {
-      "x0": -12.1286,
-      "x1": -8.8714,
+      "x0": -10.8446,
+      "x1": -6.7554,
       "y0": 0.0,
-      "y1": 1.248,
-      "z0": 27.058,
-      "z1": 28.942,
+      "y1": 2.4,
+      "z0": 28.0496,
+      "z1": 29.9504,
       "tag": "concrete_wall"
     },
     {
-      "x0": 9.8466,
-      "x1": 13.1534,
+      "x0": 7.5015,
+      "x1": 11.6985,
       "y0": 0.0,
-      "y1": 1.248,
-      "z0": 27.1308,
-      "z1": 28.8692,
+      "y1": 2.4,
+      "z0": 28.3221,
+      "z1": 29.6779,
       "tag": "concrete_wall"
     },
     {
@@ -6321,12 +6366,12 @@ export const MILITARY_COLLIDERS = {
       "tag": "container"
     },
     {
-      "x0": 23.7343,
-      "x1": 26.2657,
+      "x0": 23.2343,
+      "x1": 25.7657,
       "y0": -0.025,
       "y1": 2.575,
-      "z0": 0.9743,
-      "z1": 7.0257,
+      "z0": -3.0257,
+      "z1": 3.0257,
       "tag": "container"
     },
     {
@@ -6334,8 +6379,8 @@ export const MILITARY_COLLIDERS = {
       "x1": 18.2478,
       "y0": -0.025,
       "y1": 2.575,
-      "z0": 11.9812,
-      "z1": 18.0188,
+      "z0": 10.9812,
+      "z1": 17.0188,
       "tag": "container"
     },
     {
@@ -6343,17 +6388,17 @@ export const MILITARY_COLLIDERS = {
       "x1": 18.2478,
       "y0": 2.575,
       "y1": 5.175,
-      "z0": 11.9812,
-      "z1": 18.0188,
+      "z0": 10.9812,
+      "z1": 17.0188,
       "tag": "container"
     },
     {
-      "x0": 21.9676,
-      "x1": 28.0324,
+      "x0": 13.9676,
+      "x1": 20.0324,
       "y0": -0.025,
       "y1": 2.575,
-      "z0": 21.7165,
-      "z1": 24.2835,
+      "z0": 20.7165,
+      "z1": 23.2835,
       "tag": "container"
     },
     {
@@ -6363,6 +6408,15 @@ export const MILITARY_COLLIDERS = {
       "y1": 2.575,
       "z0": -31.0291,
       "z1": -24.9709,
+      "tag": "container"
+    },
+    {
+      "x0": 27.7254,
+      "x1": 30.2746,
+      "y0": -0.025,
+      "y1": 2.575,
+      "z0": 24.9709,
+      "z1": 31.0291,
       "tag": "container"
     },
     {

@@ -487,6 +487,8 @@ def wait_frames(page: Page, count: int = 3) -> None:
 
 def start_solo_session(page: Page, url: str) -> None:
     wait_fps_ready(page, url)
+    page.click("#btnModePractice")
+    page.wait_for_timeout(450)
     page.click("#btnSoloMode")
     page.wait_for_function(
         """() => {
@@ -821,10 +823,10 @@ def run_tier1(browser: Browser, url: str, tracker: ErrorTracker) -> dict[str, An
         assert vm0["armsReady"] and vm0["armsVisible"] and vm0["skinningEnabled"], f"Arms rig not ready: {vm0}"
         checks["solo_startup"] = {"passed": True, "hp": me0["hp"], "armsReady": vm0["armsReady"]}
 
-        # Slot 1: M416
+        # Slot 1: M416 (default Toggle ADS: click RMB on -> click RMB off)
         switch_weapon_and_wait(page, "Digit1", 1, "m416")
         assert get_me(page)["ammo"] == 30 and get_me(page)["ads"] < 0.1
-        page.mouse.down(button="right")
+        page.mouse.click(640, 360, button="right")
         page.wait_for_function(
             """() => {
               const me = window.__fpsApp.game.getState().getMe();
@@ -835,7 +837,7 @@ def run_tier1(browser: Browser, url: str, tracker: ErrorTracker) -> dict[str, An
             timeout=8000,
         )
         m416_ads_val = get_me(page)["ads"]
-        page.mouse.up(button="right")
+        page.mouse.click(640, 360, button="right")
         page.wait_for_function("() => window.__fpsApp.game.getState().getMe().ads < 0.1", timeout=8000)
         m416_after_fire = fire_auto_once(page, 30)
         assert 25 <= m416_after_fire <= 29, f"Expected M416 ammo 30->29 (or <=29), got {m416_after_fire}"
@@ -845,7 +847,7 @@ def run_tier1(browser: Browser, url: str, tracker: ErrorTracker) -> dict[str, An
         # Slot 2: Glock-17
         switch_weapon_and_wait(page, "Digit2", 2, "pistol")
         assert get_me(page)["ammo"] == 15 and get_me(page)["ads"] < 0.1
-        page.mouse.down(button="right")
+        page.mouse.click(640, 360, button="right")
         page.wait_for_function(
             """() => {
               const me = window.__fpsApp.game.getState().getMe();
@@ -855,28 +857,30 @@ def run_tier1(browser: Browser, url: str, tracker: ErrorTracker) -> dict[str, An
             timeout=8000,
         )
         glock_ads_val = get_me(page)["ads"]
-        page.mouse.up(button="right")
+        page.mouse.click(640, 360, button="right")
         page.wait_for_function("() => window.__fpsApp.game.getState().getMe().ads < 0.1", timeout=8000)
         glock_after_fire = fire_semi_once(page, 15)
         assert glock_after_fire == 14, f"Expected Glock ammo 14, got {glock_after_fire}"
         reload_and_wait(page, 15)
         checks["slot2_glock17"] = {"passed": True, "ads": round(glock_ads_val, 3), "after_fire": glock_after_fire, "reloaded": 15}
 
-        # Slot 3: AWM
+        # Slot 3: AWM (Valorant Double Zoom: RMB -> 2.5x -> 5.0x -> Off)
         switch_weapon_and_wait(page, "Digit3", 3, "sniper")
         assert get_me(page)["ammo"] == 5 and get_me(page)["ads"] < 0.1
-        page.mouse.down(button="right")
+        page.mouse.click(640, 360, button="right")
         page.wait_for_function(
             """() => {
               const me = window.__fpsApp.game.getState().getMe();
               const vm = window.__fpsApp.game.getState().getViewmodelState();
               const scope = document.getElementById("sniperScope");
-              return me.ads > 0.85 && getComputedStyle(scope).display === "block" && vm.worldFov < 30 && vm.armsVisible === false;
+              return me.ads > 0.85 && getComputedStyle(scope).display === "block" && vm.worldFov < 35 && vm.armsVisible === false;
             }""",
             timeout=8000,
         )
         awm_ads_val = get_me(page)["ads"]
-        page.mouse.up(button="right")
+        page.mouse.click(640, 360, button="right")
+        page.wait_for_function("() => window.__fpsApp.game.getState().getAwmScopeState().level === 2", timeout=8000)
+        page.mouse.click(640, 360, button="right")
         page.wait_for_function(
             """() => {
               const me = window.__fpsApp.game.getState().getMe();
@@ -901,6 +905,8 @@ def run_tier1(browser: Browser, url: str, tracker: ErrorTracker) -> dict[str, An
         wait_fps_ready(page_lan, url)
         page_lan.wait_for_function("() => window.__fpsApp.net.connected === true", timeout=10000)
         page_lan.fill("#nickInput", "T1_SoloHost")
+        page_lan.click("#btnModeTDM")
+        page_lan.wait_for_timeout(450)
         page_lan.click("#btnOpenCreate")
         page_lan.fill("#createRoomName", f"T1_Room_{int(time.time()) % 100000}")
         page_lan.check("#createAllowSolo")
@@ -1131,6 +1137,8 @@ def capture_lan_pvp_3p_session(
         guest.wait_for_function("() => window.__fpsApp.net.connected === true", timeout=10000)
 
         host.fill("#nickInput", "HostE2E")
+        host.click("#btnModeTDM")
+        host.wait_for_timeout(450)
         host.click("#btnOpenCreate")
         host.fill("#createRoomName", room_name)
         host.select_option("#createMode", "TDM")
@@ -1355,7 +1363,7 @@ def run_tier3(browser: Browser, url: str, tracker: ErrorTracker, out_dir: str) -
         moved_dist = math.hypot(p1["x"] - p0["x"], p1["z"] - p0["z"])
 
         page_s.keyboard.down("KeyC")
-        page_s.mouse.down(button="right")
+        page_s.mouse.click(640, 360, button="right")
         page_s.wait_for_function(
             """() => {
               const me = window.__fpsApp.game.getState().getMe();
@@ -1363,7 +1371,7 @@ def run_tier3(browser: Browser, url: str, tracker: ErrorTracker, out_dir: str) -
             }""",
             timeout=15000,
         )
-        page_s.mouse.up(button="right")
+        page_s.mouse.click(640, 360, button="right")
         page_s.keyboard.up("KeyC")
         page_s.wait_for_function(
             "() => { const me = window.__fpsApp.game.getState().getMe(); return me.crouched === false && me.ads < 0.1; }",
@@ -1378,12 +1386,14 @@ def run_tier3(browser: Browser, url: str, tracker: ErrorTracker, out_dir: str) -
         reload_and_wait(page_s, 15)
 
         switch_weapon_and_wait(page_s, "Digit3", 3, "sniper")
-        page_s.mouse.down(button="right")
+        page_s.mouse.click(640, 360, button="right")
         page_s.wait_for_function(
             "() => getComputedStyle(document.getElementById('sniperScope')).display === 'block'",
             timeout=15000,
         )
-        page_s.mouse.up(button="right")
+        page_s.mouse.click(640, 360, button="right")
+        page_s.wait_for_function("() => window.__fpsApp.game.getState().getAwmScopeState().level === 2", timeout=15000)
+        page_s.mouse.click(640, 360, button="right")
         page_s.wait_for_function(
             "() => window.__fpsApp.game.getState().getMe().ads < 0.1",
             timeout=15000,

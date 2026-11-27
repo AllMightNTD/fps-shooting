@@ -152,25 +152,30 @@ def build_watchtower_nodes(textures: MilitaryMapTextures | None = None) -> list[
             )
         )
 
-    # Olive steel 1.10m crouch-cover parapet panels (y in [4.00, 5.10])
-    # +X, -Z, +Z solid; -X leaves ladder opening z in [-0.55, 0.55]
-    parapet_parts.append(transform_mesh(create_box(0.07, 1.10, 3.08, uv_scale=0.45), translation=(1.52, 4.55, 0.0)))
+    # Olive steel parapet panels on 4m deck:
+    # - North (-Z) & South (+Z): 1.10m frontal crouch cover (y in [4.00, 5.10])
+    # - East (+X) & West (-X): breached 0.72m waist-high flank rail (y in [4.00, 4.72]) with open upper sightline
+    #   so a sniper crouched on deck can be counter-fired from Lane A warehouses & Lane B containers!
     parapet_parts.append(transform_mesh(create_box(3.08, 1.10, 0.07, uv_scale=0.45), translation=(0.0, 4.55, -1.52)))
     parapet_parts.append(transform_mesh(create_box(3.08, 1.10, 0.07, uv_scale=0.45), translation=(0.0, 4.55, 1.52)))
-    parapet_parts.append(transform_mesh(create_box(0.07, 1.10, 1.02, uv_scale=0.45), translation=(-1.52, 4.55, -1.06)))
-    parapet_parts.append(transform_mesh(create_box(0.07, 1.10, 1.02, uv_scale=0.45), translation=(-1.52, 4.55, 1.06)))
+    parapet_parts.append(transform_mesh(create_box(0.07, 0.72, 3.08, uv_scale=0.45), translation=(1.52, 4.36, 0.0)))
+    parapet_parts.append(transform_mesh(create_box(0.07, 0.72, 1.02, uv_scale=0.45), translation=(-1.52, 4.36, -1.06)))
+    parapet_parts.append(transform_mesh(create_box(0.07, 0.72, 1.02, uv_scale=0.45), translation=(-1.52, 4.36, 1.06)))
 
-    # Parapet top steel trim rail
-    steel_parts.append(transform_mesh(create_box(0.10, 0.05, 3.14, uv_scale=0.5), translation=(1.52, 5.11, 0.0)))
+    # Parapet top steel trim rail + open flank safety bar (y=5.08 on +X/-X visually frames open counter-fire window)
     steel_parts.append(transform_mesh(create_box(3.14, 0.05, 0.10, uv_scale=0.5), translation=(0.0, 5.11, -1.52)))
     steel_parts.append(transform_mesh(create_box(3.14, 0.05, 0.10, uv_scale=0.5), translation=(0.0, 5.11, 1.52)))
+    steel_parts.append(transform_mesh(create_box(0.10, 0.05, 3.14, uv_scale=0.5), translation=(1.52, 4.73, 0.0)))
+    steel_parts.append(transform_mesh(create_box(0.04, 0.04, 3.04, uv_scale=0.5), translation=(1.52, 5.10, 0.0)))
+    steel_parts.append(transform_mesh(create_box(0.10, 0.05, 1.04, uv_scale=0.5), translation=(-1.52, 4.73, -1.06)))
+    steel_parts.append(transform_mesh(create_box(0.10, 0.05, 1.04, uv_scale=0.5), translation=(-1.52, 4.73, 1.06)))
 
-    # Military camouflage netting draped around the 1.10m parapet walls
-    camo_parts.append(transform_mesh(create_box(0.02, 1.06, 3.12, uv_scale=0.6), translation=(1.57, 4.55, 0.0)))
+    # Military camouflage netting matching exact solid parapet heights (leaves +X/-X upper flank clear!)
     camo_parts.append(transform_mesh(create_box(3.12, 1.06, 0.02, uv_scale=0.6), translation=(0.0, 4.55, -1.57)))
     camo_parts.append(transform_mesh(create_box(3.12, 1.06, 0.02, uv_scale=0.6), translation=(0.0, 4.55, 1.57)))
-    camo_parts.append(transform_mesh(create_box(0.02, 1.06, 1.00, uv_scale=0.6), translation=(-1.57, 4.55, -1.06)))
-    camo_parts.append(transform_mesh(create_box(0.02, 1.06, 1.00, uv_scale=0.6), translation=(-1.57, 4.55, 1.06)))
+    camo_parts.append(transform_mesh(create_box(0.02, 0.68, 3.12, uv_scale=0.6), translation=(1.57, 4.36, 0.0)))
+    camo_parts.append(transform_mesh(create_box(0.02, 0.68, 1.00, uv_scale=0.6), translation=(-1.57, 4.36, -1.06)))
+    camo_parts.append(transform_mesh(create_box(0.02, 0.68, 1.00, uv_scale=0.6), translation=(-1.57, 4.36, 1.06)))
 
     # Sandbags stacked along the inside perimeter of the 4m deck
     for sx in (-0.9, 0.0, 0.9):

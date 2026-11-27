@@ -654,6 +654,24 @@
       "bvhCollision": false
     },
     {
+      "id": "lane_a_flank_cont",
+      "asset": "container",
+      "position": [
+        -25.5,
+        -0.025,
+        0.0
+      ],
+      "rotationY": 1.590796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 1,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
       "id": "lane_a_flank_wall_n",
       "asset": "concrete_wall",
       "position": [
@@ -945,14 +963,14 @@
       "id": "jersey_a_west",
       "asset": "concrete_wall",
       "position": [
-        -11.5,
+        -8.8,
         0.0,
-        -28.0
+        -29.0
       ],
-      "rotationY": 0.45,
+      "rotationY": 0.36,
       "scale": [
-        0.85,
-        0.52,
+        1.05,
+        1.0,
         1.0
       ],
       "variant": 0,
@@ -963,14 +981,14 @@
       "id": "jersey_a_east",
       "asset": "concrete_wall",
       "position": [
-        10.5,
+        9.6,
         0.0,
-        -28.0
+        -29.0
       ],
-      "rotationY": -0.4,
+      "rotationY": -0.22,
       "scale": [
-        0.85,
-        0.52,
+        1.05,
+        1.0,
         1.0
       ],
       "variant": 0,
@@ -981,14 +999,14 @@
       "id": "jersey_b_west",
       "asset": "concrete_wall",
       "position": [
-        -10.5,
+        -8.8,
         0.0,
-        28.0
+        29.0
       ],
-      "rotationY": -0.45,
+      "rotationY": -0.36,
       "scale": [
-        0.85,
-        0.52,
+        1.05,
+        1.0,
         1.0
       ],
       "variant": 0,
@@ -999,14 +1017,14 @@
       "id": "jersey_b_east",
       "asset": "concrete_wall",
       "position": [
-        11.5,
+        9.6,
         0.0,
-        28.0
+        29.0
       ],
-      "rotationY": 0.4,
+      "rotationY": 0.22,
       "scale": [
-        0.85,
-        0.52,
+        1.05,
+        1.0,
         1.0
       ],
       "variant": 0,
@@ -1773,9 +1791,9 @@
       "id": "cont_b4",
       "asset": "container",
       "position": [
-        25.0,
+        24.5,
         -0.025,
-        4.0
+        0.0
       ],
       "rotationY": 1.592796,
       "scale": [
@@ -1793,7 +1811,7 @@
       "position": [
         17.0,
         -0.025,
-        15.0
+        14.0
       ],
       "rotationY": 1.586796,
       "scale": [
@@ -1811,7 +1829,7 @@
       "position": [
         17.0,
         2.575,
-        15.0
+        14.0
       ],
       "rotationY": 1.586796,
       "scale": [
@@ -1827,9 +1845,9 @@
       "id": "cont_b6",
       "asset": "container",
       "position": [
-        25.0,
+        17.0,
         -0.025,
-        23.0
+        22.0
       ],
       "rotationY": -0.028,
       "scale": [
@@ -1856,6 +1874,24 @@
         1.0
       ],
       "variant": 1,
+      "castShadow": true,
+      "bvhCollision": false
+    },
+    {
+      "id": "cont_b8",
+      "asset": "container",
+      "position": [
+        29.0,
+        -0.025,
+        28.0
+      ],
+      "rotationY": 1.595796,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "variant": 0,
       "castShadow": true,
       "bvhCollision": false
     },

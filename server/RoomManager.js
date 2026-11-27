@@ -217,11 +217,14 @@ export class RoomManager {
     return { ok: true, room };
   }
 
-  quickJoin(session, playerName = null) {
+  quickJoin(session, playerName = null, preferredMode = null) {
     this._syncPlayerName(session, playerName);
+    const modeFilter =
+      preferredMode === GAME_MODE.FFA || preferredMode === GAME_MODE.TDM ? preferredMode : null;
     let best = null;
     for (const r of this.rooms.values()) {
       if (r.password !== null) continue;
+      if (modeFilter && r.mode !== modeFilter) continue;
       if (r.state !== ROOM_STATE.WAITING && r.state !== ROOM_STATE.PLAYING) continue;
       if (r.players.size >= r.maxPlayers) continue;
       if (!best || r.players.size > best.players.size) best = r;
@@ -229,9 +232,10 @@ export class RoomManager {
     if (best) {
       return this.joinRoom(session, best.id);
     }
+    const targetMode = modeFilter || GAME_MODE.TDM;
     return this.createRoom(session, {
-      name: `Khu Quân Sự TDM #${this.nextRoomSeq}`,
-      mode: GAME_MODE.TDM,
+      name: `Khu Quân Sự ${targetMode} #${this.nextRoomSeq}`,
+      mode: targetMode,
       map: "military",
       killLimit: 30,
       maxPlayers: 10,

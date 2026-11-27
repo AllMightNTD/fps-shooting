@@ -50,7 +50,7 @@ export const WEAPONS = Object.freeze({
     slot: 1,
     name: "M416",
     magSize: 30,
-    fireInterval: 95,
+    fireInterval: 86,
     tacticalReloadTime: 1850,
     reloadTime: 2400,
     auto: true,

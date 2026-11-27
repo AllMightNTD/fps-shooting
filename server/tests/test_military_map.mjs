@@ -68,10 +68,20 @@ test("MapCollision handles watchtower ladder climb to 4m deck, parapet crouch co
   assert.equal(state.grounded, true);
   assert.equal(state.onLadder, false);
 
-  // Act 2: Test crouch vs standing sightline over the 1.1m parapet (deck=4.0m, parapet=5.10m)
-  // Player crouched on tower at (4.5, 4.0, 0) -> eye at 4.0 + 1.12 = 5.12m vs low chest 4.0 + 0.72 = 4.72m
+  // Act 2: Test watchtower parapet counterplay (0.72m breached flank rail blocks low shot, exposes crouched head!)
+  // Low shot aimed at 4.72m from (15, 1.65, 0) intersects +X rail at y=4.42m < 4.72m (blocked)
   const torsoBlocked = collision.raycastShot(15, 1.65, 0, -1, (4.72 - 1.65) / 10.5, 0, 15);
-  assert.ok(torsoBlocked && torsoBlocked.dist < 10.4, "Watchtower 1.1m parapet should block low shot");
+  assert.ok(torsoBlocked && torsoBlocked.dist < 10.4, "Watchtower 0.72m flank rail should block low leg/waist shot");
+  // Counter-sniper headshot from Lane B (+19, 1.65, 0) & WH window (-17, 1.65, -18) clears crouched head (4.0, 5.10, 0)
+  assert.equal(hasLineOfSight(19, 1.65, 0, 4.0, 5.10, 0, arena), true);
+  assert.equal(hasLineOfSight(-17, 1.65, -18, 4.0, 5.10, 0, arena), true);
+  // Symmetric watchtower sightline blocks: both Team A & B spawn exits and outer flanks are shielded
+  assert.equal(hasLineOfSight(4.0, 5.7, 0, -10, 1.5, -32, arena), false);
+  assert.equal(hasLineOfSight(4.0, 5.7, 0, -10, 1.5, 32, arena), false);
+  assert.equal(hasLineOfSight(4.0, 5.7, 0, 20, 1.5, -26, arena), false);
+  assert.equal(hasLineOfSight(4.0, 5.7, 0, 20, 1.5, 26, arena), false);
+  assert.equal(hasLineOfSight(4.0, 5.7, 0, -31, 1.5, 0, arena), false);
+  assert.equal(hasLineOfSight(4.0, 5.7, 0, 30, 1.5, 0, arena), false);
 
   // Act 3: Wall sliding along angled wrecked_truck OBB never traps or explodes coordinates
   const slideState = { x: -6.0, y: 0.0, z: -12.0, vy: 0, grounded: true, onLadder: false };

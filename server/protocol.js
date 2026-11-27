@@ -54,6 +54,7 @@ export const MSG = Object.freeze({
   HIT: "hit",
   RELOAD: "reload",
   SWITCH_WEAPON: "switchWeapon",
+  SCOPE: "scope",
   PING: "ping",
 
   // Server -> Client
@@ -69,6 +70,7 @@ export const MSG = Object.freeze({
   EVENT_KILL: "event.kill",
   EVENT_RESPAWN: "event.respawn",
   EVENT_RELOAD: "event.reload",
+  EVENT_SCOPE: "event.scope",
   AMMO: "ammo",
   MATCH_COUNTDOWN: "match.countdown",
   MATCH_START: "match.start",
@@ -108,5 +110,62 @@ export function sanitizeText(raw, fallback, maxLen = 16) {
     .trim()
     .slice(0, maxLen);
   return cleaned || fallback;
+}
+
+export const SNAPSHOT_WEAPONS = Object.freeze(["m416", "pistol", "sniper"]);
+export const SNAPSHOT_WEAPON_CODE = Object.freeze({ m416: 0, pistol: 1, sniper: 2 });
+
+/**
+ * Unpack compact 20Hz tuple snapshots into normalized player objects while remaining
+ * backward-compatible with verbose legacy snapshot payloads.
+ */
+export function unpackSnapshot(snap, rosterNames = null) {
+  if (!snap || typeof snap !== "object") return null;
+  if (Array.isArray(snap.players)) {
+    return snap;
+  }
+  const tuples = Array.isArray(snap.p) ? snap.p : [];
+  const players = new Array(tuples.length);
+  for (let idx = 0; idx < tuples.length; idx++) {
+    const row = tuples[idx];
+    if (!Array.isArray(row)) continue;
+    const id = row[0];
+    const teamCode = row[1];
+    const flags = row[8] || 0;
+    const st = row[9] || 0;
+    const wCode = row[10] || 0;
+    players[idx] = {
+      id,
+      name: (rosterNames && rosterNames.get(id)) || id,
+      team: teamCode === 0 ? "A" : teamCode === 1 ? "B" : null,
+      x: row[2] || 0,
+      y: row[3] || 0,
+      z: row[4] || 0,
+      yaw: row[5] || 0,
+      pitch: row[6] || 0,
+      mv: row[7] || 0,
+      ads: Boolean(flags & 2),
+      laser: Boolean(st & 4),
+      flags,
+      weaponId: SNAPSHOT_WEAPONS[wCode] || "m416",
+      alive: Boolean(st & 1),
+      hp: row[11] ?? 100,
+      ammo: row[12] ?? 0,
+      reloading: Boolean(flags & 32),
+      invulnerable: Boolean(st & 2),
+      respawnMs: row[13] || 0,
+      kills: row[14] || 0,
+      deaths: row[15] || 0,
+      headshots: row[16] || 0,
+    };
+  }
+  const ts = Array.isArray(snap.ts) ? snap.ts : [0, 0];
+  return {
+    type: snap.type || MSG.SNAPSHOT,
+    t: snap.t || 0,
+    timeLeftSec: snap.tl || 0,
+    teamScores: { A: ts[0] || 0, B: ts[1] || 0 },
+    players,
+  };
 }
 

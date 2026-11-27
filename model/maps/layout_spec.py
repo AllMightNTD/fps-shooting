@@ -1,10 +1,11 @@
 """Single source of truth for Khu Quân Sự Cũ 5v5 (70m x 90m) layout & colliders.
 
-Coordinate convention:
+Compass & Coordinate Convention (unified across layout, shaders, sun & docs):
 - Right-handed Y-up, 1 unit = 1 meter, ground at y = 0.
-- Playable zone: X in [-35, 35] (70m), Z in [-45, 45] (90m), perimeter wall height = 3.5m.
-- Team A spawns around (0, 0, -40) facing +Z (yaw = pi).
-- Team B spawns around (0, 0, +40) facing -Z (yaw = 0).
+- North (-Z): Team A base at Z = -40 (facing South +Z, yaw = pi); perimeter wall at Z = -45.4.
+- South (+Z): Team B base at Z = +40 (facing North -Z, yaw = 0); perimeter wall at Z = +45.4.
+- West  (-X): Lane A twin warehouses at X = -22; afternoon cross-sun sits West (-X, Z = 0) for 100% N-S team fairness.
+- East  (+X): Lane B container yard at X = +22; perimeter wall at X = +35.4.
 """
 
 from __future__ import annotations
@@ -163,12 +164,14 @@ def _watchtower_subboxes() -> list[tuple[float, float, float, float, float, floa
             boxes.append((sx, 1.90, sz, 0.24, 1.90, 0.24, "watchtower_leg"))
     # Concrete deck at y in [3.75, 4.00]
     boxes.append((0.0, 3.875, 0.0, 1.60, 0.125, 1.60, "watchtower_deck"))
-    # 1.1m parapet crouch cover on y in [4.00, 5.10] (+X, -Z, +Z solid; -X leaves ladder gap z in [-0.55, 0.55])
-    boxes.append((1.52, 4.55, 0.0, 0.08, 0.55, 1.60, "watchtower_parapet"))
+    # Parapets on y=4.00m deck:
+    # - North (-Z) & South (+Z): 1.10m frontal crouch cover (y in [4.00, 5.10])
+    # - East (+X) & West (-X): 0.72m waist rail (y in [4.00, 4.72]) leaving upper flanks open to counter-fire!
     boxes.append((0.0, 4.55, -1.52, 1.60, 0.55, 0.08, "watchtower_parapet"))
     boxes.append((0.0, 4.55, 1.52, 1.60, 0.55, 0.08, "watchtower_parapet"))
-    boxes.append((-1.52, 4.55, -1.075, 0.08, 0.55, 0.525, "watchtower_parapet"))
-    boxes.append((-1.52, 4.55, 1.075, 0.08, 0.55, 0.525, "watchtower_parapet"))
+    boxes.append((1.52, 4.36, 0.0, 0.08, 0.36, 1.60, "watchtower_parapet"))
+    boxes.append((-1.52, 4.36, -1.075, 0.08, 0.36, 0.525, "watchtower_parapet"))
+    boxes.append((-1.52, 4.36, 1.075, 0.08, 0.36, 0.525, "watchtower_parapet"))
     # Roof at y in [6.35, 6.75]
     boxes.append((0.0, 6.55, 0.0, 1.70, 0.20, 1.70, "watchtower_roof"))
     return boxes
@@ -236,6 +239,8 @@ def build_military_layout() -> dict[str, Any]:
     add_obj("wh_s_crate_in", "wood_crate", -24.2, 0.0, 13.0, -0.2, cast_shadow=True)
     add_obj("wh_s_crate_in2", "wood_crate", -19.8, 0.0, 16.8, 0.15, cast_shadow=True)
     add_obj("lane_a_mid_sandbag", "sandbag", -15.2, 0.0, 0.0, math.pi * 0.5, cast_shadow=False)
+    # Protective container blocking watchtower 5.7m sightline into Lane A outer West flank (x=-31, z=0)
+    add_obj("lane_a_flank_cont", "container", -25.5, -0.025, 0.0, math.pi * 0.5 + 0.02, variant=1, cast_shadow=True)
     add_obj("lane_a_flank_wall_n", "concrete_wall", -31.5, 0.0, -24.0, 0.0, cast_shadow=True)
     add_obj("lane_a_flank_wall_s", "concrete_wall", -31.5, 0.0, 24.0, 0.0, cast_shadow=True)
     add_obj("lane_a_sandbag_n", "sandbag", -15.5, 0.0, -24.5, -0.35, cast_shadow=False)
@@ -257,11 +262,11 @@ def build_military_layout() -> dict[str, Any]:
     add_obj("mid_barrier_s", "concrete_wall", 1.5, 0.0, 23.5, 0.25, cast_shadow=True)
     add_obj("mid_fence_e", "fence", 11.2, 0.0, -2.5, math.pi * 0.5, cast_shadow=False)
 
-    # Low Jersey barriers (half-height crouch/stand transition cover across open spans)
-    add_obj("jersey_a_west", "concrete_wall", -11.5, 0.0, -28.0, 0.45, scale=(0.85, 0.52, 1.0), cast_shadow=True)
-    add_obj("jersey_a_east", "concrete_wall", 10.5, 0.0, -28.0, -0.40, scale=(0.85, 0.52, 1.0), cast_shadow=True)
-    add_obj("jersey_b_west", "concrete_wall", -10.5, 0.0, 28.0, -0.45, scale=(0.85, 0.52, 1.0), cast_shadow=True)
-    add_obj("jersey_b_east", "concrete_wall", 11.5, 0.0, 28.0, 0.40, scale=(0.85, 0.52, 1.0), cast_shadow=True)
+    # Full-height 2.4m spawn-exit cover walls symmetrically shielding all 4 spawn exits from watchtower 5.7m sightline
+    add_obj("jersey_a_west", "concrete_wall", -8.8, 0.0, -29.0, 0.36, scale=(1.05, 1.0, 1.0), cast_shadow=True)
+    add_obj("jersey_a_east", "concrete_wall", 9.6, 0.0, -29.0, -0.22, scale=(1.05, 1.0, 1.0), cast_shadow=True)
+    add_obj("jersey_b_west", "concrete_wall", -8.8, 0.0, 29.0, -0.36, scale=(1.05, 1.0, 1.0), cast_shadow=True)
+    add_obj("jersey_b_east", "concrete_wall", 9.6, 0.0, 29.0, 0.22, scale=(1.05, 1.0, 1.0), cast_shadow=True)
     add_obj("jersey_mid_nw", "concrete_wall", -11.8, 0.0, -6.5, math.pi * 0.38, scale=(0.75, 0.52, 1.0), cast_shadow=True)
     add_obj("jersey_mid_se", "concrete_wall", 10.8, 0.0, 6.5, math.pi * 0.38, scale=(0.75, 0.52, 1.0), cast_shadow=True)
 
@@ -307,16 +312,19 @@ def build_military_layout() -> dict[str, Any]:
     add_obj("barbed_flank_w", "barbed_wire", -30.5, 0.0, 0.0, 0.0, cast_shadow=False)
     add_obj("barbed_flank_e", "barbed_wire", 30.8, 0.0, -8.5, math.pi * 0.5, cast_shadow=False)
 
-    # ---- Lane B: Bãi Container (X = +22, 3 deep military colors, subtle organic skew & grounded -0.025m) ----
+    # ---- Lane B: Bãi Container (X = +22, symmetric N/S entry shields & outer East flank cover) ----
     add_obj("cont_b1", "container", 17.0, -0.025, -22.0, 0.026, variant=0, cast_shadow=True)
     add_obj("cont_b2_bot", "container", 24.0, -0.025, -14.0, math.pi * 0.5 - 0.018, variant=1, cast_shadow=True)
     add_obj("cont_b2_top", "container", 24.0, 2.575, -14.0, math.pi * 0.5 - 0.018, variant=2, cast_shadow=True)
     add_obj("cont_b3", "container", 16.0, -0.025, -4.0, -0.024, variant=2, cast_shadow=True)
-    add_obj("cont_b4", "container", 25.0, -0.025, 4.0, math.pi * 0.5 + 0.022, variant=0, cast_shadow=True)
-    add_obj("cont_b5_bot", "container", 17.0, -0.025, 15.0, math.pi * 0.5 + 0.016, variant=1, cast_shadow=True)
-    add_obj("cont_b5_top", "container", 17.0, 2.575, 15.0, math.pi * 0.5 + 0.016, variant=0, cast_shadow=True)
-    add_obj("cont_b6", "container", 25.0, -0.025, 23.0, -0.028, variant=2, cast_shadow=True)
+    # Centered mid-east container shielding Lane B outer flank (x=+30, z=0) from watchtower 5.7m sniper
+    add_obj("cont_b4", "container", 24.5, -0.025, 0.0, math.pi * 0.5 + 0.022, variant=0, cast_shadow=True)
+    add_obj("cont_b5_bot", "container", 17.0, -0.025, 14.0, math.pi * 0.5 + 0.016, variant=1, cast_shadow=True)
+    add_obj("cont_b5_top", "container", 17.0, 2.575, 14.0, math.pi * 0.5 + 0.016, variant=0, cast_shadow=True)
+    # Exact South mirror of cont_b1 so Team B approaching Lane B (+20, +26) has identical watchtower cover as Team A
+    add_obj("cont_b6", "container", 17.0, -0.025, 22.0, -0.028, variant=2, cast_shadow=True)
     add_obj("cont_b7", "container", 29.0, -0.025, -28.0, math.pi * 0.5 - 0.025, variant=1, cast_shadow=True)
+    add_obj("cont_b8", "container", 29.0, -0.025, 28.0, math.pi * 0.5 + 0.025, variant=0, cast_shadow=True)
 
     # Lane B close-quarters crouch props
     add_obj("lane_b_crate_1", "wood_crate", 20.5, 0.0, -8.5, 0.4, cast_shadow=True)

@@ -23,6 +23,7 @@ export class InputController {
     this.fireJustPressed = false;
     this.adsHeld = false;
     this.adsToggled = false;
+    this.adsJustPressed = false;
     this.crouchToggled = false;
     this.dx = 0;
     this.dy = 0;
@@ -129,6 +130,7 @@ export class InputController {
         this.fireHeld = true;
         this.fireJustPressed = true;
       } else if (e.button === 2) {
+        this.adsJustPressed = true;
         if (this.settings.get().adsMode === "toggle") {
           this.adsToggled = !this.adsToggled;
           this.adsHeld = this.adsToggled;
@@ -218,6 +220,13 @@ export class InputController {
   clearAds() {
     this.adsHeld = false;
     this.adsToggled = false;
+    this.adsJustPressed = false;
+  }
+
+  consumeAdsJustPressed() {
+    const p = this.adsJustPressed;
+    this.adsJustPressed = false;
+    return p;
   }
 
   consumeWheel() {
@@ -236,6 +245,7 @@ export class InputController {
   endFrame() {
     this.pressed.clear();
     this.fireJustPressed = false;
+    this.adsJustPressed = false;
     this.dx = 0;
     this.dy = 0;
   }
@@ -247,6 +257,7 @@ export class InputController {
     this.fireJustPressed = false;
     this.adsHeld = false;
     this.adsToggled = false;
+    this.adsJustPressed = false;
     this.crouchToggled = false;
     this.wheelDir = 0;
     this.dx = 0;

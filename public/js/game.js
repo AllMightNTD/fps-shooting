@@ -1,12 +1,10 @@
 /**
- * Three.js Rainy Harbor FPS Engine (Truy Kích LAN PvP + Offline Solo Drone):
- * - Shared weapons.js state machine (M416, Glock-17 Pistol, AWM Sniper; infinite reserve)
- * - 3-layer Input (BIND, e.code, Hold/Toggle, key rebind, Alt+Tab safety) & 60Hz fixed physics
- * - Crouch (ceiling raycast + lowered capsule), Jump buffer/coyote/anti-bhop, Sprint/Reload/ADS rules
- * - TeamColor shared PBR materials (A=#2F80FF ▲, B=#FF4D2E ●, FFA=#8A8F98), teammate nameplates & Radar
+ * Three.js FPS Engine Orchestrator (Truy Kích LAN PvP + Offline Solo Drone):
+ * Coordinates map building, audio, PBR assets, remote avatars, viewmodel kinematics,
+ * HUD/overlays, combat ballistics, 60Hz fixed physics, and the main frame loop.
  */
 
-import { MSG, sanitizeText } from "/js/protocol.js";
+import { MSG, sanitizeText, unpackSnapshot } from "/js/protocol.js";
 import { createMilitaryMapLoader } from "/js/map_loader.js";
 import {
   collectSceneTextures,
@@ -20,14 +18,11 @@ import {
 import {
   computeEffectivePixelRatio,
   detectHardwareTier,
+  normalizeQualityChoice,
   probeHardwareInfo,
   resolveQualityPreset,
 } from "/js/graphics_quality.js";
-import {
-  buildSocketPose,
-  createSkinnedArmsController,
-  viewmodelPointToWorld,
-} from "/js/arm_rig.js";
+import { viewmodelPointToWorld } from "/js/arm_rig.js";
 import {
   BASE_MOVE_SPEED,
   FLAG,
@@ -38,8 +33,37 @@ import {
   computeWeaponSpread,
   getMoveSpeedMultiplier,
   getReloadDurationMs,
-  resolveWeaponConfig,
 } from "/js/weapons.js";
+import {
+  computeBulletWhizBy,
+  createBallisticsVfxSystem,
+  createMuzzleFlashRig,
+  resolveSurfaceType,
+  shouldSpawnTracer,
+} from "/js/ballistics_vfx.js";
+import {
+  M416_RECOIL_PROFILE,
+  computeRecoilModifiers,
+  createRecoilController,
+} from "/js/recoil.js";
+import {
+  AWM_SCOPE_PROFILE,
+  STANCE,
+  createScopeController,
+  stepBallisticStep,
+} from "/js/scope.js";
+import {
+  createCanvasTexture,
+  createHarborMapBuilder,
+  sampleHarborPuddle,
+} from "/js/harbor_map.js";
+import { createAudioEngine } from "/js/audio_engine.js";
+import { createAssetLoader } from "/js/asset_loader.js";
+import { createRemotePlayersManager } from "/js/remote_players.js";
+import { createViewmodelAnimator } from "/js/viewmodel_anim.js";
+import { createSceneManager } from "/js/scene_manager.js";
+import { createHudUi } from "/js/hud_ui.js";
+import { createCombatSystem } from "/js/combat.js";
 
 const THREE = window.THREE;
 const Vec = THREE.Vector3;
@@ -54,6 +78,11 @@ const JUMP_COOLDOWN_MS = 300;
 const EYE_STAND = 1.70;
 const EYE_CROUCH = 1.12;
 const RING_CIRCUMFERENCE = 106.81;
+const DEG2RAD = Math.PI / 180;
+const RAD2DEG = 180 / Math.PI;
+const VM_HIP_FOV = 62;
+const VM_ADS_FOV = 50;
+const MOON_EMPTY_SHADOW_Y = 500;
 
 function el(tag, cls, text) {
   const node = document.createElement(tag);
@@ -67,12 +96,6 @@ function formatClock(sec) {
   return `${String((s / 60) | 0).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 }
 
-function lerpAngle(a, b, t) {
-  let d = ((b - a + Math.PI) % (Math.PI * 2)) - Math.PI;
-  if (d < -Math.PI) d += Math.PI * 2;
-  return a + d * t;
-}
-
 export function createGameEngine({
   net,
   settings,
@@ -80,990 +103,167 @@ export function createGameEngine({
   onRequestExitToRoom,
   onRequestExitToLobby,
   onLoadingUpdate,
+  onQualityStatusChange,
+  onSoloDefeated,
 }) {
   const $ = (id) => document.getElementById(id);
   const rnd = (a, b) => a + Math.random() * (b - a);
+  const lerp = THREE.MathUtils.lerp;
 
-  // ---------- Renderer, scene, camera & Graphics Quality ----------
+  // ---------- Renderer, Scene & Cameras ----------
   const R = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
   const hwInfo = probeHardwareInfo(R.getContext());
   const detectedQualityTier = detectHardwareTier(hwInfo);
-  let activeQuality = resolveQualityPreset(
+  const initialQuality = resolveQualityPreset(
     settings && settings.get ? settings.get().graphicsQuality : "auto",
     detectedQualityTier,
   );
-  const resolveShadowTypeEnum = (typeStr) =>
-    typeStr === "pcfsoft"
-      ? THREE.PCFSoftShadowMap
-      : typeStr === "pcf"
-        ? THREE.PCFShadowMap
-        : THREE.BasicShadowMap;
-
-  R.setPixelRatio(computeEffectivePixelRatio(activeQuality.preset, devicePixelRatio));
+  R.setPixelRatio(computeEffectivePixelRatio(initialQuality.preset, devicePixelRatio));
   R.setSize(innerWidth, innerHeight);
-  R.shadowMap.enabled = Boolean(activeQuality.preset.shadowsEnabled);
-  R.shadowMap.type = resolveShadowTypeEnum(activeQuality.preset.shadowType);
+  R.shadowMap.enabled = true;
+  R.shadowMap.type = THREE.PCFShadowMap;
   R.toneMapping = THREE.ACESFilmicToneMapping;
   R.toneMappingExposure = 1.08;
+  R.autoClear = false;
+  R.shadowMap.autoUpdate = false;
   document.body.prepend(R.domElement);
 
   const S = new THREE.Scene();
   S.background = new THREE.Color(0x050a11);
   S.fog = new THREE.FogExp2(0x050a11, 0.025);
 
-  const cam = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.03, activeQuality.preset.cameraFar);
+  let vpAspect = Math.max(0.4, innerWidth / Math.max(1, innerHeight));
+  const cam = new THREE.PerspectiveCamera(75, vpAspect, 0.03, initialQuality.preset.cameraFar);
   cam.rotation.order = "YXZ";
   S.add(cam);
 
-  // Dedicated Viewmodel Camera (FOV 62 -> 50, near = 0.01) eliminates wide-FOV forearm stretching & near-plane clipping
-  const VM_HIP_FOV = 62;
-  const VM_ADS_FOV = 50;
-  const vmCam = new THREE.PerspectiveCamera(VM_HIP_FOV, innerWidth / innerHeight, 0.01, 6.0);
+  const vmCam = new THREE.PerspectiveCamera(VM_HIP_FOV, vpAspect, 0.01, 6.0);
   vmCam.rotation.order = "YXZ";
   vmCam.layers.set(VIEW_LAYER);
   S.add(vmCam);
 
-  addEventListener("resize", () => {
-    R.setPixelRatio(computeEffectivePixelRatio(activeQuality.preset, devicePixelRatio));
-    R.setSize(innerWidth, innerHeight);
-    cam.aspect = innerWidth / innerHeight;
-    cam.updateProjectionMatrix();
-    vmCam.aspect = innerWidth / innerHeight;
-    vmCam.updateProjectionMatrix();
-  });
-
-  // ---------- Lights & Deferred Async Harbor Builder ----------
+  // ---------- Lights & Harbor Builder ----------
   const harborGroup = new THREE.Group();
   harborGroup.name = "HarborMapGroup";
   harborGroup.visible = false;
   S.add(harborGroup);
 
-  // R3: Warm-vs-cool night contrast (deep cold midnight ambient vs rich warm sodium streetlamps)
   const hemi = new THREE.HemisphereLight(0x28456b, 0x030509, 0.28);
   hemi.visible = false;
   S.add(hemi);
+
   const moon = new THREE.DirectionalLight(0x5b82b8, 0.38);
   moon.position.set(-30, 50, 20);
-  moon.castShadow = Boolean(activeQuality.preset.shadowsEnabled);
-  const initMoonShadowSz = activeQuality.preset.shadowMapSize || 2048;
-  moon.shadow.mapSize.set(initMoonShadowSz, initMoonShadowSz);
-  Object.assign(moon.shadow.camera, { left: -50, right: 50, top: 50, bottom: -50, far: 140 });
+  moon.castShadow = true;
+  moon.shadow.mapSize.set(initialQuality.preset.shadowMapSize || 16, initialQuality.preset.shadowMapSize || 16);
+  Object.assign(moon.shadow.camera, { left: -50, right: 50, top: 50, bottom: -50, near: 0.5, far: 140 });
   moon.visible = false;
-  S.add(moon);
-  // Warm amber fill from lamp height to separate foreground gun/arms from the cool night backdrop
+  S.add(moon, moon.target);
+
+  function applyMoonShadowPreset(preset, forceWarmupFrustum = false) {
+    moon.castShadow = true;
+    const useActiveFrustum = Boolean(forceWarmupFrustum || preset.shadowsEnabled);
+    const nextSize = forceWarmupFrustum
+      ? (preset.shadowsEnabled ? preset.shadowMapSize || 1024 : 16)
+      : (preset.shadowsEnabled ? preset.shadowMapSize || 1024 : preset.shadowMapSize || 16);
+    if (moon.shadow.mapSize.x !== nextSize) {
+      moon.shadow.mapSize.set(nextSize, nextSize);
+      if (moon.shadow.map) {
+        moon.shadow.map.dispose();
+        moon.shadow.map = null;
+      }
+    }
+    if (useActiveFrustum) {
+      moon.target.position.set(0, 0, 0);
+      moon.target.updateMatrixWorld();
+      moon.position.set(-30, 50, 20);
+      if (moon.shadow.camera.right !== 50 || moon.shadow.camera.far !== 140) {
+        Object.assign(moon.shadow.camera, { left: -50, right: 50, top: 50, bottom: -50, near: 0.5, far: 140 });
+        moon.shadow.camera.updateProjectionMatrix();
+      }
+    } else {
+      moon.target.position.set(0, MOON_EMPTY_SHADOW_Y, 0);
+      moon.target.updateMatrixWorld();
+      moon.position.set(-30, MOON_EMPTY_SHADOW_Y + 50, 20);
+      if (moon.shadow.camera.right !== 0.05 || moon.shadow.camera.far !== 1.0) {
+        Object.assign(moon.shadow.camera, { left: -0.05, right: 0.05, top: 0.05, bottom: -0.05, near: 0.1, far: 1.0 });
+        moon.shadow.camera.updateProjectionMatrix();
+      }
+    }
+  }
+  applyMoonShadowPreset(initialQuality.preset);
+
   const warmFill = new THREE.DirectionalLight(0xffb45c, 0.20);
   warmFill.position.set(12, 8, -6);
   warmFill.visible = false;
   S.add(warmFill);
 
   const maxAniso = Math.min(16, R.capabilities.getMaxAnisotropy ? R.capabilities.getMaxAnisotropy() : 16);
-  function tex(w, h, fn, rep) {
-    const c = document.createElement("canvas");
-    c.width = w;
-    c.height = h;
-    fn(c.getContext("2d"), w, h);
-    const t = new THREE.CanvasTexture(c);
-    t.wrapS = t.wrapT = THREE.RepeatWrapping;
-    if (rep) t.repeat.set(rep, rep);
-    t.anisotropy = maxAniso;
-    return t;
-  }
+  const tex = (w, h, fn, rep) => createCanvasTexture(THREE, w, h, fn, rep, maxAniso);
 
   let ground = null;
-  let harborEnvMap = null;
-  let harborData = null;
-  let harborBuildPromise = null;
   const solid = [];
   const cols = [];
+  const harborBuilder = createHarborMapBuilder({
+    THREE,
+    renderer: R,
+    harborGroup,
+    solid,
+    cols,
+    maxAniso,
+    yieldToUI,
+    rnd,
+    onGroundReady: (g) => { ground = g; },
+  });
+  const buildHarborSceneAsync = (onProgress = null) => harborBuilder.buildHarborSceneAsync(onProgress);
 
-  // Exact periodic toroidal value noise in [0, 1] (zero seam at x=0/w-1 or y=0/h-1)
-  function tileNoise(nx, ny, period, seedOff) {
-    const x0 = Math.floor(nx), y0 = Math.floor(ny);
-    const fx = nx - x0, fy = ny - y0;
-    const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
-    const h = (ix, iy) => {
-      const wx = ((ix % period) + period) % period;
-      const wy = ((iy % period) + period) % period;
-      let n = Math.imul(wx * 374761393 + wy * 668265263 + seedOff, 1274126177);
-      n = (n ^ (n >>> 13)) * 1274126177;
-      return ((n ^ (n >>> 16)) >>> 0) / 4294967295;
-    };
-    const a = h(x0, y0), b = h(x0 + 1, y0), c = h(x0, y0 + 1), d = h(x0 + 1, y0 + 1);
-    return (a * (1 - ux) + b * ux) * (1 - uy) + (c * (1 - ux) + d * ux) * uy;
-  }
+  // ---------- Ballistics VFX, Muzzle Flash & Spatial Audio ----------
+  const ballisticsVfx = createBallisticsVfxSystem({ THREE, scene: S });
+  ballisticsVfx.applyQualityPreset(initialQuality.preset);
 
-  async function buildHarborSceneAsync(onProgress = null) {
-    if (harborData) return harborData;
-    if (harborBuildPromise) return harborBuildPromise;
-
-    harborBuildPromise = (async () => {
-      const emit = (frac, detail = "") => {
-        if (typeof onProgress === "function") onProgress(frac, detail);
-      };
-      // Preserve exact deterministic PRNG sequence (seed = 11) for bit-identical harbor visuals
-      let hSeed = 11;
-      const sr = () => (hSeed = (hSeed * 16807) % 2147483647) / 2147483647;
-      const extraTextures = [];
-
-      emit(0.04, "Dựng đèn cảng & quầng sáng sodium...");
-      const lampHaloTex = (() => {
-        const c = document.createElement("canvas");
-        c.width = c.height = 128;
-        const g = c.getContext("2d");
-        const gr = g.createRadialGradient(64, 64, 0, 64, 64, 64);
-        gr.addColorStop(0, "rgba(255,208,132,.95)");
-        gr.addColorStop(0.20, "rgba(255,176,84,.48)");
-        gr.addColorStop(0.55, "rgba(195,120,40,.14)");
-        gr.addColorStop(1, "rgba(0,0,0,0)");
-        g.fillStyle = gr;
-        g.fillRect(0, 0, 128, 128);
-        return new THREE.CanvasTexture(c);
-      })();
-      extraTextures.push(lampHaloTex);
-
-      for (const [x, z] of [[-6.5, -6.5], [6.5, -6.5], [-6.5, 6.5], [6.5, 6.5]]) {
-        const L = new THREE.PointLight(0xffa94d, 1.55, 30, 1.75);
-        L.position.set(x, 6.2, z);
-        L.layers.enableAll();
-        harborGroup.add(L);
-        const pole = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.07, 0.09, 6.2, 8),
-          new THREE.MeshStandardMaterial({ color: 0x1b2128, metalness: 0.6, roughness: 0.5 }),
-        );
-        pole.position.set(x, 3.1, z);
-        const bulb = new THREE.Mesh(
-          new THREE.SphereGeometry(0.14, 8, 6),
-          new THREE.MeshBasicMaterial({ color: 0xffe4be }),
-        );
-        bulb.position.set(x, 6.2, z);
-        const halo = new THREE.Sprite(
-          new THREE.SpriteMaterial({
-            map: lampHaloTex,
-            blending: THREE.AdditiveBlending,
-            depthWrite: false,
-            transparent: true,
-            opacity: 0.90,
-          }),
-        );
-        halo.position.set(x, 6.2, z);
-        halo.scale.set(7.8, 7.8, 1);
-        harborGroup.add(pole, bulb, halo);
-      }
-      await yieldToUI();
-
-      // R3: Crisp wet asphalt harbor floor (organic puddles + 5mm aggregate & hairline cracks via onBeforeCompile)
-      emit(0.10, "Sinh mặt nhựa đường ướt & vũng nước Bến Cảng...");
-      const GROUND_TEX_SIZE = 512;
-      const GROUND_REPEAT = 4;
-      const puddleMask = new Float32Array(GROUND_TEX_SIZE * GROUND_TEX_SIZE);
-      const puddleDefs = [];
-      for (let i = 0; i < 18; i++) {
-        const a = sr() * Math.PI;
-        puddleDefs.push({
-          cx: 0.22 + sr() * 0.56,
-          cy: 0.22 + sr() * 0.56,
-          rx: 0.06 + sr() * 0.07,
-          ry: 0.04 + sr() * 0.05,
-          cs: Math.cos(a),
-          sn: Math.sin(a),
-          strength: 0.80 + sr() * 0.20,
-        });
-      }
-      for (let y = 0; y < GROUND_TEX_SIZE; y++) {
-        if (y === 256) await yieldToUI();
-        const py = y / GROUND_TEX_SIZE;
-        for (let x = 0; x < GROUND_TEX_SIZE; x++) {
-          const px = x / GROUND_TEX_SIZE;
-          const edgeWarp =
-            (tileNoise(px * 8, py * 8, 8, 17) - 0.5) * 0.42 +
-            (tileNoise(px * 22, py * 22, 22, 43) - 0.5) * 0.18 +
-            (tileNoise(px * 52, py * 52, 52, 79) - 0.5) * 0.07;
-          let wMax = 0;
-          for (let i = 0; i < puddleDefs.length; i++) {
-            const p = puddleDefs[i];
-            let dx = px - p.cx;
-            let dy = py - p.cy;
-            if (dx > 0.5) dx -= 1; else if (dx < -0.5) dx += 1;
-            if (dy > 0.5) dy -= 1; else if (dy < -0.5) dy += 1;
-            const u = (dx * p.cs + dy * p.sn) / p.rx;
-            const v = (-dx * p.sn + dy * p.cs) / p.ry;
-            const d = Math.sqrt(u * u + v * v) + edgeWarp;
-            if (d < 0.96) {
-              const tShore = Math.max(0, Math.min(1, (0.96 - d) / 0.20));
-              const s = tShore * tShore * (3 - 2 * tShore) * p.strength;
-              if (s > wMax) wMax = s;
-            }
-          }
-          puddleMask[y * GROUND_TEX_SIZE + x] = wMax;
-        }
-      }
-      await yieldToUI();
-
-      emit(0.20, "Sinh texture Albedo mặt đường...");
-      const gtex = tex(GROUND_TEX_SIZE, GROUND_TEX_SIZE, (g, w, h) => {
-        const im = g.createImageData(w, h), d = im.data;
-        for (let y = 0; y < h; y++) {
-          const u = y / h;
-          for (let x = 0; x < w; x++) {
-            const v = x / w;
-            const idx = y * w + x;
-            const nMacro = tileNoise(v * 8, u * 8, 8, 31);
-            const nMid = tileNoise(v * 32, u * 32, 32, 73);
-            const nFine = tileNoise(v * 128, u * 128, 128, 137);
-            const wet = puddleMask[idx];
-            const pebble = 0.40 * nMid + 0.60 * nFine;
-            const base = (7.5 + nMacro * 4.5 + pebble * 8.5) * (1 - wet * 0.42);
-            d[idx * 4] = Math.max(2, Math.min(255, Math.round(base * 0.90)));
-            d[idx * 4 + 1] = Math.max(3, Math.min(255, Math.round(base * 0.98)));
-            d[idx * 4 + 2] = Math.max(4, Math.min(255, Math.round(base * 1.12)));
-            d[idx * 4 + 3] = 255;
-          }
-        }
-        g.putImageData(im, 0, 0);
-      }, GROUND_REPEAT);
-      await yieldToUI();
-
-      emit(0.28, "Sinh texture Normal mặt đường...");
-      const gNormTex = tex(GROUND_TEX_SIZE, GROUND_TEX_SIZE, (g, w, h) => {
-        const im = g.createImageData(w, h), d = im.data;
-        const hMap = new Float32Array(w * h);
-        for (let y = 0; y < h; y++) {
-          const u = y / h;
-          for (let x = 0; x < w; x++) {
-            const v = x / w;
-            const idx = y * w + x;
-            const nFine = tileNoise(v * 96, u * 96, 96, 211);
-            const nMid = tileNoise(v * 32, u * 32, 32, 97);
-            const smoothCalm = 1 - Math.min(1, puddleMask[idx] * 1.15);
-            hMap[idx] = (0.62 * nFine + 0.38 * nMid) * smoothCalm;
-          }
-        }
-        for (let y = 0; y < h; y++) {
-          const ym = (y - 1 + h) % h, yp = (y + 1) % h;
-          for (let x = 0; x < w; x++) {
-            const xm = (x - 1 + w) % w, xp = (x + 1) % w;
-            const idx = y * w + x;
-            const dx = (hMap[y * w + xp] - hMap[y * w + xm]) * 1.15;
-            const dy = (hMap[yp * w + x] - hMap[ym * w + x]) * 1.15;
-            d[idx * 4] = Math.max(0, Math.min(255, Math.round(128 - dx * 48)));
-            d[idx * 4 + 1] = Math.max(0, Math.min(255, Math.round(128 - dy * 48)));
-            d[idx * 4 + 2] = 255;
-            d[idx * 4 + 3] = 255;
-          }
-        }
-        g.putImageData(im, 0, 0);
-      }, GROUND_REPEAT);
-      await yieldToUI();
-
-      emit(0.36, "Sinh texture Roughness & hạt sỏi mặt đường...");
-      const gRoughTex = tex(GROUND_TEX_SIZE, GROUND_TEX_SIZE, (g, w, h) => {
-        const im = g.createImageData(w, h), d = im.data;
-        for (let y = 0; y < h; y++) {
-          const u = y / h;
-          for (let x = 0; x < w; x++) {
-            const v = x / w;
-            const idx = y * w + x;
-            const dampVar = tileNoise(v * 18, u * 18, 18, 313);
-            const wet = puddleMask[idx];
-            const rough = (0.56 + 0.22 * dampVar) * (1 - wet) + 0.035 * wet;
-            const r = Math.max(8, Math.min(225, Math.round(rough * 255)));
-            d[idx * 4] = d[idx * 4 + 1] = d[idx * 4 + 2] = r;
-            d[idx * 4 + 3] = 255;
-          }
-        }
-        g.putImageData(im, 0, 0);
-      }, GROUND_REPEAT);
-      await yieldToUI();
-
-      const asphaltDetailNormal = tex(512, 512, (g, w, h) => {
-        const im = g.createImageData(w, h), d = im.data;
-        const hMap = new Float32Array(w * h);
-        const detCrack = new Float32Array(w * h);
-        for (let y = 0; y < h; y++) {
-          const u = y / h;
-          for (let x = 0; x < w; x++) {
-            const v = x / w;
-            const g1 = tileNoise(v * 64, u * 64, 64, 509);
-            const g2 = tileNoise(v * 32, u * 32, 32, 617);
-            const g3 = tileNoise(v * 16, u * 16, 16, 733);
-            hMap[y * w + x] = Math.pow(g1, 1.35) * 0.55 + g2 * 0.30 + g3 * 0.15;
-
-            const wx = (tileNoise(v * 4, u * 4, 4, 811) - 0.5) * 0.32;
-            const wy = (tileNoise(v * 4, u * 4, 4, 823) - 0.5) * 0.32;
-            const r1 = Math.abs(tileNoise((v + wx) * 3, (u + wy) * 3, 3, 911) - 0.5);
-            const r2 = Math.abs(tileNoise((v - wy * 0.8) * 4, (u + wx * 0.8) * 4, 4, 977) - 0.5);
-            const c1 = Math.max(0, 1 - r1 / 0.032);
-            const c2 = Math.max(0, 1 - r2 / 0.028);
-            detCrack[y * w + x] = Math.max(c1, c2);
-          }
-        }
-        for (let y = 0; y < h; y++) {
-          const ym = (y - 1 + h) % h, yp = (y + 1) % h;
-          for (let x = 0; x < w; x++) {
-            const xm = (x - 1 + w) % w, xp = (x + 1) % w;
-            const idx = y * w + x;
-            const hL = hMap[y * w + xm] - detCrack[y * w + xm] * 0.28;
-            const hR = hMap[y * w + xp] - detCrack[y * w + xp] * 0.28;
-            const hD = hMap[ym * w + x] - detCrack[ym * w + x] * 0.28;
-            const hU = hMap[yp * w + x] - detCrack[yp * w + x] * 0.28;
-            const dx = (hR - hL) * 1.85;
-            const dy = (hU - hD) * 1.85;
-            d[idx * 4] = Math.max(0, Math.min(255, Math.round(128 - dx * 60)));
-            d[idx * 4 + 1] = Math.max(0, Math.min(255, Math.round(128 - dy * 60)));
-            const gritVal = 150 + (hMap[idx] - 0.45) * 165 - detCrack[idx] * 95;
-            d[idx * 4 + 2] = Math.max(24, Math.min(255, Math.round(gritVal)));
-            d[idx * 4 + 3] = 255;
-          }
-        }
-        g.putImageData(im, 0, 0);
-      }, 1);
-      extraTextures.push(gtex, gNormTex, gRoughTex, asphaltDetailNormal);
-      await yieldToUI();
-
-      const groundMat = new THREE.MeshStandardMaterial({
-        map: gtex,
-        normalMap: gNormTex,
-        normalScale: new THREE.Vector2(0.65, 0.65),
-        roughnessMap: gRoughTex,
-        roughness: 1,
-        metalness: 0.04,
-        envMapIntensity: 0.88,
-      });
-      groundMat.userData.extraTextures = [asphaltDetailNormal];
-      groundMat.onBeforeCompile = (shader) => {
-        shader.uniforms.detailNormalMap = { value: asphaltDetailNormal };
-        shader.fragmentShader = shader.fragmentShader
-          .replace(
-            "#include <normalmap_pars_fragment>",
-            "#include <normalmap_pars_fragment>\nuniform sampler2D detailNormalMap;",
-          )
-          .replace(
-            "#include <map_fragment>",
-            "#include <map_fragment>\n\tfloat gritA = texture2D( detailNormalMap, vUv * 22.0 ).z;\n\tfloat gritB = texture2D( detailNormalMap, vUv * 57.0 ).z;\n\tfloat gritMix = mix(gritA, gritB, 0.48);\n\tdiffuseColor.rgb *= (0.62 + 0.68 * gritMix);",
-          )
-          .replace(
-            "vec3 mapN = texture2D( normalMap, vUv ).xyz * 2.0 - 1.0;\n\tmapN.xy *= normalScale;",
-            "vec3 mapN = texture2D( normalMap, vUv ).xyz * 2.0 - 1.0;\n\tmapN.xy *= normalScale;\n\tvec3 detN1 = texture2D( detailNormalMap, vUv * 22.0 ).xyz * 2.0 - 1.0;\n\tvec3 detN2 = texture2D( detailNormalMap, vUv * 57.0 ).xyz * 2.0 - 1.0;\n\tfloat puddleCalm = clamp((0.32 - roughnessFactor) * 4.5, 0.0, 1.0);\n\tmapN.xy += (detN1.xy * 1.75 + detN2.xy * 1.35) * (1.0 - puddleCalm);\n\tmapN = normalize(mapN);",
-          )
-          .replace(
-            "#include <roughnessmap_fragment>",
-            "#include <roughnessmap_fragment>\n\tvec3 detR = texture2D( detailNormalMap, vUv * 22.0 ).xyz * 2.0 - 1.0;\n\tfloat rCalm = clamp((0.32 - roughnessFactor) * 4.5, 0.0, 1.0);\n\troughnessFactor = clamp(roughnessFactor - abs(detR.x + detR.y) * 0.24 * (1.0 - rCalm), 0.035, 0.94);",
-          );
-      };
-
-      ground = new THREE.Mesh(new THREE.PlaneGeometry(130, 130), groundMat);
-      ground.rotation.x = -Math.PI / 2;
-      ground.receiveShadow = true;
-      harborGroup.add(ground);
-
-      function cTex(col, k) {
-        const t = tex(k ? 256 : 1024, 512, (g, w, h) => {
-          g.fillStyle = col;
-          g.fillRect(0, 0, w, h);
-          const rb = [44, 12, 10, 30][k];
-          for (let x = 0; x < w; x++) {
-            const a = Math.cos((x / w) * 6.2832 * rb);
-            g.fillStyle = a > 0 ? `rgba(255,255,255,${a * 0.12})` : `rgba(0,0,0,${-a * 0.3})`;
-            g.fillRect(x, 0, 1, h);
-          }
-          g.fillStyle = col;
-          g.fillRect(0, 0, w, h * 0.045);
-          g.fillRect(0, h * 0.955, w, h * 0.045);
-          for (let i = 0; i < 65; i++) {
-            const x = sr() * w, y = sr() * h * 0.6, l = h * (0.1 + sr() * 0.5);
-            const q = g.createLinearGradient(0, y, 0, y + l);
-            q.addColorStop(0, "rgba(120,52,18,.45)");
-            q.addColorStop(1, "rgba(120,52,18,0)");
-            g.fillStyle = q;
-            g.fillRect(x, y, 1 + sr() * 3, l);
-          }
-          if (k === 0) {
-            g.fillStyle = "rgba(240,240,235,.88)";
-            g.textBaseline = "top";
-            g.font = "bold 56px Arial,sans-serif";
-            g.fillText("MSKU " + ((100000 + sr() * 899999) | 0) + " " + ((sr() * 9) | 0), 30, h * 0.1);
-            g.font = "bold 120px Arial,sans-serif";
-            g.fillText("HALDEN", w * 0.42, h * 0.3);
-            g.font = "bold 30px Arial,sans-serif";
-            g.fillText("MAX GROSS 30480 KG   TARE 2220 KG", w * 0.42, h * 0.62);
-          }
-          if (k === 1) {
-            g.fillStyle = "rgba(0,0,0,.45)";
-            g.fillRect(w / 2 - 2, h * 0.05, 4, h * 0.9);
-          }
-          const gr = g.createLinearGradient(0, h, 0, h * 0.46);
-          gr.addColorStop(0, "rgba(1,2,3,.99)");
-          gr.addColorStop(0.32, "rgba(4,5,7,.90)");
-          gr.addColorStop(0.65, "rgba(14,12,10,.45)");
-          gr.addColorStop(1, "rgba(35,25,15,0)");
-          g.fillStyle = gr;
-          g.fillRect(0, 0, w, h);
-        });
-        extraTextures.push(t);
-        return t;
-      }
-
-      const cPalette = [0x8c3a2b, 0x2c5878, 0x3b6a4a, 0xb08428, 0x6a7077, 0x6e3f55];
-      const cMats = [];
-      for (let ci = 0; ci < cPalette.length; ci++) {
-        emit(0.46 + (ci / cPalette.length) * 0.30, `Sinh kết cấu container cảng (${ci + 1}/${cPalette.length})...`);
-        const col = "#" + cPalette[ci].toString(16).padStart(6, "0");
-        const mk = (k) => {
-          const t = cTex(col, k);
-          return new THREE.MeshStandardMaterial({
-            map: t,
-            bumpMap: t,
-            bumpScale: 1.4,
-            roughness: 0.74,
-            metalness: 0.20,
-          });
-        };
-        const side = mk(0);
-        cMats.push([mk(1), mk(2), mk(3), new THREE.MeshStandardMaterial({ color: 0x1b1d1f, roughness: 0.9 }), side, side]);
-        await yieldToUI();
-      }
-
-      emit(0.78, "Xếp container, tường bao & bóng chân container...");
-      const contactShadowTex = (() => {
-        const c = document.createElement("canvas");
-        c.width = 256;
-        c.height = 128;
-        const g = c.getContext("2d");
-        g.filter = "blur(9px)";
-        g.fillStyle = "rgba(0,0,0,0.92)";
-        g.fillRect(14, 12, 228, 104);
-        g.filter = "blur(2px)";
-        g.fillStyle = "rgba(0,0,0,1.0)";
-        g.fillRect(26, 22, 204, 84);
-        return new THREE.CanvasTexture(c);
-      })();
-      const contactShadowGeo = new THREE.PlaneGeometry(8.8, 5.0);
-      const contactShadowMat = new THREE.MeshBasicMaterial({
-        map: contactShadowTex,
-        color: 0x000000,
-        transparent: true,
-        depthWrite: false,
-        polygonOffset: true,
-        polygonOffsetFactor: -2,
-        polygonOffsetUnits: -2,
-      });
-
-      const containerReflTex = (() => {
-        const c = document.createElement("canvas");
-        c.width = 128;
-        c.height = 128;
-        const g = c.getContext("2d");
-        const gr = g.createRadialGradient(64, 64, 12, 64, 64, 62);
-        gr.addColorStop(0.0, "rgba(255,255,255,0.0)");
-        gr.addColorStop(0.42, "rgba(255,255,255,0.34)");
-        gr.addColorStop(0.75, "rgba(255,255,255,0.16)");
-        gr.addColorStop(1.0, "rgba(255,255,255,0.0)");
-        g.fillStyle = gr;
-        g.fillRect(0, 0, 128, 128);
-        return new THREE.CanvasTexture(c);
-      })();
-      extraTextures.push(contactShadowTex, containerReflTex);
-
-      const containerReflGeo = new THREE.PlaneGeometry(8.2, 5.2);
-      containerReflGeo.rotateX(-Math.PI / 2);
-      const containerReflMat = new THREE.MeshBasicMaterial({
-        map: containerReflTex,
-        transparent: true,
-        opacity: 0.44,
-        depthWrite: false,
-      });
-      const containerReflItems = [];
-
-      const cGeo = new THREE.BoxGeometry(6.1, 2.6, 2.44);
-      let mapSeed = 11042026;
-      const msr = () => (mapSeed = (mapSeed * 16807) % 2147483647) / 2147483647;
-      for (let gx = -3; gx <= 3; gx++) {
-        for (let gz = -3; gz <= 3; gz++) {
-          if ((gx === 0 && gz === 0) || msr() < 0.42) continue;
-          const x = gx * 13 + (msr() - 0.5) * 3;
-          const z = gz * 13 + (msr() - 0.5) * 3;
-          const rot = msr() < 0.5;
-          const cIdx = (msr() * cMats.length) | 0;
-          const mat = cMats[cIdx];
-          const stacked = msr() < 0.3;
-          const m = new THREE.Mesh(cGeo, mat);
-          m.position.set(x, 1.285, z);
-          m.rotation.y = rot ? Math.PI / 2 : 0;
-          m.castShadow = m.receiveShadow = true;
-          harborGroup.add(m);
-          solid.push(m);
-          if (stacked) {
-            const t = m.clone();
-            t.position.y = 3.885;
-            harborGroup.add(t);
-            solid.push(t);
-          }
-          const hx = rot ? 1.22 : 3.05, hz = rot ? 3.05 : 1.22;
-          cols.push({ x0: x - hx, x1: x + hx, z0: z - hz, z1: z + hz, y1: stacked ? 5.2 : 2.6 });
-          const contactShadow = new THREE.Mesh(contactShadowGeo, contactShadowMat);
-          contactShadow.rotation.x = -Math.PI / 2;
-          contactShadow.rotation.z = rot ? Math.PI / 2 : 0;
-          contactShadow.position.set(x, 0.007, z);
-          contactShadow.renderOrder = 1;
-          harborGroup.add(contactShadow);
-          containerReflItems.push({ x, z, rot, hex: cPalette[cIdx] });
-        }
-      }
-      if (containerReflItems.length > 0) {
-        const reflInst = new THREE.InstancedMesh(containerReflGeo, containerReflMat, containerReflItems.length);
-        reflInst.position.set(0, 0.005, 0);
-        const dummy = new THREE.Object3D();
-        const colTmp = new THREE.Color();
-        containerReflItems.forEach((it, idx) => {
-          dummy.position.set(it.x, 0, it.z);
-          dummy.rotation.set(0, it.rot ? Math.PI / 2 : 0, 0);
-          dummy.scale.set(1, 1, 1);
-          dummy.updateMatrix();
-          reflInst.setMatrixAt(idx, dummy.matrix);
-          colTmp.setHex(it.hex).multiplyScalar(0.55);
-          reflInst.setColorAt(idx, colTmp);
-        });
-        reflInst.instanceMatrix.needsUpdate = true;
-        if (reflInst.instanceColor) reflInst.instanceColor.needsUpdate = true;
-        harborGroup.add(reflInst);
-      }
-
-      const wallMat = new THREE.MeshStandardMaterial({ color: 0x1a2128, roughness: 0.9 });
-      for (const [x, z, w, d] of [[0, -52, 100, 1], [0, 52, 100, 1], [-52, 0, 1, 100], [52, 0, 1, 100]]) {
-        const m = new THREE.Mesh(new THREE.BoxGeometry(w, 10, d), wallMat);
-        m.position.set(x, 5, z);
-        harborGroup.add(m);
-        solid.push(m);
-      }
-      await yieldToUI();
-
-      emit(0.88, "Dựng PMREM đêm mưa & lớp sương cảng...");
-      harborEnvMap = (() => {
-        const es = new THREE.Scene(), geo = new THREE.SphereGeometry(20, 32, 16), p = geo.attributes.position, col = [];
-        for (let i = 0; i < p.count; i++) {
-          const y = p.getY(i) / 20, t = Math.max(0, y);
-          col.push(...(y > 0 ? [0.08 + 0.22 * t, 0.11 + 0.28 * t, 0.16 + 0.36 * t] : [0.02, 0.025, 0.03]));
-        }
-        geo.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
-        es.add(new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, toneMapped: false })));
-        const panel = (r, g, b, w, h, x, y, z) => {
-          const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ color: new THREE.Color(r, g, b), side: THREE.DoubleSide, toneMapped: false }));
-          m.position.set(x, y, z);
-          m.lookAt(0, 0, 0);
-          es.add(m);
-        };
-        panel(0.9, 1.35, 2.0, 14, 5, 0, 15, -4);
-        for (const [x, y, z] of [[-9, 6.2, -9], [9, 6.2, -9], [-9, 6.2, 9], [9, 6.2, 9]]) {
-          panel(8.8, 4.9, 1.7, 2.0, 2.0, x, y, z);
-        }
-        panel(1.9, 2.5, 3.6, 2.2, 2.2, 0, 14, -11);
-        const pm = new THREE.PMREMGenerator(R), rt = pm.fromScene(es, 0.025);
-        pm.dispose();
-        geo.dispose();
-        return rt.texture;
-      })();
-      extraTextures.push(harborEnvMap);
-      ground.material.envMap = harborEnvMap;
-      ground.material.needsUpdate = true;
-
-      const mistTex = tex(128, 128, (g, w, h) => {
-        const gr = g.createRadialGradient(64, 64, 4, 64, 64, 64);
-        gr.addColorStop(0, "rgba(105,138,172,.22)");
-        gr.addColorStop(0.5, "rgba(65,92,124,.08)");
-        gr.addColorStop(1, "rgba(0,0,0,0)");
-        g.fillStyle = gr;
-        g.fillRect(0, 0, w, h);
-      });
-      extraTextures.push(mistTex);
-      for (const [x, y, z] of [[-7, 1.8, -14], [8, 1.9, -18], [0, 2.1, -24], [-15, 2.0, -22], [14, 1.8, -12]]) {
-        const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: mistTex, transparent: true, opacity: 0.16, depthWrite: false }));
-        sp.position.set(x, y, z);
-        sp.scale.set(16, 6, 1);
-        harborGroup.add(sp);
-      }
-      await yieldToUI();
-
-      emit(0.95, "Khởi tạo hệ thống mưa & gợn sóng...");
-      const rainRipples = (() => {
-        const geo = new THREE.RingGeometry(0.86, 1.0, 24);
-        geo.rotateX(-Math.PI / 2);
-        const POOL = 112;
-        const mat = new THREE.MeshBasicMaterial({
-          color: 0xffffff,
-          transparent: true,
-          opacity: 1.0,
-          blending: THREE.AdditiveBlending,
-          depthWrite: false,
-          side: THREE.DoubleSide,
-        });
-        const inst = new THREE.InstancedMesh(geo, mat, POOL);
-        inst.position.set(0, 0.014, 0);
-        inst.frustumCulled = false;
-        harborGroup.add(inst);
-
-        const dummy = new THREE.Object3D();
-        const fadeColor = new THREE.Color();
-        const state = [];
-        for (let i = 0; i < POOL; i++) {
-          const active = i < 76;
-          const inArenaCenter = i < 48;
-          const rx = inArenaCenter ? (-8 + sr() * 14) : (sr() - 0.5) * 24;
-          const rz = inArenaCenter ? (-6 + sr() * 12) : (sr() - 0.5) * 24;
-          const maxRadius = 0.24 + sr() * 0.11;
-          const life = active ? sr() * 0.34 : 0;
-          const maxLife = 0.46 + sr() * 0.12;
-          const t0 = life / maxLife;
-          const sc0 = active ? (0.11 + (maxRadius - 0.11) * t0) : 0.001;
-          state.push({ active, x: rx, z: rz, life, maxLife, size: maxRadius });
-          dummy.position.set(rx, active ? 0 : -50, rz);
-          dummy.scale.set(sc0, 1, sc0);
-          dummy.updateMatrix();
-          inst.setMatrixAt(i, dummy.matrix);
-          const f0 = active ? Math.min(1, t0 / 0.14) * Math.pow(1 - t0, 1.45) * 0.29 : 0;
-          inst.setColorAt(i, fadeColor.setRGB(0.70 * f0, 0.84 * f0, 0.98 * f0));
-        }
-        inst.instanceMatrix.needsUpdate = true;
-        if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
-
-        let next = 0;
-        return {
-          emit(x, z) {
-            const s = state[next++ % POOL];
-            s.active = true;
-            s.x = x;
-            s.z = z;
-            s.life = 0;
-            s.maxLife = rnd(0.46, 0.58);
-            s.size = rnd(0.24, 0.35);
-          },
-          upd(dt) {
-            for (let i = 0; i < POOL; i++) {
-              const s = state[i];
-              if (!s.active) continue;
-              s.life += dt;
-              const t = s.life / s.maxLife;
-              if (t >= 1) {
-                s.active = false;
-                dummy.position.set(0, -50, 0);
-                dummy.scale.setScalar(0.001);
-                dummy.updateMatrix();
-                inst.setMatrixAt(i, dummy.matrix);
-                continue;
-              }
-              const sc = 0.11 + (s.size - 0.11) * t;
-              dummy.position.set(s.x, 0, s.z);
-              dummy.scale.set(sc, 1, sc);
-              dummy.updateMatrix();
-              inst.setMatrixAt(i, dummy.matrix);
-              const fade = Math.min(1, t / 0.14) * Math.pow(1 - t, 1.45) * 0.29;
-              inst.setColorAt(i, fadeColor.setRGB(0.70 * fade, 0.84 * fade, 0.98 * fade));
-            }
-            inst.instanceMatrix.needsUpdate = true;
-            if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
-          },
-        };
-      })();
-
-      const ND2 = 3000, rd = new Float32Array(ND2 * 4), rp2 = new Float32Array(ND2 * 6), rc2 = new Float32Array(ND2 * 6);
-      for (let i = 0; i < ND2; i++) {
-        rd.set([rnd(-24, 24), rnd(0, 26), rnd(-24, 24), rnd(0.6, 1.4)], i * 4);
-        const b = rd[i * 4 + 3] * 0.27;
-        rc2.set([0, 0, 0, b * 0.55, b * 0.68, b * 0.82], i * 6);
-      }
-      const rg2 = new THREE.BufferGeometry();
-      rg2.setAttribute("position", new THREE.BufferAttribute(rp2, 3));
-      rg2.setAttribute("color", new THREE.BufferAttribute(rc2, 3));
-      const rain2 = new THREE.LineSegments(rg2, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
-      rain2.frustumCulled = false;
-      harborGroup.add(rain2);
-
-      harborData = {
-        mapId: "harbor",
-        group: harborGroup,
-        envMap: harborEnvMap,
-        extraTextures,
-        updateRain(dt, tSec, px, pz) {
-          const wind = Math.sin(tSec * 0.23) * 0.6 + Math.sin(tSec * 0.71) * 0.25;
-          for (let i = 0; i < ND2; i++) {
-            const k = i * 4, v = rd[k + 3], sp = 24 + 16 * v;
-            let x = rd[k] + wind * 3 * dt, y = rd[k + 1] - sp * dt, z = rd[k + 2];
-            if (x - px > 24) x -= 48; else if (x - px < -24) x += 48;
-            if (z - pz > 24) z -= 48; else if (z - pz < -24) z += 48;
-            if (y < 0) { y += 26; if (i % 3 !== 0 && Math.abs(x - px) < 11 && Math.abs(z - pz) < 11) rainRipples.emit(x, z); }
-            rd[k] = x; rd[k + 1] = y; rd[k + 2] = z;
-            rp2.set([x - wind * 0.07, y + sp * 0.022, z, x, y, z], i * 6);
-          }
-          rg2.attributes.position.needsUpdate = true;
-          rainRipples.upd(dt);
-        },
-      };
-      window.__harborMapLoaded = true;
-      emit(1.0, "Hoàn tất dựng bản đồ Bến Cảng Mưa");
-      return harborData;
-    })().catch((err) => {
-      harborBuildPromise = null;
-      throw err;
-    });
-
-    return harborBuildPromise;
-  }
-
-  // ---------- Particles, Tracers, Audio ----------
-  function mkPS(N, col, size) {
-    const p = new Float32Array(N * 3).fill(-999), v = new Float32Array(N * 3), l = new Float32Array(N);
-    let n = 0;
+  const remoteMuzFlashGeo = (() => {
+    const p1 = new THREE.PlaneGeometry(0.28, 0.28);
+    const p2 = new THREE.PlaneGeometry(0.24, 0.34);
+    p2.rotateY(Math.PI * 0.5);
+    p2.translate(0, 0, -0.10);
+    const pos = new Float32Array(24);
+    const uv = new Float32Array(16);
+    pos.set(p1.attributes.position.array, 0);
+    pos.set(p2.attributes.position.array, 12);
+    const uv1 = p1.attributes.uv.array;
+    const uv2 = p2.attributes.uv.array;
+    for (let i = 0; i < 4; i++) {
+      uv[i * 2] = uv1[i * 2] * 0.5;
+      uv[i * 2 + 1] = 0.5 + uv1[i * 2 + 1] * 0.5;
+      uv[8 + i * 2] = uv2[i * 2] * 0.5;
+      uv[8 + i * 2 + 1] = 0.5 + uv2[i * 2 + 1] * 0.5;
+    }
+    const idx = new Uint16Array([0, 1, 2, 1, 3, 2, 4, 5, 6, 5, 7, 6]);
+    p1.dispose();
+    p2.dispose();
     const g = new THREE.BufferGeometry();
-    g.setAttribute("position", new THREE.BufferAttribute(p, 3));
-    const o = new THREE.Points(g, new THREE.PointsMaterial({ color: col, size, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false }));
-    o.frustumCulled = false;
-    S.add(o);
-    return {
-      emit(x, y, z, c, up, s) {
-        for (let k = 0; k < c; k++) {
-          const i = n++ % N;
-          p.set([x, y, z], i * 3);
-          v.set([rnd(-s, s), rnd(0.5, 1) * up, rnd(-s, s)], i * 3);
-          l[i] = rnd(0.25, 0.45);
-        }
-      },
-      upd(dt) {
-        for (let i = 0; i < N; i++) {
-          if (l[i] <= 0) continue;
-          l[i] -= dt;
-          if (l[i] <= 0) { p[i * 3 + 1] = -999; continue; }
-          v[i * 3 + 1] -= 9 * dt;
-          for (let a = 0; a < 3; a++) p[i * 3 + a] += v[i * 3 + a] * dt;
-        }
-        g.attributes.position.needsUpdate = true;
-      },
-    };
-  }
-  const sparks = mkPS(320, 0xffb060, 0.11);
+    g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    g.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
+    g.setIndex(new THREE.BufferAttribute(idx, 1));
+    return g;
+  })();
+  const remoteMuzFlashMat = new THREE.MeshBasicMaterial({
+    map: ballisticsVfx.muzzleAtlasTex,
+    color: 0xffd27a,
+    transparent: true,
+    opacity: 0.96,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    fog: false,
+    toneMapped: false,
+  });
 
-  function burst(pt, n, spd, dir) {
-    for (let k = 0; k < n; k++) {
-      sparks.emit(
-        pt.x + (dir ? dir.x * 0.02 : 0),
-        pt.y + (dir ? dir.y * 0.02 : 0),
-        pt.z + (dir ? dir.z * 0.02 : 0),
-        1,
-        spd * 0.9,
-        spd,
-      );
-    }
-  }
-
-  const tr = [];
-  for (let i = 0; i < 14; i++) {
-    const l = new THREE.Line(
-      new THREE.BufferGeometry().setFromPoints([new Vec(), new Vec()]),
-      new THREE.LineBasicMaterial({ transparent: true, opacity: 0 }),
-    );
-    l.frustumCulled = false;
-    l.userData.t = 0;
-    S.add(l);
-    tr.push(l);
-  }
-  let tri = 0;
-  function tracer(a, b, col) {
-    const l = tr[tri++ % tr.length], p = l.geometry.attributes.position;
-    p.setXYZ(0, a.x, a.y, a.z);
-    p.setXYZ(1, b.x, b.y, b.z);
-    p.needsUpdate = true;
-    l.material.color.setHex(col);
-    l.userData.t = 0.09;
-  }
-
-  let AC = null, NB = null, REV = null;
-  let ambFilter = null, ambGain = null, ambStarted = false;
-  const PRECOMPUTED_AUDIO_SR = 48000;
-  let precomputedNoise = null;
-  let precomputedRevL = null;
-  let precomputedRevR = null;
-
-  async function precomputeAudioBuffersAsync() {
-    if (!precomputedNoise) {
-      const nLen = PRECOMPUTED_AUDIO_SR * 2;
-      const noise = new Float32Array(nLen);
-      for (let i = 0; i < nLen; i++) noise[i] = Math.random() * 2 - 1;
-      precomputedNoise = noise;
-      await yieldToUI();
-
-      const revLen = Math.floor(PRECOMPUTED_AUDIO_SR * 1.3);
-      const revL = new Float32Array(revLen);
-      const revR = new Float32Array(revLen);
-      for (let i = 0; i < revLen; i++) {
-        const env = Math.pow(1 - i / revLen, 3.2);
-        revL[i] = (Math.random() * 2 - 1) * env;
-        revR[i] = (Math.random() * 2 - 1) * env;
-      }
-      precomputedRevL = revL;
-      precomputedRevR = revR;
-      await yieldToUI();
-    }
-
-    // Pre-create suspended AudioContext + Convolver FFT during Loading Screen so first-click startSolo() avoids ~100ms WASAPI/FFT stall
-    if (!AC) {
-      try {
-        const AudioCtx = window.AudioContext || window.webkitAudioContext;
-        if (typeof AudioCtx === "function") {
-          AC = new AudioCtx();
-          await yieldToUI();
-          buildAudioGraph();
-          await yieldToUI();
-        }
-      } catch {
-        AC = null;
-      }
-    }
-  }
-
-  function buildAudioGraph() {
-    if (!AC || NB) return;
-    const n = AC.sampleRate * 2;
-    NB = AC.createBuffer(1, n, AC.sampleRate);
-    const d = NB.getChannelData(0);
-    if (precomputedNoise && precomputedNoise.length === n) {
-      d.set(precomputedNoise);
-    } else {
-      for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
-    }
-    const revLen = Math.floor(AC.sampleRate * 1.3);
-    const rb = AC.createBuffer(2, revLen, AC.sampleRate);
-    if (precomputedRevL && precomputedRevR && precomputedRevL.length === revLen) {
-      rb.getChannelData(0).set(precomputedRevL);
-      rb.getChannelData(1).set(precomputedRevR);
-    } else {
-      for (let c = 0; c < 2; c++) {
-        const ch = rb.getChannelData(c);
-        for (let i = 0; i < revLen; i++) ch[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / revLen, 3.2);
-      }
-    }
-    REV = AC.createConvolver();
-    REV.buffer = rb;
-    const g = AC.createGain();
-    g.gain.value = 0.45;
-    REV.connect(g).connect(AC.destination);
-    ambFilter = AC.createBiquadFilter();
-    ambFilter.type = "lowpass";
-    ambFilter.frequency.value = 420;
-    ambGain = AC.createGain();
-    ambGain.gain.value = 0.09;
-    ambFilter.connect(ambGain).connect(AC.destination);
-  }
-
-  function startAmbientLoopOnce() {
-    if (!AC || !NB || !ambFilter || ambStarted) return;
-    ambStarted = true;
-    const r = AC.createBufferSource();
-    r.buffer = NB;
-    r.loop = true;
-    r.connect(ambFilter);
-    r.start();
-  }
-
-  function syncAmbientAudio() {
-    if (!AC || !ambFilter || !ambGain) return;
-    const t = AC.currentTime;
-    if (activeMapId === "military") {
-      ambFilter.type = "bandpass";
-      ambFilter.frequency.setTargetAtTime(280, t, 0.25);
-      ambFilter.Q.setTargetAtTime(0.85, t, 0.25);
-      ambGain.gain.setTargetAtTime(0.055, t, 0.25);
-    } else {
-      ambFilter.type = "lowpass";
-      ambFilter.frequency.setTargetAtTime(420, t, 0.25);
-      ambFilter.Q.setTargetAtTime(0.7, t, 0.25);
-      ambGain.gain.setTargetAtTime(0.09, t, 0.25);
-    }
-  }
-  function initAudio() {
-    try {
-      if (!AC) {
-        AC = new (window.AudioContext || window.webkitAudioContext)();
-      }
-      if (!NB) buildAudioGraph();
-      startAmbientLoopOnce();
-      AC.resume().catch(() => {});
-      syncAmbientAudio();
-    } catch {
-      // Audio blocked until gesture
-    }
-  }
-  function nz(dur, f0, f1, v, w = 0) {
-    if (!AC || !NB) return;
-    const t = AC.currentTime, s = AC.createBufferSource();
-    s.buffer = NB;
-    const f = AC.createBiquadFilter();
-    f.type = "lowpass";
-    f.frequency.setValueAtTime(f0, t);
-    f.frequency.exponentialRampToValueAtTime(f1, t + dur);
-    const g = AC.createGain();
-    g.gain.setValueAtTime(v, t);
-    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-    s.connect(f).connect(g);
-    g.connect(AC.destination);
-    if (w && REV) { const k = AC.createGain(); k.gain.value = w; g.connect(k).connect(REV); }
-    s.start(0, Math.random());
-    s.stop(t + dur);
-  }
-  function tone(f0, f1, dur, v, type = "sine") {
-    if (!AC) return;
-    const t = AC.currentTime, o = AC.createOscillator(), g = AC.createGain();
-    o.type = type;
-    o.frequency.setValueAtTime(f0, t);
-    o.frequency.exponentialRampToValueAtTime(f1, t + dur);
-    g.gain.setValueAtTime(v, t);
-    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-    o.connect(g).connect(AC.destination);
-    o.start(t);
-    o.stop(t + dur);
-  }
-  const snd = {
-    shot() { nz(0.06, 9000, 2500, 0.45, 0.15); nz(0.28, 3500, 160, 0.55, 0.35); tone(140, 32, 0.2, 0.7); },
-    pistolShot() { nz(0.05, 8200, 2200, 0.36, 0.12); nz(0.18, 2800, 220, 0.42, 0.24); tone(180, 48, 0.12, 0.52); },
-    sniperShot() { nz(0.09, 10000, 1800, 0.6, 0.28); nz(0.55, 3200, 90, 0.72, 0.48); tone(105, 22, 0.36, 0.88); },
-    dryClick() { tone(1350, 720, 0.032, 0.14, "square"); },
-    hit() { tone(1300, 600, 0.07, 0.16, "square"); },
-    headshot() { tone(1850, 920, 0.09, 0.25, "triangle"); setTimeout(() => tone(2450, 1500, 0.11, 0.18, "sine"), 35); },
-    remoteShot(dist) { const a = Math.max(0.05, Math.min(0.6, 9 / (dist + 6))); nz(0.16, 4800, 260, 0.45 * a, 0.2 * a); tone(135, 38, 0.14, 0.4 * a); },
-    boom() { nz(0.7, 2500, 80, 0.65); },
-    laser() { tone(900, 200, 0.14, 0.09, "sawtooth"); },
-    hurt() { tone(120, 60, 0.22, 0.38, "square"); },
-    reload() { tone(300, 520, 0.09, 0.12, "square"); },
-    click(f) { tone(f, f * 0.5, 0.04, 0.1, "square"); },
-    shell() { tone(4300, 3200, 0.06, 0.06, "triangle"); },
-    thunder() { nz(2.8, 480, 30, 0.8, 0.7); },
-    heartbeat(intensity = 0.7) {
-      const vol = 0.16 * Math.max(0.25, Math.min(1.0, intensity));
-      tone(64, 34, 0.13, vol, "sine");
-      setTimeout(() => tone(54, 30, 0.14, vol * 0.75, "sine"), 165);
-    },
-    footstep(surface = "concrete") {
-      if (surface === "puddle") {
-        nz(0.09, 2600, 640, 0.13, 0.08);
-        tone(380, 170, 0.055, 0.04, "sine");
-      } else if (surface === "metal") {
-        tone(310, 140, 0.075, 0.095, "triangle");
-        nz(0.045, 3200, 1100, 0.08, 0.10);
-      } else {
-        // Compacted concrete/gravel crunch
-        nz(0.068, 2100, 480, 0.10, 0.04);
-        tone(112, 56, 0.052, 0.08, "sine");
-      }
-    },
-    distantBird() {
-      const f = 2200 + Math.random() * 900;
-      tone(f, f * 0.76, 0.09, 0.022, "sine");
-      setTimeout(() => tone(f * 1.06, f * 0.82, 0.11, 0.018, "sine"), 120);
-    },
-  };
-
-  // ---------- PBR Asset Loading & Viewmodel Setup ----------
+  // ---------- Viewmodel Rig, Lights & Laser ----------
   const gun = new THREE.Group();
   const muz = new THREE.Object3D();
   const laserOrigin = new THREE.Object3D();
-  const flashL = new THREE.PointLight(0xffa550, 0, 9);
+  const flashL = new THREE.PointLight(0xffbe6a, 0, 6.5, 2);
   muz.position.set(0, 0.02, -0.615);
   laserOrigin.position.set(0.046, 0.025, -0.35);
   flashL.position.set(0, 0.02, -0.68);
@@ -1087,15 +287,14 @@ export function createGameEngine({
   laserDot.visible = false;
   S.add(laserDot);
 
-  const mf = new THREE.Group();
-  const fm = new THREE.MeshBasicMaterial({ map: glowTex, color: 0xffd27a, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false, side: THREE.DoubleSide });
-  const f1 = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.42), fm);
-  mf.add(f1);
-  mf.position.set(0, 0.02, -0.615);
-  mf.visible = false;
-  gun.add(mf);
+  const muzzleFlashRig = createMuzzleFlashRig({
+    THREE,
+    muzzleAtlasTex: ballisticsVfx.muzzleAtlasTex,
+    viewLayer: VIEW_LAYER,
+  });
+  muzzleFlashRig.mesh.position.set(0, 0.02, -0.615);
+  gun.add(muzzleFlashRig.mesh);
 
-  // R1/R3: cool key + warm amber fill/rim separates arms & gun from the cold night background without blowing out thumb skin
   const vmKey = new THREE.PointLight(0xbcd0ea, 0.42, 2.4, 1.1);
   vmKey.position.set(-0.35, 0.55, 0.25);
   const vmFill = new THREE.PointLight(0xffb36a, 0.14, 2.0, 1.2);
@@ -1103,6 +302,13 @@ export function createGameEngine({
   const vmRim = new THREE.PointLight(0xffc27a, 0.26, 2.2, 1.3);
   vmRim.position.set(0.32, 0.38, -0.65);
   vmCam.add(vmKey, vmFill, vmRim, gun);
+  gun.traverse((o) => o.layers.set(VIEW_LAYER));
+  S.traverse((o) => { if (o.isLight) o.layers.enableAll(); });
+  vmKey.layers.set(VIEW_LAYER);
+  vmFill.layers.set(VIEW_LAYER);
+  vmRim.layers.set(VIEW_LAYER);
+  flashL.visible = true;
+  flashL.layers.enableAll();
 
   const _vmScratchPt = new Vec();
   function getViewmodelWorldPoint(node, outVec) {
@@ -1112,2233 +318,339 @@ export function createGameEngine({
     return viewmodelPointToWorld(_vmScratchPt, vmCam.fov, cam.fov, cam.position, cam.quaternion, outVec, THREE);
   }
 
-  function decodeBase64ToArrayBuffer(b64) {
-    const bin = atob(b64), bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    return bytes.buffer;
-  }
-
-  function hydratePbrMaterial(src, objName = "", envScale = 1.45, isSkinned = false) {
-    const phys = (src.userData && src.userData.pbrPhysical) || {};
-    if (phys.unlit) {
-      const col = src.emissive && src.emissive.getHex() ? src.emissive : src.color;
-      const isOverlayReticle = objName === "reticle_group";
-      return new THREE.MeshBasicMaterial({
-        name: src.name || objName || "",
-        color: col,
-        side: src.side,
-        fog: false,
-        toneMapped: false,
-        depthWrite: !isOverlayReticle,
-        skinning: Boolean(src.skinning || isSkinned),
-      });
-    }
-    const isGlass = phys.transmission > 0 || src.transparent;
-    // R2: near-clear Red Dot glass with weak reflections so the red reticle reads as a crisp dot, not a smear
-    const isHoloLens = objName === "holo_lens";
-    const isSkin = src.name === "Arms_WetSkin" || src.name === "Soldier_Skin";
-    const isGlove =
-      src.name === "Arms_TacticalGlove" ||
-      src.name === "Arms_SkinnedGlove" ||
-      src.name === "material" ||
-      src.name === "Soldier_Glove" ||
-      objName.toLowerCase().includes("armmesh");
-    const mat = new THREE.MeshPhysicalMaterial({
-      name: src.name || objName || "",
-      color: src.color,
-      map: src.map || null,
-      aoMap: src.aoMap || null,
-      aoMapIntensity: src.aoMap ? (isSkinned ? 0.95 : 0.85) : (src.aoMapIntensity ?? 0.42),
-      metalness: src.metalness,
-      roughness: src.roughness,
-      roughnessMap: src.roughnessMap || null,
-      metalnessMap: src.metalnessMap || null,
-      normalMap: src.normalMap || null,
-      normalScale: src.normalScale ? src.normalScale.clone() : new THREE.Vector2(1, 1),
-      envMap: activeEnvMap,
-      envMapIntensity: isHoloLens ? 0.5 : isGlass ? 1.8 : isSkin ? 0.42 : isGlove ? 0.36 : envScale,
-      clearcoat: src.name === "AWM_RiflePBR" ? 0.04 : (phys.clearcoat || 0),
-      clearcoatRoughness: phys.clearcoatRoughness || 0,
-      transparent: isGlass,
-      opacity: isHoloLens ? 0.1 : isGlass ? 0.26 : 1,
-      depthWrite: !isGlass,
-      side: src.side,
-      skinning: Boolean(src.skinning || isSkinned),
-    });
-    if (phys.sheenColor !== undefined) mat.sheen = new THREE.Color(phys.sheenColor);
-    if (objName === "watch_dial" && src.map) {
-      mat.emissiveMap = src.map;
-      mat.emissive = new THREE.Color(0x88ffcc);
-      mat.emissiveIntensity = 0.45;
-    }
-    return mat;
-  }
-
-  let boltVis = new THREE.Object3D(), trig = new THREE.Group(), ch = new THREE.Group(), reticle = new THREE.Object3D(), laserLens = new THREE.Object3D(), mag = new THREE.Group();
-  let pistolSlideNode = new THREE.Object3D(), pistolTriggerNode = new THREE.Object3D(), pistolMagNode = new THREE.Object3D();
-  let awmBoltPivot = new THREE.Object3D(), awmMagGroup = new THREE.Object3D(), awmTriggerNode = new THREE.Object3D();
-  let m416WorldProto = null, pistolWorldProto = null, awmWorldProto = null, soldierProto = null;
-  const pistolMuzAnchorPos = new Vec(0, 0.0495, -0.172);
-  const awmMuzAnchorPos = new Vec(0, 0.020, -0.802);
-  let awmOpticY = 0.0947;
-  let pistolSlideOffset = 0, pistolRecoilPitch = 0, pistolRecoilKickZ = 0, pistolTrigPull = 0;
-  let awmBoltCycleStartAt = 0;
-
-  // Multi-weapon Viewmodel sub-groups mounted under gun
-  const m416ViewGroup = new THREE.Group();
-  const pistolViewGroup = new THREE.Group();
-  const pistolPivot = new THREE.Group();
-  pistolViewGroup.add(pistolPivot);
-
-  // 3-cone additive Tactical Pistol muzzle flash matched to reference PBR spec
-  const pistolFlashMat = new THREE.MeshBasicMaterial({
-    color: 0xffd27a,
-    transparent: true,
-    opacity: 0,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-    fog: false,
-  });
-  const pistolMuzzleFlash = new THREE.Group();
-  pistolMuzzleFlash.position.copy(pistolMuzAnchorPos);
-  for (let i = 0; i < 3; i++) {
-    const cone = new THREE.Mesh(new THREE.ConeGeometry(0.018, 0.075, 8), pistolFlashMat);
-    cone.rotation.x = -Math.PI * 0.5;
-    cone.rotation.z = (i * Math.PI) / 3;
-    cone.position.z = -0.028;
-    pistolMuzzleFlash.add(cone);
-  }
-  pistolPivot.add(pistolMuzzleFlash);
-  pistolViewGroup.traverse((o) => o.layers.set(VIEW_LAYER));
-  pistolViewGroup.visible = false;
-
-  const sniperViewGroup = new THREE.Group();
-  function makeSocketNode(name, pos, distal, palmNormal, isRightHand) {
-    const pose = buildSocketPose(pos, distal, palmNormal, isRightHand, THREE);
-    const node = new THREE.Object3D();
-    node.name = name;
-    node.position.copy(pose.p);
-    node.quaternion.copy(pose.q);
-    return node;
-  }
-
-  const sniperSockHandguard = makeSocketNode(
-    "socket_handguard",
-    [-0.028, -0.044, -0.275],
-    [-0.20, -0.18, -0.963],
-    [0.64, 0.77, -0.04],
-    false,
-  );
-  const sniperSockGrip = makeSocketNode(
-    "socket_grip",
-    [0.036, -0.062, 0.065],
-    [0.14, -0.06, -0.988],
-    [-0.95, 0.14, 0.28],
-    true,
-  );
-  const sniperSockMag = makeSocketNode(
-    "socket_mag",
-    [-0.038, -0.080, -0.090],
-    [0.36, -0.16, -0.919],
-    [0.88, 0.28, 0.38],
-    false,
-  );
-  const sniperSockBolt = makeSocketNode(
-    "socket_charging",
-    [0.0604, -0.019, 0.018],
-    [0.12, 0.16, -0.98],
-    [-0.88, -0.42, 0.22],
-    true,
-  );
-  sniperViewGroup.add(sniperSockHandguard, sniperSockGrip, sniperSockMag, sniperSockBolt);
-  sniperViewGroup.traverse((o) => o.layers.set(VIEW_LAYER));
-  sniperViewGroup.visible = false;
-
-  // Fallback attachment sockets before async GLB models finish parsing
-  const weaponSockets = {
-    m416: {
-      handguard: makeSocketNode("socket_handguard", [-0.031, -0.033, -0.252], [-0.22, -0.20, -0.954], [0.64, 0.77, -0.04], false),
-      grip: makeSocketNode("socket_grip", [0.024, -0.058, 0.082], [0.18, -0.04, -0.983], [-0.96, 0.08, 0.26], true),
-      mag: makeSocketNode("socket_mag", [-0.036, -0.130, -0.070], [0.36, -0.16, -0.919], [0.90, 0.28, 0.33], false),
-      bolt: makeSocketNode("socket_charging", [-0.026, 0.035, 0.130], [0.68, 0.08, -0.73], [0.24, -0.94, 0.23], false),
-    },
-    pistol: {
-      handguard: makeSocketNode("socket_handguard", [-0.024, -0.038, 0.024], [-0.16, -0.12, -0.980], [0.90, 0.34, 0.27], false),
-      grip: makeSocketNode("socket_grip", [0.020, -0.036, 0.056], [0.16, -0.04, -0.986], [-0.96, 0.08, 0.26], true),
-      mag: makeSocketNode("socket_mag", [-0.014, -0.072, 0.040], [0.54, -0.18, -0.82], [0.78, 0.32, 0.54], false),
-      bolt: makeSocketNode("socket_slide", [-0.015, 0.048, 0.022], [0.66, 0.06, -0.75], [0.35, -0.90, 0.26], false),
-    },
-    sniper: {
-      handguard: sniperSockHandguard,
-      grip: sniperSockGrip,
-      mag: sniperSockMag,
-      bolt: sniperSockBolt,
-    },
-  };
-  m416ViewGroup.add(weaponSockets.m416.handguard, weaponSockets.m416.grip, weaponSockets.m416.mag, weaponSockets.m416.bolt);
-  pistolPivot.add(weaponSockets.pistol.handguard, weaponSockets.pistol.grip, weaponSockets.pistol.mag, weaponSockets.pistol.bolt);
-
-  gun.add(m416ViewGroup, pistolViewGroup, sniperViewGroup);
-
-  function applyViewmodelWeapon(weaponId) {
-    m416ViewGroup.visible = weaponId === "m416";
-    pistolViewGroup.visible = weaponId === "pistol";
-    sniperViewGroup.visible = weaponId === "sniper";
-    if (weaponId === "pistol") {
-      muz.position.copy(pistolMuzAnchorPos);
-      mf.position.copy(pistolMuzAnchorPos);
-      flashL.position.set(0, 0.0495, -0.185);
-    } else if (weaponId === "sniper") {
-      muz.position.copy(awmMuzAnchorPos);
-      mf.position.copy(awmMuzAnchorPos);
-      flashL.position.set(awmMuzAnchorPos.x, awmMuzAnchorPos.y, awmMuzAnchorPos.z - 0.08);
-    } else {
-      muz.position.set(0, 0.02, -0.615);
-      mf.position.set(0, 0.02, -0.615);
-      flashL.position.set(0, 0.02, -0.68);
-    }
-  }
-
-  // Strictly 3 shared team materials across entire room (Section B2)
-  const teamAccentMats = {};
-  function initTeamMaterials(templateMat) {
-    const emissiveLevels = { A: 0.48, B: 0.50, FFA: 0.16 };
-    for (const key of ["A", "B", "FFA"]) {
-      const m = templateMat
-        ? templateMat.clone()
-        : new THREE.MeshStandardMaterial({ roughness: 0.38, metalness: 0.14 });
-      m.name = `TeamColor_${key}`;
-      m.color.setHex(TEAM_META[key].colorNum);
-      m.emissive.setHex(TEAM_META[key].colorNum);
-      m.emissiveIntensity = emissiveLevels[key];
-      teamAccentMats[key] = m;
-    }
-  }
-  initTeamMaterials(null);
-
-  function loadModelAssetAsync(key, glbPath) {
-    return new Promise((resolve, reject) => {
-      if (typeof THREE.GLTFLoader !== "function") {
-        reject(new Error(`THREE.GLTFLoader unavailable for ${key}`));
-        return;
-      }
-      const loader = new THREE.GLTFLoader();
-      const b64 = window.FPS_MODELS && window.FPS_MODELS[key];
-      if (b64) {
-        try {
-          loader.parse(decodeBase64ToArrayBuffer(b64), "", resolve, reject);
-        } catch (err) {
-          reject(err);
-        }
-        return;
-      }
-      loader.load(glbPath, resolve, undefined, reject);
-    });
-  }
-
-  const CH_REST_Z = 0.118, MAG_REST = new Vec(0, -0.042, -0.064);
-  let armsCtrl = null;
-  let armsRoot = null;
-  let sharedModelsLoaded = false;
-
-  function mountM416Gltf(gltf) {
-    const root = gltf.scene, matCache = new Map();
-    root.traverse((obj) => {
-      obj.layers.set(VIEW_LAYER);
-      if (!obj.isMesh) return;
-      obj.castShadow = obj.receiveShadow = true;
-      if (!matCache.has(obj.material)) matCache.set(obj.material, hydratePbrMaterial(obj.material, obj.name, 1.05));
-      obj.material = matCache.get(obj.material);
-      if (obj.name === "holo_lens") obj.renderOrder = 5;
-      if (obj.name === "reticle_group") obj.renderOrder = 10;
-    });
-    m416WorldProto = root.clone();
-    boltVis = root.getObjectByName("bolt_vis") || boltVis;
-    trig = root.getObjectByName("trigger_group") || trig;
-    ch = root.getObjectByName("charging_handle") || ch;
-    reticle = root.getObjectByName("reticle_group") || reticle;
-    laserLens = root.getObjectByName("laser_lens") || laserLens;
-    mag = root.getObjectByName("mag_group") || mag;
-    weaponSockets.m416.handguard = root.getObjectByName("socket_handguard") || weaponSockets.m416.handguard;
-    weaponSockets.m416.grip = root.getObjectByName("socket_grip") || weaponSockets.m416.grip;
-    weaponSockets.m416.mag = root.getObjectByName("socket_mag") || weaponSockets.m416.mag;
-    weaponSockets.m416.bolt = root.getObjectByName("socket_charging") || weaponSockets.m416.bolt;
-    const muzNode = root.getObjectByName("muzzle_anchor"), lasNode = root.getObjectByName("laser_origin");
-    if (muzNode && SLOT_TO_WEAPON_ID[activeSlot] === "m416") muz.position.copy(muzNode.position);
-    if (lasNode) laserOrigin.position.copy(lasNode.position);
-    m416ViewGroup.add(root);
-    applyViewmodelWeapon(SLOT_TO_WEAPON_ID[activeSlot] || "m416");
-    upgradeRemoteWeapons();
-    gunAnim(0, 0);
-    window.__m416Loaded = true;
-  }
-
-  function mountPistolGltf(gltf) {
-    const root = gltf.scene, matCache = new Map();
-    root.traverse((obj) => {
-      obj.layers.set(VIEW_LAYER);
-      if (!obj.isMesh) return;
-      obj.castShadow = obj.receiveShadow = true;
-      const ck = `${obj.material.uuid}:${obj.name}`;
-      if (!matCache.has(ck)) matCache.set(ck, hydratePbrMaterial(obj.material, obj.name, 0.88));
-      obj.material = matCache.get(ck);
-    });
-    pistolWorldProto = root.clone();
-    pistolSlideNode = root.getObjectByName("pistol_slide") || pistolSlideNode;
-    pistolTriggerNode = root.getObjectByName("pistol_trigger") || pistolTriggerNode;
-    pistolMagNode = root.getObjectByName("pistol_mag") || pistolMagNode;
-    weaponSockets.pistol.handguard = root.getObjectByName("socket_handguard") || weaponSockets.pistol.handguard;
-    weaponSockets.pistol.grip = root.getObjectByName("socket_grip") || weaponSockets.pistol.grip;
-    weaponSockets.pistol.mag = root.getObjectByName("socket_mag") || weaponSockets.pistol.mag;
-    weaponSockets.pistol.bolt = root.getObjectByName("socket_slide") || weaponSockets.pistol.bolt;
-    const pMuz = root.getObjectByName("pistol_muzzle");
-    if (pMuz) {
-      pistolMuzAnchorPos.copy(pMuz.position);
-      pistolMuzzleFlash.position.copy(pMuz.position);
-    }
-    pistolPivot.add(root);
-    applyViewmodelWeapon(SLOT_TO_WEAPON_ID[activeSlot] || "m416");
-    upgradeRemoteWeapons();
-    gunAnim(0, 0);
-    window.__pistolLoaded = true;
-  }
-
-  function mountAwmGltf(gltf) {
-    const root = gltf.scene, matCache = new Map();
-    root.traverse((obj) => {
-      obj.layers.set(VIEW_LAYER);
-      if (!obj.isMesh) return;
-      obj.castShadow = obj.receiveShadow = true;
-      const ck = `${obj.material.uuid}:${obj.name}`;
-      if (!matCache.has(ck)) matCache.set(ck, hydratePbrMaterial(obj.material, obj.name, 0.96));
-      obj.material = matCache.get(ck);
-    });
-    awmWorldProto = root.clone();
-    awmBoltPivot = root.getObjectByName("awm_bolt_pivot") || awmBoltPivot;
-    awmMagGroup = root.getObjectByName("awm_mag_group") || awmMagGroup;
-    awmTriggerNode = root.getObjectByName("trigger") || awmTriggerNode;
-    weaponSockets.sniper.handguard = root.getObjectByName("socket_handguard") || weaponSockets.sniper.handguard;
-    weaponSockets.sniper.grip = root.getObjectByName("socket_grip") || weaponSockets.sniper.grip;
-    weaponSockets.sniper.mag = root.getObjectByName("socket_mag") || weaponSockets.sniper.mag;
-    weaponSockets.sniper.bolt =
-      root.getObjectByName("socket_bolt_right") ||
-      root.getObjectByName("socket_charging") ||
-      weaponSockets.sniper.bolt;
-    const aMuz = root.getObjectByName("muzzle_anchor");
-    if (aMuz) awmMuzAnchorPos.copy(aMuz.position);
-    const aEye = root.getObjectByName("scope_eye");
-    if (aEye) awmOpticY = aEye.position.y;
-    sniperViewGroup.add(root);
-    applyViewmodelWeapon(SLOT_TO_WEAPON_ID[activeSlot] || "m416");
-    upgradeRemoteWeapons();
-    gunAnim(0, 0);
-    window.__awmLoaded = true;
-  }
-
-  function mountFpsArmsGltf(gltf) {
-    const root = gltf.scene, matCache = new Map();
-    root.traverse((obj) => {
-      obj.layers.set(VIEW_LAYER);
-      if (!obj.isMesh) return;
-      obj.castShadow = obj.receiveShadow = true;
-      if (obj.isSkinnedMesh) obj.frustumCulled = false;
-      if (obj.geometry && !obj.geometry.attributes.uv2 && obj.geometry.attributes.uv) {
-        obj.geometry.setAttribute("uv2", obj.geometry.attributes.uv);
-      }
-      const ck = `${obj.material.uuid}:${obj.isSkinnedMesh ? 1 : 0}`;
-      if (!matCache.has(ck)) {
-        matCache.set(ck, hydratePbrMaterial(obj.material, obj.name, 0.85, Boolean(obj.isSkinnedMesh)));
-      }
-      obj.material = matCache.get(ck);
-    });
-    const ctrl = createSkinnedArmsController(root, THREE);
-    if (!ctrl || !ctrl.ready) {
-      armsCtrl = null;
-      armsRoot = null;
-      window.__armsLoaded = false;
-      console.warn("fps_arms asset missing required skinned rig bones; rebuild with python -m model.build");
-      return;
-    }
-    armsRoot = root;
-    armsCtrl = ctrl;
-    vmCam.add(root);
-    gunAnim(0, 0);
-    window.__armsLoaded = true;
-  }
-
-  function mountSoldierGltf(gltf) {
-    const root = gltf.scene, matCache = new Map();
-    let teamTemplate = null;
-    root.traverse((obj) => {
-      obj.layers.set(0);
-      if (!obj.isMesh) return;
-      obj.castShadow = obj.receiveShadow = true;
-      if (obj.material && (obj.material.name === "TeamColor" || obj.material.name === "Soldier_TeamAccent")) {
-        teamTemplate = obj.material;
-      }
-      if (!matCache.has(obj.material)) matCache.set(obj.material, hydratePbrMaterial(obj.material, obj.name, 1.1));
-      obj.material = matCache.get(obj.material);
-    });
-    if (teamTemplate) initTeamMaterials(hydratePbrMaterial(teamTemplate, "TeamColor", 1.1));
-    soldierProto = root;
-    upgradeRemoteSoldiers();
-    window.__soldierLoaded = true;
-  }
-
-  async function loadAllSharedModelsAsync(onProgress = null) {
-    if (sharedModelsLoaded) return;
-    const specs = [
-      { key: "m416", path: "/model/dist/m416.glb", label: "M416 Tactical", mount: mountM416Gltf },
-      { key: "pistol", path: "/model/dist/pistol.glb", label: "Glock-17", mount: mountPistolGltf },
-      { key: "awm", path: "/model/dist/awm.glb", label: "AWM Sniper", mount: mountAwmGltf },
-      { key: "fps_arms", path: "/model/dist/fps_arms.glb", label: "Tay nhân vật FPP", mount: mountFpsArmsGltf },
-      { key: "soldier", path: "/model/dist/soldier.glb", label: "Chiến binh LAN", mount: mountSoldierGltf },
-    ];
-    for (let i = 0; i < specs.length; i++) {
-      const sp = specs[i];
-      if (typeof onProgress === "function") {
-        onProgress(i / specs.length, `Nạp mô hình (${i + 1}/${specs.length}): ${sp.label}...`);
-      }
-      await yieldToUI();
-      try {
-        const gltf = await loadModelAssetAsync(sp.key, sp.path);
-        sp.mount(gltf);
-      } catch (err) {
-        console.error(`Failed to load model ${sp.key}:`, err);
-      }
-      await yieldToUI();
-    }
-    sharedModelsLoaded = true;
-    if (typeof onProgress === "function") onProgress(1, "Đã nạp toàn bộ mô hình 3D");
-  }
-
-  // ---------- Remote Soldiers (100ms interpolation + hitbox tags) ----------
-  const remotePlayers = new Map();
-
-  function tagHitMeshes(root, playerId) {
-    const hitMeshes = [];
-    const headNode = root.getObjectByName("head_group");
-    const legL = root.getObjectByName("leg_left");
-    const legR = root.getObjectByName("leg_right");
-    const headSet = new Set(), legSet = new Set();
-    if (headNode) headNode.traverse((o) => headSet.add(o));
-    if (legL) legL.traverse((o) => legSet.add(o));
-    if (legR) legR.traverse((o) => legSet.add(o));
-
-    root.traverse((o) => {
-      if (!o.isMesh) return;
-      const part = headSet.has(o) ? "head" : legSet.has(o) ? "limb" : "body";
-      o.userData.hitTarget = { id: playerId, part };
-      hitMeshes.push(o);
-    });
-    return hitMeshes;
-  }
-
-  function buildSoldierVisual(team, playerId) {
-    const tKey = team === "A" || team === "B" ? team : "FFA";
-    if (!soldierProto) {
-      const root = new THREE.Group();
-      const uni = new THREE.MeshStandardMaterial({ color: 0x323b42, roughness: 0.75 });
-      const acc = teamAccentMats[tKey];
-      const upper = new THREE.Group();
-      upper.position.set(0, 0.96, 0);
-      const torso = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.5, 0.22), uni);
-      torso.position.set(0, 0.25, 0);
-      const strip = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.08, 0.24), acc);
-      strip.position.set(0, 0.36, 0);
-      const headGroup = new THREE.Group();
-      headGroup.name = "head_group";
-      headGroup.position.set(0, 0.5, 0);
-      const helm = new THREE.Mesh(new THREE.SphereGeometry(0.15, 12, 10), acc);
-      helm.position.set(0, 0.14, 0);
-      headGroup.add(helm);
-      const weaponMount = new THREE.Object3D();
-      weaponMount.position.set(0.105, 0.31, -0.305);
-      upper.add(torso, strip, headGroup, weaponMount);
-      const legL = new THREE.Group();
-      legL.name = "leg_left";
-      legL.position.set(-0.105, 0.86, 0);
-      const mL = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.84, 0.14), uni);
-      mL.position.set(0, -0.43, 0);
-      legL.add(mL);
-      const legR = legL.clone();
-      legR.name = "leg_right";
-      legR.position.x = 0.105;
-      root.add(upper, legL, legR);
-      return { root, upper, headGroup, legL, legR, weaponMount, hitMeshes: tagHitMeshes(root, playerId), isFallback: true };
-    }
-
-    const root = soldierProto.clone();
-    const accMat = teamAccentMats[tKey];
-    root.traverse((o) => {
-      o.layers.set(0);
-      if (
-        o.isMesh &&
-        (o.name.includes("team") || (o.material && (o.material.name === "TeamColor" || o.material.name === "Soldier_TeamAccent")))
-      ) {
-        o.material = accMat;
-      }
-    });
-    return {
-      root,
-      upper: root.getObjectByName("upper_body") || root,
-      headGroup: root.getObjectByName("head_group"),
-      armsGroup: root.getObjectByName("arms_group"),
-      legL: root.getObjectByName("leg_left"),
-      legR: root.getObjectByName("leg_right"),
-      weaponMount: root.getObjectByName("weapon_mount"),
-      hitMeshes: tagHitMeshes(root, playerId),
-      isFallback: false,
-    };
-  }
-
-  function makeNameplateSprite(name, team, hpVal) {
-    const c = document.createElement("canvas");
-    c.width = 256;
-    c.height = 64;
-    const t = new THREE.CanvasTexture(c);
-    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, transparent: true, depthTest: true }));
-    sp.scale.set(1.38, 0.34, 1);
-    sp.position.set(0, 2.08, 0);
-    sp.userData = { canvas: c, tex: t, lastKey: "" };
-    updateNameplateSprite(sp, name, team, hpVal);
-    return sp;
-  }
-
-  function updateNameplateSprite(sp, name, team, hpVal) {
-    const meta = TEAM_META[team] || TEAM_META.FFA;
-    const key = `${name}:${meta.id}:${hpVal | 0}`;
-    if (sp.userData.lastKey === key) return;
-    sp.userData.lastKey = key;
-    const c = sp.userData.canvas, g = c.getContext("2d");
-    g.clearRect(0, 0, c.width, c.height);
-    g.fillStyle = "rgba(8, 14, 20, 0.78)";
-    g.fillRect(22, 6, 212, 48);
-    g.strokeStyle = meta.hex;
-    g.lineWidth = 2.5;
-    g.strokeRect(22, 6, 212, 48);
-    g.fillStyle = meta.hex;
-    g.font = "bold 19px sans-serif";
-    g.textAlign = "center";
-    g.fillText(`${meta.symbol} ${name}`, 128, 29);
-    g.fillStyle = "#222a30";
-    g.fillRect(46, 39, 164, 7);
-    g.fillStyle = hpVal > 35 ? "#4ec3b0" : "#ff5245";
-    g.fillRect(46, 39, Math.max(0, Math.min(1, hpVal / 100)) * 164, 7);
-    sp.userData.tex.needsUpdate = true;
-  }
-
-  function syncRemoteWeaponVisibility(av) {
-    const wid = av.weaponId || "m416";
-    if (av.m416Mesh) av.m416Mesh.visible = wid !== "pistol" && wid !== "sniper";
-    if (av.pistolMesh) av.pistolMesh.visible = wid === "pistol";
-    if (av.awmMesh) av.awmMesh.visible = wid === "sniper";
-    av.muzNode =
-      wid === "pistol"
-        ? av.pistolMuzNode || av.m416MuzNode
-        : wid === "sniper"
-          ? av.awmMuzNode || av.m416MuzNode
-          : av.m416MuzNode;
-  }
-
-  function attachWeaponToRig(av) {
-    if (!av.rig.weaponMount) return;
-    if (!av.m416Mesh && m416WorldProto) {
-      const w = m416WorldProto.clone();
-      w.traverse((o) => { o.layers.set(0); if (o.name === "reticle_group") o.visible = false; });
-      w.scale.setScalar(1.06);
-      av.rig.weaponMount.add(w);
-      av.m416Mesh = w;
-      av.m416MuzNode = w.getObjectByName("muzzle_anchor") || null;
-    }
-    if (!av.pistolMesh && pistolWorldProto) {
-      const pw = pistolWorldProto.clone();
-      pw.traverse((o) => o.layers.set(0));
-      pw.scale.setScalar(1.16);
-      pw.position.set(0.0, -0.015, 0.13);
-      av.rig.weaponMount.add(pw);
-      av.pistolMesh = pw;
-      av.pistolMuzNode = pw.getObjectByName("pistol_muzzle") || null;
-    }
-    if (!av.awmMesh && awmWorldProto) {
-      const aw = awmWorldProto.clone();
-      aw.traverse((o) => o.layers.set(0));
-      aw.scale.setScalar(1.02);
-      aw.position.set(0.0, -0.006, 0.04);
-      av.rig.weaponMount.add(aw);
-      av.awmMesh = aw;
-      av.awmMuzNode = aw.getObjectByName("muzzle_anchor") || null;
-    }
-    av.weaponAttached = Boolean(av.m416Mesh || av.pistolMesh || av.awmMesh);
-    syncRemoteWeaponVisibility(av);
-  }
-
-  function createRemoteAvatar(p) {
-    const container = new THREE.Group();
-    const rig = buildSoldierVisual(p.team, p.id);
-    container.add(rig.root);
-
-    const shieldDome = new THREE.Mesh(
-      new THREE.SphereGeometry(0.95, 16, 12),
-      new THREE.MeshBasicMaterial({ color: TEAM_META[p.team]?.colorNum || 0x2f80ff, transparent: true, opacity: 0.16, wireframe: true }),
-    );
-    shieldDome.position.set(0, 0.92, 0);
-    container.add(shieldDome);
-
-    const muzFlash = new THREE.Mesh(new THREE.SphereGeometry(0.08, 6, 6), new THREE.MeshBasicMaterial({ color: 0xffd584 }));
-    muzFlash.visible = false;
-    container.add(muzFlash);
-
-    const nameplate = makeNameplateSprite(p.name, p.team, p.hp);
-    container.add(nameplate);
-    S.add(container);
-
-    const av = {
-      id: p.id, name: p.name, team: p.team, container, rig, hitMeshes: rig.hitMeshes,
-      shieldDome, muzFlash, muzNode: null, m416Mesh: null, pistolMesh: null, awmMesh: null, m416MuzNode: null, pistolMuzNode: null, awmMuzNode: null,
-      weaponAttached: false, nameplate,
-      snapshots: [], walkPhase: 0, flashTimer: 0, alive: p.alive, deathTime: 0,
-      weaponId: p.weaponId || "m416", reloadEndsAt: 0, reloadDurMs: 0, radarBlipUntil: 0, crouchK: 0,
-    };
-    attachWeaponToRig(av);
-    remotePlayers.set(p.id, av);
-    return av;
-  }
-
-  function swapAvatarRig(av, team) {
-    av.team = team;
-    av.container.remove(av.rig.root);
-    av.rig = buildSoldierVisual(team, av.id);
-    av.hitMeshes = av.rig.hitMeshes;
-    av.weaponAttached = false;
-    av.muzNode = av.m416Mesh = av.pistolMesh = av.awmMesh = av.m416MuzNode = av.pistolMuzNode = av.awmMuzNode = null;
-    av.container.add(av.rig.root);
-    attachWeaponToRig(av);
-  }
-
-  function upgradeRemoteSoldiers() {
-    for (const av of remotePlayers.values()) {
-      if (av.rig.isFallback && soldierProto) swapAvatarRig(av, av.team);
-    }
-  }
-  function upgradeRemoteWeapons() {
-    for (const av of remotePlayers.values()) attachWeaponToRig(av);
-  }
-  function clearRemotePlayers() {
-    for (const av of remotePlayers.values()) S.remove(av.container);
-    remotePlayers.clear();
-  }
-
-  function updateRemotePlayers(dt) {
-    const nowMs = performance.now();
-    const renderTime = Date.now() + net.clockOffsetMs - INTERP_DELAY_MS;
-    for (const av of remotePlayers.values()) {
-      const snaps = av.snapshots;
-      if (!snaps.length) continue;
-      while (snaps.length >= 2 && snaps[1].t <= renderTime) snaps.shift();
-      let pose = snaps[0];
-      if (snaps.length >= 2 && snaps[1].t > snaps[0].t) {
-        const alpha = Math.max(0, Math.min(1, (renderTime - snaps[0].t) / (snaps[1].t - snaps[0].t)));
-        pose = {
-          x: THREE.MathUtils.lerp(snaps[0].x, snaps[1].x, alpha),
-          y: THREE.MathUtils.lerp(snaps[0].y, snaps[1].y, alpha),
-          z: THREE.MathUtils.lerp(snaps[0].z, snaps[1].z, alpha),
-          yaw: lerpAngle(snaps[0].yaw, snaps[1].yaw, alpha),
-          pitch: THREE.MathUtils.lerp(snaps[0].pitch, snaps[1].pitch, alpha),
-          mv: THREE.MathUtils.lerp(snaps[0].mv, snaps[1].mv, alpha),
-          flags: snaps[1].flags || 0,
-          weaponId: snaps[1].weaponId || av.weaponId,
-          reloading: Boolean(snaps[1].reloading),
-          hp: snaps[1].hp,
-          alive: snaps[1].alive,
-          invulnerable: snaps[1].invulnerable,
-        };
-      }
-
-      if (av.alive && !pose.alive) {
-        av.deathTime = 0;
-        av.reloadEndsAt = 0; // Cancel reload animation immediately on death
-      }
-      if (pose.weaponId && pose.weaponId !== av.weaponId && nowMs >= (av.weaponLockUntil || 0)) {
-        av.weaponId = pose.weaponId;
-        av.reloadEndsAt = 0;
-        syncRemoteWeaponVisibility(av);
-      }
-      if (!pose.reloading && av.reloadEndsAt > nowMs + 250) {
-        av.reloadEndsAt = 0;
-      }
-      av.alive = pose.alive;
-      av.flags = pose.flags || 0;
-      av.container.position.set(pose.x, pose.y, pose.z);
-      av.container.rotation.y = pose.yaw;
-
-      if (!pose.alive) {
-        av.deathTime += dt;
-        av.container.visible = av.deathTime < 2.2;
-        const drop = Math.min(1, av.deathTime * 4.5);
-        av.rig.root.rotation.x = -drop * Math.PI * 0.48;
-        av.rig.root.position.y = drop * 0.16;
-        av.shieldDome.visible = false;
-        av.nameplate.visible = false;
-        continue;
-      }
-
-      av.container.visible = true;
-      av.rig.root.rotation.x = 0;
-      const targetCrouch = pose.flags & FLAG.CROUCH ? 1 : 0;
-      av.crouchK += (targetCrouch - av.crouchK) * Math.min(1, 14 * dt);
-      av.rig.root.position.y = -0.44 * av.crouchK;
-      av.shieldDome.visible = !!pose.invulnerable;
-      updateNameplateSprite(av.nameplate, av.name, av.team, pose.hp);
-
-      // Section B4: Show nameplates only on teammates in TDM (hide enemies & FFA competitors)
-      const sameSquad = currentMode === "TDM" && av.team === meTeam;
-      av.nameplate.visible = sameSquad;
-
-      if (av.rig.upper && !av.rig.isFallback) {
-        av.rig.upper.rotation.x = pose.pitch * 0.45 + 0.18 * av.crouchK;
-      }
-      if (av.rig.headGroup) av.rig.headGroup.rotation.x = pose.pitch * 0.55;
-
-      // Remote player reload animation (plays on EVENT_RELOAD, cancels on switch/death)
-      if (av.rig.armsGroup) {
-        if (av.reloadEndsAt > nowMs && av.reloadDurMs > 0) {
-          const pRel = Math.max(0, Math.min(1, 1 - (av.reloadEndsAt - nowMs) / av.reloadDurMs));
-          av.rig.armsGroup.rotation.x = Math.sin(pRel * Math.PI) * 0.38;
-          av.rig.armsGroup.rotation.z = -Math.sin(pRel * Math.PI) * 0.28;
-        } else {
-          av.rig.armsGroup.rotation.x *= 0.8;
-          av.rig.armsGroup.rotation.z *= 0.8;
-        }
-      }
-
-      if (pose.mv > 0.05) {
-        av.walkPhase += dt * (6 + pose.mv * 4.5);
-        const swing = Math.sin(av.walkPhase) * 0.55 * Math.min(1.2, pose.mv);
-        if (av.rig.legL) av.rig.legL.rotation.x = swing;
-        if (av.rig.legR) av.rig.legR.rotation.x = -swing;
-      } else {
-        if (av.rig.legL) av.rig.legL.rotation.x *= 0.85;
-        if (av.rig.legR) av.rig.legR.rotation.x *= 0.85;
-      }
-      if (av.rig.legL) av.rig.legL.position.y = 0.86 - 0.14 * av.crouchK;
-      if (av.rig.legR) av.rig.legR.position.y = 0.86 - 0.14 * av.crouchK;
-
-      if (av.flashTimer > 0) {
-        av.flashTimer -= dt;
-        if (av.muzNode) {
-          const wp = av.muzNode.getWorldPosition(new Vec());
-          av.container.worldToLocal(wp);
-          av.muzFlash.position.copy(wp);
-        } else {
-          av.muzFlash.position.set(0.11, 1.3, -0.78);
-        }
-        av.muzFlash.visible = av.flashTimer > 0;
-      } else {
-        av.muzFlash.visible = false;
-      }
-    }
-  }
-
-  // ---------- Viewmodel Positions, Socket Sampling & Animation ----------
-  // Lower bottom-right placement with upright roll (0) & gentle inward cant toward center crosshair
-  const HIP_POS = new Vec(0.172, -0.156, -0.435), ADS_POS = new Vec(0, -OPTIC_Y, -0.215);
-  const PISTOL_HIP_POS = new Vec(0.125, -0.128, -0.315), PISTOL_ADS_POS = new Vec(0, -0.0671, -0.245);
-  const SNIPER_HIP_POS = new Vec(0.166, -0.140, -0.455);
-  const lerp = THREE.MathUtils.lerp;
-  const smooth01 = (t) => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
-
-  const _vmInvQ = new THREE.Quaternion();
-  const _sockHgP = new Vec(), _sockHgQ = new THREE.Quaternion();
-  const _sockMagP = new Vec(), _sockMagQ = new THREE.Quaternion();
-  const _sockBoltP = new Vec(), _sockBoltQ = new THREE.Quaternion();
-  const _sockGripP = new Vec(), _sockGripQ = new THREE.Quaternion();
-  const _sockRBoltP = new Vec(), _sockRBoltQ = new THREE.Quaternion();
-  const _leftTargetP = new Vec(), _leftTargetQ = new THREE.Quaternion();
-  const _rightTargetP = new Vec(), _rightTargetQ = new THREE.Quaternion();
-
-  function sampleSniperLeftSocket(rl, socks) {
-    readSocketInVmCam(socks.handguard, _sockHgP, _sockHgQ);
-    if (rl <= 0.04 || rl >= 0.78) {
-      if (rl >= 0.66 && rl < 0.78) {
-        readSocketInVmCam(socks.mag, _sockMagP, _sockMagQ);
-        const k = smooth01((rl - 0.66) / 0.12);
-        _leftTargetP.lerpVectors(_sockMagP, _sockHgP, k);
-        _leftTargetQ.copy(_sockMagQ).slerp(_sockHgQ, k);
-        return k < 0.5 ? "mag" : "support";
-      }
-      _leftTargetP.copy(_sockHgP);
-      _leftTargetQ.copy(_sockHgQ);
-      return "support";
-    }
-    readSocketInVmCam(socks.mag, _sockMagP, _sockMagQ);
-    if (rl <= 0.22) {
-      const k = smooth01((rl - 0.04) / 0.18);
-      _leftTargetP.lerpVectors(_sockHgP, _sockMagP, k);
-      _leftTargetQ.copy(_sockHgQ).slerp(_sockMagQ, k);
-      return k > 0.5 ? "mag" : "support";
-    }
-    _leftTargetP.copy(_sockMagP);
-    _leftTargetQ.copy(_sockMagQ);
-    return "mag";
-  }
-
-  function readSocketInVmCam(node, outPos, outQuat) {
-    node.getWorldPosition(outPos);
-    vmCam.worldToLocal(outPos);
-    node.getWorldQuaternion(outQuat);
-    outQuat.premultiply(_vmInvQ).normalize();
-  }
-
-  function sampleLeftSocket(rl, isTactical, socks) {
-    readSocketInVmCam(socks.handguard, _sockHgP, _sockHgQ);
-    if (rl <= 0.03) {
-      _leftTargetP.copy(_sockHgP);
-      _leftTargetQ.copy(_sockHgQ);
-      return "support";
-    }
-
-    readSocketInVmCam(socks.mag, _sockMagP, _sockMagQ);
-    if (rl <= 0.22) {
-      const k = smooth01((rl - 0.03) / 0.19);
-      _leftTargetP.lerpVectors(_sockHgP, _sockMagP, k);
-      _leftTargetQ.copy(_sockHgQ).slerp(_sockMagQ, k);
-      return k > 0.5 ? "mag" : "support";
-    }
-    if (rl <= 0.72) {
-      _leftTargetP.copy(_sockMagP);
-      _leftTargetQ.copy(_sockMagQ);
-      return "mag";
-    }
-    if (isTactical) {
-      const k = smooth01((rl - 0.72) / 0.26);
-      _leftTargetP.lerpVectors(_sockMagP, _sockHgP, k);
-      _leftTargetQ.copy(_sockMagQ).slerp(_sockHgQ, k);
-      return k < 0.6 ? "mag" : "support";
-    }
-
-    readSocketInVmCam(socks.bolt, _sockBoltP, _sockBoltQ);
-    if (rl <= 0.81) {
-      const k = smooth01((rl - 0.72) / 0.09);
-      _leftTargetP.lerpVectors(_sockMagP, _sockBoltP, k);
-      _leftTargetQ.copy(_sockMagQ).slerp(_sockBoltQ, k);
-      return k > 0.5 ? "bolt" : "mag";
-    }
-    if (rl <= 0.92) {
-      _leftTargetP.copy(_sockBoltP);
-      _leftTargetQ.copy(_sockBoltQ);
-      return "bolt";
-    }
-    const kBack = smooth01((rl - 0.92) / 0.08);
-    _leftTargetP.lerpVectors(_sockBoltP, _sockHgP, kBack);
-    _leftTargetQ.copy(_sockBoltQ).slerp(_sockHgQ, kBack);
-    return kBack < 0.4 ? "bolt" : "support";
-  }
-
-  // ---------- Multi-Map State, Cache & GPU Warmup (harbor / military) ----------
-  const militaryLoader = createMilitaryMapLoader({ renderer: R, THREE });
-  let initialDefaultMap = "military";
-  try {
-    if (new URLSearchParams(location.search).get("map") === "harbor") initialDefaultMap = "harbor";
-  } catch {}
-  let activeMapId = initialDefaultMap;
-  let currentActiveMapId = null;
-  let militaryData = null;
-  let militaryBuildPromise = null;
-  let activeCollision = null;
-  let activeEnvMap = null;
-  const uploadedTextures = new Set();
-  const warmedMaps = new Set();
-  let sharedGpuWarmed = false;
-  let suspendRenderLoop = true;
-  let loopStarted = false;
-  let isBootstrapped = false;
-  let lastWarmupStats = null;
-
-  let gt = 0, activeState = "menu", meAlive = true, hp = 100;
-  let shadowDirty = true;
-  let shadowFrameTick = 0;
-  let lastCanvasFilter = "";
-  function updateCanvasPostGrade(nowSec = 0) {
-    const inPlayLowHp = activeState === "play" && meAlive && hp < 35;
-    const lowHpFactor = inPlayLowHp ? Math.max(0, Math.min(1, (35 - hp) / 25)) : 0;
-
-    // Never apply CSS filter on <canvas> during normal play (avoids browser compositor full-frame blit & stutter!).
-    // Color grading on High runs directly inside WebGL shaders (uMilPostGrade).
-    let nextFilter = "";
-    if (lowHpFactor > 0.05 && activeQuality.preset.lowHpBlurEnabled) {
-      const sat = (1.0 - 0.48 * lowHpFactor).toFixed(2);
-      nextFilter = `saturate(${sat}) blur(${(lowHpFactor * 1.1).toFixed(2)}px)`;
-    }
-
-    if (nextFilter !== lastCanvasFilter) {
-      lastCanvasFilter = nextFilter;
-      R.domElement.style.filter = nextFilter;
-    }
-
-    const lowOv = $("lowHpOverlay");
-    if (lowOv) {
-      if (lowHpFactor > 0.01) {
-        const pulse = 0.45 + 0.55 * Math.pow(0.5 + 0.5 * Math.sin(nowSec * (4.2 + lowHpFactor * 2.6)), 3);
-        lowOv.style.opacity = (lowHpFactor * pulse).toFixed(3);
-      } else if (lowOv.style.opacity !== "0") {
-        lowOv.style.opacity = "0";
-      }
-    }
-  }
-
-  function applyGraphicsQuality(choiceOverride = null) {
-    const reqChoice = choiceOverride !== null
-      ? choiceOverride
-      : (settings && settings.get ? settings.get().graphicsQuality : "auto");
-    activeQuality = resolveQualityPreset(reqChoice, detectedQualityTier);
-    const p = activeQuality.preset;
-
-    // 1. Resolution scale (pixelRatio)
-    const effPr = computeEffectivePixelRatio(p, devicePixelRatio);
-    if (Math.abs(R.getPixelRatio() - effPr) > 0.001) {
-      R.setPixelRatio(effPr);
-      R.setSize(innerWidth, innerHeight);
-    }
-
-    // 2. Camera far plane
-    const targetFar = activeMapId === "military" ? p.cameraFar : Math.max(200, p.cameraFar);
-    if (cam.far !== targetFar) {
-      cam.far = targetFar;
-      cam.updateProjectionMatrix();
-    }
-
-    // 3. Shadow map enabled / type / mapSize (recompile materials ONCE only if shadow mode actually changed)
-    const prevShEnabled = R.shadowMap.enabled;
-    const prevShType = R.shadowMap.type;
-    const nextShType = resolveShadowTypeEnum(p.shadowType);
-    R.shadowMap.enabled = Boolean(p.shadowsEnabled);
-    R.shadowMap.type = nextShType;
-
-    moon.castShadow = Boolean(p.shadowsEnabled);
-    if (p.shadowsEnabled && moon.shadow.mapSize.x !== p.shadowMapSize) {
-      moon.shadow.mapSize.set(p.shadowMapSize, p.shadowMapSize);
-      if (moon.shadow.map) { moon.shadow.map.dispose(); moon.shadow.map = null; }
-    }
-
-    if (militaryData && militaryData.applyQualityPreset) {
-      militaryData.applyQualityPreset(p);
-      if (activeMapId === "military" && S.fog) {
-        S.fog.density = militaryData.fogDensity;
-      }
-    }
-
-    if (prevShEnabled !== R.shadowMap.enabled || prevShType !== R.shadowMap.type) {
-      S.traverse((o) => {
-        if (o.isMesh && o.material) {
-          const mats = Array.isArray(o.material) ? o.material : [o.material];
-          for (const m of mats) {
-            if (m && !m.isMeshBasicMaterial) m.needsUpdate = true;
-          }
-        }
-      });
-    }
-
-    // 4. Vignette & post-grade sync
-    const vig = $("vignette");
-    if (vig) vig.style.opacity = activeMapId === "military" && p.vignetteEnabled ? "1" : "0";
-    updateCanvasPostGrade(gt);
-    shadowDirty = true;
-    return activeQuality;
-  }
-
-  if (settings && typeof settings.onChange === "function") {
-    settings.onChange((st) => {
-      if (st && st.graphicsQuality !== activeQuality.choice) {
-        applyGraphicsQuality(st.graphicsQuality);
-      }
-    });
-  }
-
-  function applySceneEnvMap(targetEnv, isMilitary = false) {
-    activeEnvMap = targetEnv;
-    S.environment = targetEnv || null;
-    if (dMat.envMap !== targetEnv) {
-      dMat.envMap = targetEnv;
-      dMat.needsUpdate = true;
-    }
-    for (const root of [gun, armsRoot, m416WorldProto, pistolWorldProto, awmWorldProto, soldierProto]) {
-      if (!root) continue;
-      root.traverse((o) => {
-        if (o.isMesh && o.material && "envMap" in o.material && o.name !== "reticle_group") {
-          const envChanged = o.material.envMap !== targetEnv;
-          if (envChanged) {
-            o.material.envMap = targetEnv;
-            o.material.needsUpdate = true;
-          }
-          const mName = o.material.name || "";
-          if (mName.includes("GunMetal") || mName.includes("Slide") || mName.includes("ScopePBR")) {
-            o.material.envMapIntensity = isMilitary ? 1.18 : 1.05;
-          }
-        }
-      });
-    }
-    if (isMilitary) {
-      vmKey.color.setHex(0xffe9c4);
-      vmKey.intensity = 0.82;
-      vmFill.color.setHex(0x88aacb);
-      vmFill.intensity = 0.20;
-      vmRim.color.setHex(0xffce84);
-      vmRim.intensity = 0.42;
-    } else {
-      vmKey.color.setHex(0xbcd0ea);
-      vmKey.intensity = 0.42;
-      vmFill.color.setHex(0xffb36a);
-      vmFill.intensity = 0.14;
-      vmRim.color.setHex(0xffc27a);
-      vmRim.intensity = 0.26;
-    }
-    for (const av of remotePlayers.values()) {
-      av.container.traverse((o) => {
-        if (o.isMesh && o.material && "envMap" in o.material && o.material.envMap !== targetEnv) {
-          o.material.envMap = targetEnv;
-          o.material.needsUpdate = true;
-        }
-      });
-    }
-  }
-
-  function isMapCached(mapId) {
-    const target = normalizeMapId(mapId);
-    return target === "harbor" ? Boolean(harborData) : Boolean(militaryData);
-  }
-
-  function getCachedMapData(mapId) {
-    const target = normalizeMapId(mapId);
-    return target === "harbor" ? harborData : militaryData;
-  }
-
-  function setLobbyBackdropCamera(targetMapId) {
-    if (engineMode !== "idle") return;
-    if (targetMapId === "military") {
-      cam.position.set(0, EYE_STAND, -40);
-      cam.rotation.set(0, Math.PI, 0);
-    } else {
-      cam.position.set(0, EYE_STAND, 0);
-      cam.rotation.set(0, 0, 0);
-    }
-    cam.updateMatrixWorld(true);
-    vmCam.position.copy(cam.position);
-    vmCam.quaternion.copy(cam.quaternion);
-    vmCam.updateMatrixWorld(true);
-  }
-
-  function activateCachedMap(mapId) {
-    const target = normalizeMapId(mapId);
-    if (target === "harbor") {
-      if (!harborData) return false;
-      activeMapId = "harbor";
-      currentActiveMapId = "harbor";
-      activeCollision = null;
-      harborGroup.visible = true;
-      hemi.visible = moon.visible = warmFill.visible = true;
-      if (militaryData && militaryData.group) militaryData.group.visible = false;
-      R.outputEncoding = THREE.LinearEncoding;
-      R.toneMappingExposure = 1.08;
-      const vig = $("vignette");
-      if (vig) vig.style.opacity = "0";
-      cam.far = Math.max(200, activeQuality.preset.cameraFar);
-      cam.updateProjectionMatrix();
-      S.background = new THREE.Color(0x050a11);
-      S.fog = new THREE.FogExp2(0x050a11, 0.025);
-      applySceneEnvMap(harborData.envMap, false);
-      setLobbyBackdropCamera("harbor");
-      updateCanvasPostGrade(gt);
-      syncAmbientAudio();
-      shadowDirty = true;
-      return true;
-    }
-
-    if (!militaryData) return false;
-    activeMapId = "military";
-    currentActiveMapId = "military";
-    harborGroup.visible = false;
-    hemi.visible = moon.visible = warmFill.visible = false;
-    militaryData.group.visible = true;
-    activeCollision = militaryData.collision;
-    R.outputEncoding = THREE.sRGBEncoding || THREE.LinearEncoding;
-    R.toneMappingExposure = 0.86;
-    militaryData.applyQualityPreset(activeQuality.preset);
-    const vig = $("vignette");
-    if (vig) vig.style.opacity = activeQuality.preset.vignetteEnabled ? "1" : "0";
-    cam.far = activeQuality.preset.cameraFar;
-    cam.updateProjectionMatrix();
-    S.background = new THREE.Color(militaryData.fogColor);
-    S.fog = new THREE.FogExp2(militaryData.fogColor, militaryData.fogDensity);
-    applySceneEnvMap(militaryData.envMap, true);
-    setLobbyBackdropCamera("military");
-    if (militaryData.updateAtmosphere) {
-      militaryData.updateAtmosphere(gt, cam.position, activeQuality.preset);
-    }
-    updateCanvasPostGrade(gt);
-    syncAmbientAudio();
-    shadowDirty = true;
-    window.__militaryMapLoaded = true;
-    return true;
-  }
-
-  async function buildMapAssetsAsync(mapId, onProgress = null) {
-    const target = normalizeMapId(mapId);
-    if (target === "harbor") {
-      return buildHarborSceneAsync(onProgress);
-    }
-    if (militaryData) return militaryData;
-    if (!militaryBuildPromise) {
-      militaryBuildPromise = militaryLoader
-        .buildMilitaryScene({
-          scene: S,
-          envMapTargetList: [],
-          initialPreset: activeQuality.preset,
-          onProgress,
-          yieldFn: yieldToUI,
-          deferActivate: true,
-        })
-        .then((res) => {
-          militaryData = res;
-          window.__militaryMapLoaded = true;
-          return res;
-        })
-        .catch((err) => {
-          console.error("Failed to build military map:", err);
-          militaryBuildPromise = null;
-          throw err;
-        });
-    }
-    return militaryBuildPromise;
-  }
-
-  function createWarmupDroneGroup() {
-    const g = new THREE.Group();
-    const mat = dMat.clone();
-    const body = new THREE.Mesh(droneBodyGeo, mat);
-    body.scale.y = 0.6;
-    body.castShadow = true;
-    const eye = new THREE.Mesh(droneEyeGeo, droneEyeMat);
-    eye.position.z = 0.42;
-    const ring = new THREE.Mesh(droneRingGeo, dMat);
-    ring.rotation.x = Math.PI / 2;
-    g.add(body, eye, ring);
-    return {
-      group: g,
-      dispose() {
-        S.remove(g);
-        mat.dispose();
-      },
-    };
-  }
-
-  function createWarmupSoldierGroup() {
-    const container = new THREE.Group();
-    const rig = buildSoldierVisual("A", "__warmup__");
-    container.add(rig.root);
-    const shieldGeo = new THREE.SphereGeometry(0.95, 16, 12);
-    const shieldMat = new THREE.MeshBasicMaterial({
-      color: TEAM_META.A.colorNum,
-      transparent: true,
-      opacity: 0.16,
-      wireframe: true,
-    });
-    const shieldDome = new THREE.Mesh(shieldGeo, shieldMat);
-    shieldDome.position.set(0, 0.92, 0);
-    container.add(shieldDome);
-
-    const flashGeo = new THREE.SphereGeometry(0.08, 6, 6);
-    const flashMat = new THREE.MeshBasicMaterial({ color: 0xffd584 });
-    const muzFlash = new THREE.Mesh(flashGeo, flashMat);
-    muzFlash.position.set(0.11, 1.3, -0.78);
-    container.add(muzFlash);
-
-    const avDummy = { rig, weaponId: "m416" };
-    attachWeaponToRig(avDummy);
-    if (avDummy.m416Mesh) avDummy.m416Mesh.visible = true;
-    if (avDummy.pistolMesh) avDummy.pistolMesh.visible = true;
-    if (avDummy.awmMesh) avDummy.awmMesh.visible = true;
-
-    return {
-      group: container,
-      dispose() {
-        S.remove(container);
-        shieldGeo.dispose();
-        shieldMat.dispose();
-        flashGeo.dispose();
-        flashMat.dispose();
-      },
-    };
-  }
-
-  async function warmupGpuForMap(mapId, { includeShared = false, onProgress = null, isStale = null } = {}) {
-    const target = normalizeMapId(mapId);
-    const mapData = getCachedMapData(target);
-    if (!mapData) return null;
-
-    const emit = (frac, detail = "") => {
-      if (typeof onProgress === "function") onProgress(frac, detail);
-    };
-
-    const tStart = performance.now();
-    const prevSuspend = suspendRenderLoop;
-    suspendRenderLoop = true;
-
-    // 1. Batched VRAM texture upload via renderer.initTexture(tex)
-    emit(0.04, "Tải texture lên bộ nhớ GPU (VRAM)...");
-    const textureRoots = [mapData.group, mapData.extraTextures];
-    if (includeShared || !sharedGpuWarmed) {
-      textureRoots.push(gun, armsRoot, m416WorldProto, pistolWorldProto, awmWorldProto, soldierProto, glowTex);
-    }
-    const textures = collectSceneTextures(textureRoots);
-    const texResult = await warmupTexturesChunked({
-      renderer: R,
-      textures,
-      batchSize: 3,
-      yieldFn: yieldToUI,
-      uploadedSet: uploadedTextures,
-      onProgress: (f, info) => {
-        emit(0.05 + f * 0.40, `Tải VRAM (${info.uploaded}/${info.total} texture)...`);
-      },
-    });
-    await yieldToUI();
-
-    // 2. Temporarily activate map + all 3 weapons + arms + Drone + Soldier + muzzle flash behind Loading Screen
-    const prevMapId = currentActiveMapId;
-    const prevHarborVis = harborGroup.visible;
-    const prevMilVis = militaryData && militaryData.group ? militaryData.group.visible : false;
-    const prevHemiVis = hemi.visible;
-    const prevMoonVis = moon.visible;
-    const prevWarmVis = warmFill.visible;
-    const prevEncoding = R.outputEncoding;
-    const prevExposure = R.toneMappingExposure;
-    const prevBg = S.background;
-    const prevFog = S.fog;
-    const prevEnv = activeEnvMap;
-
-    const prevGunVis = gun.visible;
-    const prevArmsVis = armsRoot ? armsRoot.visible : false;
-    const prevMfVis = mf.visible;
-    const prevPMfVis = pistolMuzzleFlash.visible;
-    const prevPMfOp = pistolFlashMat.opacity;
-    const prevFlashInt = flashL.intensity;
-    const prevLaserVis = laserBeam.visible;
-    const prevDotVis = laserDot.visible;
-    const prevTr0Op = tr[0] ? tr[0].material.opacity : 0;
-    const prevCamPos = cam.position.clone();
-    const prevCamRot = cam.rotation.clone();
-
-    let warmupDrone = null;
-    let warmupSoldier = null;
-    let worldCompileMode = "noop";
-    let vmCompileMode = "noop";
-
-    try {
-      // Mount target map visibly while hidden behind opaque Loading Screen
-      if (target === "military") {
-        harborGroup.visible = false;
-        hemi.visible = moon.visible = warmFill.visible = false;
-        mapData.group.visible = true;
-        R.outputEncoding = THREE.sRGBEncoding || THREE.LinearEncoding;
-        R.toneMappingExposure = 0.86;
-        S.background = new THREE.Color(mapData.fogColor);
-        S.fog = new THREE.FogExp2(mapData.fogColor, mapData.fogDensity);
-        applySceneEnvMap(mapData.envMap, true);
-        cam.position.set(0, EYE_STAND, -40);
-        cam.rotation.set(0, Math.PI, 0);
-        if (mapData.updateAtmosphere) mapData.updateAtmosphere(gt, cam.position, activeQuality.preset);
-      } else {
-        if (militaryData && militaryData.group) militaryData.group.visible = false;
-        harborGroup.visible = true;
-        hemi.visible = moon.visible = warmFill.visible = true;
-        R.outputEncoding = THREE.LinearEncoding;
-        R.toneMappingExposure = 1.08;
-        S.background = new THREE.Color(0x050a11);
-        S.fog = new THREE.FogExp2(0x050a11, 0.025);
-        applySceneEnvMap(mapData.envMap, false);
-        cam.position.set(0, EYE_STAND, 0);
-        cam.rotation.set(0, 0, 0);
-      }
-      cam.updateMatrixWorld(true);
-      vmCam.position.copy(cam.position);
-      vmCam.quaternion.copy(cam.quaternion);
-      vmCam.updateMatrixWorld(true);
-
-      // Place temporary Drone & Soldier in front of camera so shaders + shadow depth compile
-      const fwdZ = target === "military" ? 7.5 : -7.5;
-      warmupDrone = createWarmupDroneGroup();
-      warmupDrone.group.position.set(0, 2.2, cam.position.z + fwdZ);
-      S.add(warmupDrone.group);
-
-      if (includeShared || !sharedGpuWarmed) {
-        warmupSoldier = createWarmupSoldierGroup();
-        warmupSoldier.group.position.set(2.2, 0, cam.position.z + fwdZ);
-        S.add(warmupSoldier.group);
-      }
-
-      laserBeam.visible = true;
-      laserDot.visible = true;
-      laserDot.position.set(0, 1.7, cam.position.z + fwdZ);
-      if (tr[0]) tr[0].material.opacity = 1;
-
-      emit(0.52, "Biên dịch Shader bản đồ & Drone...");
-      cam.layers.set(0);
-      worldCompileMode = await compileScenePass({ renderer: R, scene: S, camera: cam });
-      await yieldToUI();
-
-      // Compile Viewmodel weapons (M416, Glock-17, AWM) + SkinnedMesh arms + muzzle flash
-      if (includeShared || !sharedGpuWarmed) {
-        gun.visible = true;
-        if (armsRoot) armsRoot.visible = true;
-        mf.visible = true;
-        pistolMuzzleFlash.visible = true;
-        pistolFlashMat.opacity = 0.92;
-        flashL.intensity = 5;
-        gunAnim(0, 0);
-        vmCam.layers.set(VIEW_LAYER);
-
-        const weaponWarmPasses = [
-          { id: "m416", pct: 0.64, msg: "Biên dịch Shader M416, tay cầm & chớp lửa..." },
-          { id: "pistol", pct: 0.74, msg: "Biên dịch Shader Glock-17 & chớp lửa..." },
-          { id: "sniper", pct: 0.84, msg: "Biên dịch Shader AWM Sniper..." },
-        ];
-        for (const wp of weaponWarmPasses) {
-          emit(wp.pct, wp.msg);
-          m416ViewGroup.visible = wp.id === "m416";
-          pistolViewGroup.visible = wp.id === "pistol";
-          sniperViewGroup.visible = wp.id === "sniper";
-          vmCompileMode = await compileScenePass({ renderer: R, scene: S, camera: vmCam });
-          await yieldToUI();
-        }
-        // Turn all 3 guns visible together for the 1 hidden warmup frame
-        m416ViewGroup.visible = true;
-        pistolViewGroup.visible = true;
-        sniperViewGroup.visible = true;
-      }
-
-      emit(0.92, "Render nháp 1 khung hình làm nóng GPU...");
-      if (activeQuality.preset.shadowsEnabled) {
-        R.shadowMap.needsUpdate = true;
-      }
-      cam.layers.set(0);
-      R.clear();
-      R.render(S, cam);
-
-      const savedBgForVm = S.background;
-      S.background = null;
-      R.clearDepth();
-      vmCam.layers.set(VIEW_LAYER);
-      R.render(S, vmCam);
-      S.background = savedBgForVm;
-
-      await yieldToUI();
-      warmedMaps.add(target);
-      if (includeShared) sharedGpuWarmed = true;
-    } finally {
-      if (warmupDrone) warmupDrone.dispose();
-      if (warmupSoldier) warmupSoldier.dispose();
-
-      applyViewmodelWeapon(SLOT_TO_WEAPON_ID[activeSlot] || "m416");
-      gun.visible = prevGunVis;
-      if (armsRoot) armsRoot.visible = prevArmsVis;
-      mf.visible = prevMfVis;
-      pistolMuzzleFlash.visible = prevPMfVis;
-      pistolFlashMat.opacity = prevPMfOp;
-      flashL.intensity = prevFlashInt;
-      laserBeam.visible = prevLaserVis;
-      laserDot.visible = prevDotVis;
-      if (tr[0]) tr[0].material.opacity = prevTr0Op;
-
-      const superseded = typeof isStale === "function" && isStale();
-      if (superseded && prevMapId && prevMapId !== target) {
-        harborGroup.visible = prevHarborVis;
-        if (militaryData && militaryData.group) militaryData.group.visible = prevMilVis;
-        hemi.visible = prevHemiVis;
-        moon.visible = prevMoonVis;
-        warmFill.visible = prevWarmVis;
-        R.outputEncoding = prevEncoding;
-        R.toneMappingExposure = prevExposure;
-        S.background = prevBg;
-        S.fog = prevFog;
-        if (prevEnv) applySceneEnvMap(prevEnv, prevMapId === "military");
-        cam.position.copy(prevCamPos);
-        cam.rotation.copy(prevCamRot);
-        cam.updateMatrixWorld(true);
-        vmCam.position.copy(cam.position);
-        vmCam.quaternion.copy(cam.quaternion);
-        vmCam.updateMatrixWorld(true);
-      }
-
-      shadowDirty = false;
-      suspendRenderLoop = prevSuspend;
-    }
-
-    lastWarmupStats = {
-      mapId: target,
-      texturesUploaded: texResult.uploaded,
-      texturesSkipped: texResult.skipped,
-      texturesFailed: texResult.failed,
-      worldCompileMode,
-      vmCompileMode,
-      elapsedMs: Math.round(performance.now() - tStart),
-    };
-    emit(1.0, "Hoàn tất làm nóng GPU");
-    return lastWarmupStats;
-  }
-
-  const mapGuard = createMapSwitchGuard({
-    isMapReady: (id) => isMapCached(id) && warmedMaps.has(id),
-    getActiveMapId: () => currentActiveMapId,
-    activateCached: (id) => activateCachedMap(id),
-    buildAndWarmup: async (id, opts) => {
-      const report = typeof opts.onProgress === "function" ? opts.onProgress : null;
-      await buildMapAssetsAsync(id, (f, detail) => {
-        if (report) report(f * 0.65, detail);
-      });
-      await warmupGpuForMap(id, {
-        includeShared: !sharedGpuWarmed,
-        isStale: opts.isStale,
-        onProgress: (f, detail) => {
-          if (report) report(0.65 + f * 0.35, detail);
-        },
-      });
-    },
-  });
-
-  function emitLoading(payload) {
-    if (typeof onLoadingUpdate === "function") {
-      try {
-        onLoadingUpdate(payload);
-      } catch (err) {
-        console.warn("onLoadingUpdate callback error:", err);
-      }
-    }
-  }
-
-  async function prepareMap(mapId, { showOverlay = true } = {}) {
-    const target = normalizeMapId(mapId);
-    const t0 = performance.now();
-
-    // Fast path (0ms synchronous cache hit — never flashes loading overlay!)
-    const syncRes = mapGuard.activateSyncIfCached(target);
-    if (syncRes.ok) {
-      return { ...syncRes, sync: true, elapsedMs: 0 };
-    }
-
-    const mapLabel = target === "harbor" ? "Bến Cảng Mưa" : "Khu Quân Sự Cũ";
-    const tracker = createLoadingTracker((st) => {
-      if (showOverlay) {
-        emitLoading({
-          visible: true,
-          mode: "map-switch",
-          title: `Đang tải bản đồ ${mapLabel}...`,
-          percent: st.percent,
-          label: st.label,
-          detail: st.detail,
-        });
-      }
-    });
-    tracker.reset(`Đang chuyển sang ${mapLabel}...`, "Chuẩn bị tài nguyên bản đồ");
-    await yieldToUI();
-
-    try {
-      const res = await mapGuard.ensureMapReady(target, {
-        onProgress: tracker.subProgress(5, 98, `Đang nạp ${mapLabel}...`),
-      });
-      tracker.report(100, `Đã sẵn sàng: ${mapLabel}`, "");
-      await yieldToUI();
-      return { ...res, elapsedMs: Math.round(performance.now() - t0) };
-    } finally {
-      if (showOverlay && !mapGuard.isBusy()) {
-        emitLoading({ visible: false, done: true, mode: "map-switch", percent: 100 });
-      }
-    }
-  }
-
-  function ensureMapActive(mapId = "military") {
-    const target = normalizeMapId(mapId);
-    const syncRes = mapGuard.activateSyncIfCached(target);
-    if (syncRes.ok) return Promise.resolve(getCachedMapData(target));
-    return prepareMap(target, { showOverlay: true }).then(() => getCachedMapData(target));
-  }
-
-  // ---------- Gameplay State ----------
+  // ---------- Core Runtime State ----------
   const P = new Vec();
   let engineMode = "idle"; // "idle" | "lan" | "solo"
-  let testLocked = false;
+  let activeState = "menu";
   let currentMode = "TDM";
   let killLimit = 30;
   let timeLeftSec = 600;
   let teamScores = { A: 0, B: 0 };
   let lastPlayers = [];
   let meTeam = "A";
+  let meAlive = true;
   let meInvuln = false;
+  let hp = 100;
   let respawnMs = 0;
-
-  let weapons = {};
-  let activeSlot = 1;
-  let prevSlot = 2;
-  function resetAllWeapons() {
-    weapons = {};
-    for (const slot of WEAPON_SLOTS) {
-      const wid = SLOT_TO_WEAPON_ID[slot];
-      const cfg = WEAPONS[wid];
-      weapons[wid] = {
-        id: wid,
-        slot,
-        mag: cfg.magSize,
-        nextFireAt: 0,
-        reloadStartAt: 0,
-        reloadEndsAt: 0,
-        reloadDuration: cfg.reloadTime,
-        isTactical: false,
-      };
-    }
-  }
-  resetAllWeapons();
-  function activeWeapon() {
-    const wid = SLOT_TO_WEAPON_ID[activeSlot] || "m416";
-    return { cfg: WEAPONS[wid], st: weapons[wid] };
-  }
+  let isBootstrapped = false;
+  let freezeVfxClock = false;
+  let loopStarted = false;
 
   let yaw = 0, pitch = 0, vy = 0, velX = 0, velZ = 0, eyeHeight = EYE_STAND;
   let crouched = false, grounded = true, onLadder = false, isSprinting = false, sprintBrokenUntilShiftUp = false;
   let lastGroundedAt = 0, jumpBufferedUntil = 0, nextJumpAllowedAt = 0, physicsAccum = 0;
-  let bob = 0, lyaw = 0, lpit = 0, swx = 0, swy = 0, spr = 0;
-  let recoil = 0, kick = 0, flash = 0, bolt = 0, rlp = 0, ads = 0, trigPull = 0;
-  let hm = 0, dmgV = 0, shake = 0, killAlertT = 0, soloScore = 0, soloWave = 0, soloWaveCd = 0;
-  let laserOn = false, chatOpen = false, curFlags = 0, testAimHeld = false;
-  let lastInputSentAt = 0;
-  const drones = [], ray = new THREE.Raycaster(), lr = new THREE.Raycaster(), laserRay = new THREE.Raycaster(), upRay = new THREE.Raycaster();
-  const _lp = new Vec(), _ls = new Vec(), _ld = new Vec();
+  let bob = 0, curFlags = 0, laserOn = false;
+  let lastInputSentAt = 0, nextHeartbeatAt = 0, lastStepIdx = 0, lastHudSyncMs = 0;
 
-  gun.position.copy(HIP_POS);
-  gun.traverse((o) => o.layers.set(VIEW_LAYER));
-  S.traverse((o) => { if (o.isLight) o.layers.enableAll(); });
-  vmKey.layers.set(VIEW_LAYER);
-  vmFill.layers.set(VIEW_LAYER);
-  vmRim.layers.set(VIEW_LAYER);
+  // Scratch vectors & raycasters for physics/laser zero-GC passes
+  const laserRay = new THREE.Raycaster();
+  const upRay = new THREE.Raycaster();
+  const hudRay = new THREE.Raycaster();
+  const _lp = new Vec();
+  const _ls = new Vec();
+  const _ld = new Vec();
+  const _laserEnd = new Vec();
+  const _upOrigin = new Vec();
+  const _remoteScopePos = new Vec();
 
-  function gunAnim(dt, mv) {
-    const nowMs = performance.now();
-    const { cfg, st } = activeWeapon();
-    const isReloading = st.reloadEndsAt > nowMs;
-    const rl = isReloading ? Math.max(0, Math.min(1, (nowMs - st.reloadStartAt) / (st.reloadDuration || cfg.reloadTime))) : 0;
+  // ---------- Composed Subsystems ----------
+  let sceneMgr = null;
+  let combat = null;
 
-    const wantsAds = (testAimHeld || input.isAdsActive()) && !isReloading && !isSprinting;
-    const prevAds = ads;
-    ads += ((wantsAds ? 1 : 0) - ads) * Math.min(1, 13 * dt);
-    const baseFov = settings ? settings.get().fov : 75;
-    const targetAdsFov = cfg.adsFov || 55;
-    if (Math.abs(ads - prevAds) > 1e-4 || dt === 0) {
-      cam.fov = lerp(baseFov, targetAdsFov, ads);
-      cam.updateProjectionMatrix();
-      vmCam.fov = lerp(VM_HIP_FOV, VM_ADS_FOV, ads);
-      vmCam.updateProjectionMatrix();
-    }
+  const audioEngine = createAudioEngine({
+    THREE,
+    cam,
+    yieldToUI,
+    getActiveMapId: () => (sceneMgr ? sceneMgr.getActiveMapId() : "military"),
+  });
+  const { snd, weaponAudio, precomputeAudioBuffersAsync, initAudio } = audioEngine;
 
-    const aliveSelf = engineMode === "solo" || meAlive;
-    const scopedSniper = aliveSelf && cfg.scopeOverlay && ads > 0.72;
-    $("sniperScope").style.display = scopedSniper ? "block" : "none";
-    $("cross").style.opacity = scopedSniper ? 0 : Math.max(0, 1 - ads * 1.4);
-    const spreadK = computeWeaponSpread(cfg, curFlags) / Math.max(0.001, cfg.baseSpread);
-    $("cross").style.transform = `scale(${(1 + recoil * 4 + (mv && !ads ? 0.16 : 0) + (spreadK - 1) * 0.25).toFixed(3)})`;
+  const assetLoader = createAssetLoader({
+    THREE,
+    VIEW_LAYER,
+    TEAM_META,
+    SLOT_TO_WEAPON_ID,
+    vmCam,
+    gun,
+    muz,
+    laserOrigin,
+    flashL,
+    muzzleFlashRig,
+    yieldToUI,
+    getActiveEnvMap: () => (sceneMgr ? sceneMgr.getActiveEnvMap() : null),
+    getActiveSlot: () => (combat ? combat.getActiveSlot() : 1),
+    onWeaponsUpgraded: () => remoteMgr.upgradeRemoteWeapons(),
+    onSoldiersUpgraded: () => remoteMgr.upgradeRemoteSoldiers(),
+    onGunAnimZero: () => vmAnim.gunAnim(0, 0),
+  });
 
-    if (isReloading) {
-      $("reloadRingWrap").style.display = "block";
-      $("reloadArc").setAttribute("stroke-dashoffset", (RING_CIRCUMFERENCE * (1 - rl)).toFixed(2));
-    } else {
-      $("reloadRingWrap").style.display = "none";
-    }
+  const remoteMgr = createRemotePlayersManager({
+    THREE,
+    scene: S,
+    net,
+    TEAM_META,
+    FLAG,
+    INTERP_DELAY_MS,
+    remoteMuzFlashGeo,
+    remoteMuzFlashMat,
+    getPrototypes: () => assetLoader.getPrototypes(),
+    getTeamAccentMats: () => assetLoader.teamAccentMats,
+    getMatchMeta: () => ({ currentMode, meTeam }),
+  });
 
-    spr += ((isSprinting ? 1 : 0) - spr) * Math.min(1, 8 * dt);
-    swx += (Math.max(-0.06, Math.min(0.06, (yaw - lyaw) * -2)) - swx) * Math.min(1, 12 * dt);
-    swy += (Math.max(-0.05, Math.min(0.05, (pitch - lpit) * 2)) - swy) * Math.min(1, 12 * dt);
-    lyaw = yaw;
-    lpit = pitch;
+  const vmAnim = createViewmodelAnimator({
+    THREE,
+    $,
+    cam,
+    vmCam,
+    gun,
+    assetLoader,
+    settings,
+    input,
+    snd,
+    weaponAudio,
+    computeWeaponSpread,
+    FLAG,
+    VM_HIP_FOV,
+    VM_ADS_FOV,
+    OPTIC_Y,
+    RING_CIRCUMFERENCE,
+    getStateRefs: () => ({
+      activeWeapon: () => combat.activeWeapon(),
+      weapons: combat.getWeapons(),
+      isSprinting,
+      engineMode,
+      meAlive,
+      curFlags,
+      yaw,
+      pitch,
+      bob,
+      recoil: combat.getRecoil(),
+      gt: sceneMgr.getGt(),
+      testAimHeld: combat.getTestAimHeld(),
+      scopeOut: combat.getScopeOut(),
+    }),
+  });
 
-    const isPistol = cfg.id === "pistol";
-    const isSniper = cfg.id === "sniper";
-    const tl = rl > 0 ? Math.min(1, rl / 0.1, (1 - rl) / 0.1) : 0;
+  const militaryLoader = createMilitaryMapLoader({ renderer: R, THREE });
+  sceneMgr = createSceneManager({
+    THREE,
+    $,
+    R,
+    S,
+    cam,
+    vmCam,
+    harborGroup,
+    hemi,
+    moon,
+    warmFill,
+    applyMoonShadowPreset,
+    vmKey,
+    vmFill,
+    vmRim,
+    ballisticsVfx,
+    muzzleFlashRig,
+    glowTex,
+    laserBeam,
+    laserDot,
+    gun,
+    flashL,
+    remoteMuzFlashGeo,
+    remoteMuzFlashMat,
+    assetLoader,
+    remoteMgr,
+    vmAnim,
+    audioEngine,
+    buildHarborSceneAsync,
+    militaryLoader,
+    detectHardwareTier,
+    resolveQualityPreset,
+    computeEffectivePixelRatio,
+    normalizeQualityChoice,
+    hwInfo,
+    detectedQualityTier,
+    initialQuality,
+    normalizeMapId,
+    collectSceneTextures,
+    compileScenePass,
+    createLoadingTracker,
+    createMapSwitchGuard,
+    warmupTexturesChunked,
+    yieldToUI,
+    TEAM_META,
+    EYE_STAND,
+    VIEW_LAYER,
+    SLOT_TO_WEAPON_ID,
+    settings,
+    onLoadingUpdate,
+    onQualityStatusChange,
+    getDroneProtos: () => combat.getDroneProtos(),
+    getGameState: () => ({
+      engineMode,
+      activeState,
+      meAlive,
+      hp,
+      P,
+      activeSlot: combat.getActiveSlot(),
+    }),
+  });
 
-    mag.position.copy(MAG_REST);
-    mag.rotation.set(0, 0, 0);
-    awmMagGroup.position.set(0, 0, 0);
-    if (rl > 0.24 && rl < 0.72) {
-      const magArc = Math.sin(((rl - 0.24) / 0.48) * Math.PI);
-      if (cfg.id === "m416") {
-        mag.position.set(-0.020 * magArc, MAG_REST.y - 0.116 * magArc, MAG_REST.z - 0.014 * magArc);
-        mag.rotation.set(0.14 * magArc, 0, -0.08 * magArc);
-      } else if (isSniper) {
-        awmMagGroup.position.set(0, -11.5 * magArc, 2.0 * magArc);
-      }
-    }
+  const hudUi = createHudUi({
+    $,
+    el,
+    formatClock,
+    sanitizeText,
+    TEAM_META,
+    WEAPON_SLOTS,
+    MSG,
+    R,
+    settings,
+    input,
+    net,
+    ray: hudRay,
+    cam,
+    getActiveQualityLabel: () => sceneMgr.getActiveQuality().preset.label,
+    getHudState: () => {
+      const solo = combat.getSoloStats();
+      return {
+        activeWeapon: () => combat.activeWeapon(),
+        activeSlot: combat.getActiveSlot(),
+        hp,
+        meInvuln,
+        activeState,
+        meAlive,
+        isSprinting,
+        crouched,
+        grounded,
+        ads: vmAnim.getAds(),
+        engineMode,
+        soloWave: solo.soloWave,
+        soloScore: solo.soloScore,
+        respawnMs,
+        currentMode,
+        timeLeftSec,
+        killLimit,
+        teamScores,
+        lastPlayers,
+        remotePlayers: remoteMgr.remotePlayers,
+        meTeam,
+        activeCollision: sceneMgr.getActiveCollision(),
+        ground,
+        solid,
+        P,
+        yaw,
+      };
+    },
+    onStartSolo: () => startSolo(),
+    onStopEngine: () => stopEngine(),
+    onRequestExitToLobby,
+    initAudio,
+  });
 
-    // AWM bolt-action cycling: lift handle (-0.88 rad on RootNode Z), pull back (-11cm on RootNode Z), push & lock
-    let awmCycleT = 0;
-    if (isSniper) {
-      if (isReloading && !st.isTactical && rl >= 0.72) {
-        awmCycleT = smooth01((rl - 0.72) / 0.26);
-      } else if (awmBoltCycleStartAt > 0 && !isReloading) {
-        const dtShot = (nowMs - awmBoltCycleStartAt) / 920;
-        if (dtShot >= 0 && dtShot < 1) {
-          awmCycleT = dtShot;
-        } else if (dtShot >= 1) {
-          awmBoltCycleStartAt = 0;
-        }
-      }
-    }
-    if (awmCycleT > 0 && awmCycleT < 1) {
-      let liftK = 0;
-      let pullK = 0;
-      if (awmCycleT < 0.18) {
-        liftK = smooth01(awmCycleT / 0.18);
-      } else if (awmCycleT < 0.50) {
-        liftK = 1;
-        pullK = smooth01((awmCycleT - 0.18) / 0.32);
-      } else if (awmCycleT < 0.82) {
-        liftK = 1;
-        pullK = 1 - smooth01((awmCycleT - 0.50) / 0.32);
-      } else {
-        liftK = 1 - smooth01((awmCycleT - 0.82) / 0.18);
-      }
-      awmBoltPivot.rotation.z = -0.88 * liftK;
-      awmBoltPivot.position.z = -23.12 - 11.0 * pullK;
-    } else {
-      awmBoltPivot.rotation.z = 0;
-      awmBoltPivot.position.z = -23.12;
-    }
-
-    // Tactical Pistol blowback, empty slide-lock (0.042m), slide-release & angled 17.5° mag drop
-    const decayRecoilP = dt > 0 ? 1 - Math.exp(-14 * dt) : 1;
-    const decayKickZ = dt > 0 ? 1 - Math.exp(-16 * dt) : 1;
-    const decaySlide = dt > 0 ? 1 - Math.exp(-22 * dt) : 1;
-    pistolRecoilPitch = lerp(pistolRecoilPitch, 0, decayRecoilP);
-    pistolRecoilKickZ = lerp(pistolRecoilKickZ, 0, decayKickZ);
-
-    let pistolMagDrop = 0;
-    let pistolReloadTiltZ = 0;
-    if (isPistol && rl > 0) {
-      if (rl >= 0.16 && rl < 0.46) {
-        const kDrop = smooth01((rl - 0.16) / 0.30);
-        pistolMagDrop = kDrop * 0.14;
-        pistolReloadTiltZ = kDrop * 0.26;
-      } else if (rl >= 0.46 && rl < 0.74) {
-        const kIns = smooth01((rl - 0.46) / 0.28);
-        pistolMagDrop = (1 - kIns) * 0.14;
-        pistolReloadTiltZ = (1 - kIns) * 0.26;
-      }
-    }
-    pistolMagNode.position.set(0, -pistolMagDrop, pistolMagDrop * 0.32);
-
-    const pistolEmptyLocked =
-      weapons.pistol &&
-      ((weapons.pistol.mag === 0 && !(isPistol && isReloading)) ||
-        (isPistol && isReloading && !st.isTactical && rl < 0.88));
-    const pistolRackPull =
-      isPistol && isReloading && !st.isTactical && rl >= 0.83 && rl < 0.93
-        ? smooth01((rl - 0.83) / 0.06) * 0.046
-        : 0;
-    const targetSlideZ = pistolRackPull > 0 ? pistolRackPull : pistolEmptyLocked ? 0.042 : 0;
-    pistolSlideOffset = lerp(pistolSlideOffset, targetSlideZ, decaySlide);
-    pistolSlideNode.position.z = pistolSlideOffset;
-    pistolPivot.position.set(0, 0, pistolRecoilKickZ);
-    pistolPivot.rotation.set(pistolRecoilPitch, 0, pistolReloadTiltZ);
-
-    const pull = !st.isTactical && rl >= 0.83 && rl < 0.94 ? smooth01((rl - 0.83) / 0.07) : 0;
-    ch.position.z = CH_REST_Z + pull * 0.055;
-    if (rl > 0 && !isPistol) bolt = pull;
-    if (rlp < 0.28 && rl >= 0.28) snd.click(900);
-    if (rlp < 0.68 && rl >= 0.68) snd.click(1400);
-    if (!st.isTactical && rlp < 0.88 && rl >= 0.88) snd.click(620);
-    rlp = rl;
-    if (rl <= 0) bolt = Math.max(0, bolt - dt * 16);
-    boltVis.visible = bolt < 0.15;
-
-    const firingVisual = (input.fireHeld || curFlags & FLAG.FIRING) && !isReloading && st.mag > 0;
-    trigPull += ((firingVisual ? 1 : 0) - trigPull) * Math.min(1, 25 * dt);
-    pistolTrigPull = lerp(pistolTrigPull, firingVisual && isPistol ? 0.42 : 0, dt > 0 ? 1 - Math.exp(-18 * dt) : 1);
-    trig.rotation.x = trigPull * 0.3;
-    pistolTriggerNode.rotation.x = pistolTrigPull;
-
-    const hip = 1 - ads, calm = 1 - 0.78 * ads, bobK = mv * (1 - 0.88 * ads);
-    const chW = !st.isTactical && rl > 0.74 && rl < 0.98 ? smooth01(Math.min((rl - 0.74) / 0.09, (0.98 - rl) / 0.08)) : 0;
-    const baseHip = isPistol ? PISTOL_HIP_POS : isSniper ? SNIPER_HIP_POS : HIP_POS;
-    const targetAdsX = isPistol ? PISTOL_ADS_POS.x : ADS_POS.x;
-    const adsPosY = isPistol ? PISTOL_ADS_POS.y : isSniper ? -awmOpticY : ADS_POS.y;
-    const adsPosZ = isPistol ? PISTOL_ADS_POS.z : isSniper ? -0.165 : ADS_POS.z;
-
-    gun.position.set(
-      lerp(baseHip.x, targetAdsX, ads) + (swx + Math.sin(bob) * 0.0055 * bobK) * calm - (isPistol ? 0.024 : 0.044) * tl,
-      lerp(baseHip.y, adsPosY, ads) + (swy + Math.sin(bob * 2) * 0.007 * bobK) * calm - 0.055 * spr + 0.018 * tl + Math.sin(gt * 1.6) * 0.0016 * hip,
-      lerp(baseHip.z, adsPosZ, ads) + recoil * (isPistol ? 0.35 : 0.95 - 0.65 * ads) + 0.028 * tl - (isPistol ? 0.022 : 0.042) * chW,
-    );
-
-    // Upright roll = 0 at rest (no rightward tilt), barrel angled gently inward toward center crosshair
-    const hipPitch = (isPistol ? 0.028 : isSniper ? 0.032 : 0.036) * hip;
-    const hipYaw = (isPistol ? 0.038 : isSniper ? 0.046 : 0.052) * hip;
-    gun.rotation.set(
-      hipPitch + (recoil * (isPistol ? 0.85 : 1.85) + swy * 1.8) * calm - 0.20 * spr + (isPistol ? 0.09 : 0.16) * tl,
-      hipYaw + (0.48 * spr + swx * 1.8) * calm + (isPistol ? 0.12 : 0.20) * tl,
-      swx * 1.2 * calm - (isPistol ? 0.10 : 0.24) * tl,
-    );
-
-    // Sync viewmodel hierarchy and lock skinned hands onto active weapon sockets via 2-bone IK
-    vmCam.position.copy(cam.position);
-    vmCam.quaternion.copy(cam.quaternion);
-    vmCam.updateMatrixWorld(true);
-    _vmInvQ.copy(vmCam.quaternion).invert();
-
-    const activeSocks = weaponSockets[cfg.id] || weaponSockets.m416;
-    const leftAction = isSniper
-      ? sampleSniperLeftSocket(rl, activeSocks)
-      : sampleLeftSocket(rl, Boolean(st.isTactical), activeSocks);
-
-    readSocketInVmCam(activeSocks.grip, _sockGripP, _sockGripQ);
-    let rightAction = "grip";
-    if (isSniper && awmCycleT > 0.02 && awmCycleT < 0.98) {
-      readSocketInVmCam(activeSocks.bolt, _sockRBoltP, _sockRBoltQ);
-      const reachK =
-        awmCycleT < 0.15
-          ? smooth01(awmCycleT / 0.15)
-          : awmCycleT > 0.85
-            ? 1 - smooth01((awmCycleT - 0.85) / 0.15)
-            : 1;
-      _rightTargetP.lerpVectors(_sockGripP, _sockRBoltP, reachK);
-      _rightTargetQ.copy(_sockGripQ).slerp(_sockRBoltQ, reachK);
-      rightAction = reachK > 0.4 ? "bolt" : "grip";
-    } else {
-      _rightTargetP.copy(_sockGripP);
-      _rightTargetQ.copy(_sockGripQ);
-    }
-
-    if (armsCtrl) {
-      const canShowArms = (engineMode === "solo" || meAlive) && engineMode !== "idle" && !scopedSniper;
-      armsCtrl.update({
-        weaponId: cfg.id,
-        leftSocketPos: _leftTargetP,
-        leftSocketQuat: _leftTargetQ,
-        rightSocketPos: _rightTargetP,
-        rightSocketQuat: _rightTargetQ,
-        triggerPull: isPistol ? Math.min(1, pistolTrigPull / 0.42) : trigPull,
-        ads,
-        leftAction,
-        rightAction,
-        hideArms: !canShowArms,
-      });
-      if (armsRoot) armsRoot.updateMatrixWorld(true);
-    }
-  }
-
-  const _hudCache = Object.create(null);
-  function hud() {
-    const nowMs = performance.now();
-    const { cfg, st } = activeWeapon();
-    const isReloading = st.reloadEndsAt > nowMs;
-
-    const hpW = Math.max(0, hp) + "%";
-    const hpBg = meInvuln ? "#64c8ff" : hp > 35 ? "#4ec3b0" : "#e85445";
-    const hpText = `MÁU ${Math.max(0, Math.round(hp))} / 100`;
-    if (_hudCache.hpW !== hpW) { _hudCache.hpW = hpW; $("hpb").style.width = hpW; }
-    if (_hudCache.hpBg !== hpBg) { _hudCache.hpBg = hpBg; $("hpb").style.background = hpBg; }
-    if (_hudCache.hpText !== hpText) {
-      _hudCache.hpText = hpText;
-      const hpLbl = $("hpLabel");
-      if (hpLbl) hpLbl.textContent = hpText;
-    }
-
-    const isLow = st.mag <= Math.ceil(cfg.magSize * 0.3);
-    const amText = isReloading ? "Nạp đạn…" : `${st.mag} / ∞`;
-    const amLow = isLow && !isReloading;
-    const relHint = amLow && activeState === "play" && meAlive ? "block" : "none";
-    if (_hudCache.amText !== amText) { _hudCache.amText = amText; $("am").textContent = amText; }
-    if (_hudCache.amLow !== amLow) { _hudCache.amLow = amLow; $("am").classList.toggle("amLow", amLow); }
-    if (_hudCache.relHint !== relHint) { _hudCache.relHint = relHint; $("reloadHint").style.display = relHint; }
-
-    if (_hudCache.activeSlot !== activeSlot) {
-      _hudCache.activeSlot = activeSlot;
-      for (const s of WEAPON_SLOTS) {
-        const pNode = $(`slotPill${s}`);
-        if (pNode) pNode.classList.toggle("active", s === activeSlot);
-      }
-    }
-
-    const postureLabel = isSprinting
-      ? "Chạy nước rút"
-      : crouched
-        ? "Ngồi"
-        : !grounded
-          ? "Trên không"
-          : ads > 0.3
-            ? "Đang ngắm"
-            : "Đứng";
-    const postureText = `${cfg.name} • ${postureLabel}`;
-    if (_hudCache.postureText !== postureText) {
-      _hudCache.postureText = postureText;
-      $("postureBadge").textContent = postureText;
-    }
-
-    if (_hudCache.engineMode !== engineMode) {
-      _hudCache.engineMode = engineMode;
-      $("top").style.display = engineMode === "solo" ? "block" : "none";
-      $("pvpTop").style.display = engineMode === "lan" ? "flex" : "none";
-      $("radarCanvas").style.display = engineMode === "lan" ? "block" : "none";
-    }
-    if (_hudCache.soloWave !== soloWave) { _hudCache.soloWave = soloWave; $("wv").textContent = soloWave; }
-    if (_hudCache.soloScore !== soloScore) { _hudCache.soloScore = soloScore; $("sc").textContent = soloScore; }
-    if (engineMode === "lan") {
-      const showRespawn = !meAlive && activeState === "play";
-      const respDisp = showRespawn ? "block" : "none";
-      if (_hudCache.respDisp !== respDisp) { _hudCache.respDisp = respDisp; $("respawnBanner").style.display = respDisp; }
-      if (showRespawn) {
-        const respText = `Đã bị hạ — Hồi sinh sau ${(respawnMs / 1000).toFixed(1)}s`;
-        if (_hudCache.respText !== respText) { _hudCache.respText = respText; $("respawnBanner").textContent = respText; }
-      }
-      if (currentMode === "TDM") {
-        const metaText = `${formatClock(timeLeftSec)} | ${killLimit} Mạng`;
-        if (_hudCache.scA !== teamScores.A) { _hudCache.scA = teamScores.A; $("scA").textContent = teamScores.A; }
-        if (_hudCache.scB !== teamScores.B) { _hudCache.scB = teamScores.B; $("scB").textContent = teamScores.B; }
-        if (_hudCache.pvpMeta !== metaText) { _hudCache.pvpMeta = metaText; $("pvpMeta").textContent = metaText; }
-      } else {
-        const topP = lastPlayers.slice().sort((a, b) => b.kills - a.kills)[0];
-        const aVal = topP ? topP.kills : 0;
-        const metaText = `FFA ${formatClock(timeLeftSec)} | Dẫn đầu: ${topP ? topP.name : "-"}`;
-        if (_hudCache.scA !== aVal) { _hudCache.scA = aVal; $("scA").textContent = aVal; }
-        if (_hudCache.scB !== killLimit) { _hudCache.scB = killLimit; $("scB").textContent = killLimit; }
-        if (_hudCache.pvpMeta !== metaText) { _hudCache.pvpMeta = metaText; $("pvpMeta").textContent = metaText; }
-      }
-    } else if (_hudCache.respDisp !== "none") {
-      _hudCache.respDisp = "none";
-      $("respawnBanner").style.display = "none";
-    }
-  }
-
-  function setHitmarker(headshot) {
-    hm = 1;
-    $("hm").style.borderColor = headshot ? "#ff3b3b" : "var(--amber)";
-    $("hm").style.borderWidth = headshot ? "3px" : "2px";
-  }
-
-  function showKillAlert(text, color = "#ff4747") {
-    const node = $("killAlert");
-    node.textContent = text;
-    node.style.color = color;
-    node.style.opacity = "1";
-    killAlertT = 1.6;
-  }
-
-  function pushKillfeed(ev) {
-    const kf = $("killfeed");
-    const row = el("div", "kfRow");
-    const kMeta = TEAM_META[ev.killerTeam] || TEAM_META.FFA;
-    const vMeta = TEAM_META[ev.victimTeam] || TEAM_META.FFA;
-    const kSpan = el("span", "", `${kMeta.symbol} ${ev.killer}`);
-    kSpan.style.color = kMeta.hex;
-    const wTag = ev.weapon || "M416";
-    const mid = el("span", "", ev.head ? ` [HEADSHOT • ${wTag}] ` : ` [${wTag}] `);
-    mid.style.color = ev.head ? "#ff5252" : "#cfd8df";
-    mid.style.fontWeight = "700";
-    const vSpan = el("span", "", `${vMeta.symbol} ${ev.victim}`);
-    vSpan.style.color = vMeta.hex;
-    row.append(kSpan, mid, vSpan);
-    kf.prepend(row);
-    while (kf.children.length > 5) kf.lastChild.remove();
-    setTimeout(() => row.remove(), 5500);
-  }
-
-  function pushHudChat(ev) {
-    const log = $("hudChatLog");
-    const line = el("div", "hudChatRow");
-    const meta = TEAM_META[ev.team] || TEAM_META.FFA;
-    const who = el("b", "", `${meta.symbol} ${ev.from}: `);
-    who.style.color = meta.hex;
-    line.append(who, el("span", "", ev.text));
-    log.append(line);
-    while (log.children.length > 6) log.firstChild.remove();
-    setTimeout(() => line.remove(), 7000);
-  }
-
-  function renderScoreboardTable() {
-    const tbody = $("sbBody");
-    tbody.textContent = "";
-    const rows = lastPlayers.slice().sort((a, b) => b.kills - a.kills || a.deaths - b.deaths || b.headshots - a.headshots);
-    for (const p of rows) {
-      const tr = document.createElement("tr");
-      if (p.id === net.playerId) tr.style.background = "rgba(240, 180, 41, 0.14)";
-      const meta = TEAM_META[p.team] || TEAM_META.FFA;
-      const tdTeam = el("td", "", `${meta.symbol} ${meta.name}`);
-      tdTeam.style.color = meta.hex;
-      tr.append(
-        el("td", "", p.name + (p.id === net.playerId ? " (Bạn)" : "")),
-        tdTeam,
-        el("td", "", String(p.kills)),
-        el("td", "", String(p.deaths)),
-        el("td", "", String(p.headshots)),
-        el("td", "", p.alive ? "Sống" : "Hồi sinh"),
-      );
-      tbody.append(tr);
-    }
-    $("sbTitle").textContent = `${currentMode === "FFA" ? "Đấu Đơn (FFA)" : "Đấu Đội (TDM)"} — Mục tiêu ${killLimit} mạng (Còn ${formatClock(timeLeftSec)})`;
-  }
-
-  // ---------- Solo Offline Drone mode (shared geometries avoid Wave-1 allocation & GPU leaks) ----------
-  const dMat = new THREE.MeshStandardMaterial({ color: 0x2a3138, metalness: 0.8, roughness: 0.35 });
-  const droneEyeMat = new THREE.MeshBasicMaterial({ color: 0xff2a2a });
-  const droneBodyGeo = new THREE.SphereGeometry(0.5, 16, 12);
-  const droneEyeGeo = new THREE.SphereGeometry(0.14, 10, 8);
-  const droneRingGeo = new THREE.TorusGeometry(0.72, 0.04, 6, 20);
-  function disposeDroneEntity(d) {
-    S.remove(d.g);
-    if (d.body && d.body.material && d.body.material !== dMat) {
-      d.body.material.dispose();
-    }
-  }
-  function clearAllDrones() {
-    drones.splice(0).forEach(disposeDroneEntity);
-  }
-  function spawnDrone() {
-    const g = new THREE.Group(), m = dMat.clone();
-    const body = new THREE.Mesh(droneBodyGeo, m);
-    body.scale.y = 0.6;
-    body.castShadow = true;
-    const eye = new THREE.Mesh(droneEyeGeo, droneEyeMat);
-    eye.position.z = 0.42;
-    const ring = new THREE.Mesh(droneRingGeo, dMat);
-    ring.rotation.x = Math.PI / 2;
-    g.add(body, eye, ring);
-    const a = rnd(0, 6.28);
-    const spawnRad = activeMapId === "military" ? 24 : 42;
-    const patBound = activeMapId === "military" ? 26 : 35;
-    g.position.set(Math.cos(a) * spawnRad, 6.5, Math.sin(a) * spawnRad);
-    S.add(g);
-    const d = { g, body, ring, hp: 3, st: "patrol", tgt: new Vec(rnd(-patBound, patBound), 6.5, rnd(-patBound, patBound)), cd: rnd(1, 2), los: false, losT: 0, hitT: 0, sd: Math.random() < 0.5 ? 1 : -1 };
-    body.userData.drone = d;
-    drones.push(d);
-  }
-  function canSee(a, b) {
-    const d = b.clone().sub(a), L = d.length();
-    if (L < 1e-4) return true;
-    d.divideScalar(L);
-    if (activeCollision) {
-      const hit = activeCollision.raycastShot(a.x, a.y, a.z, d.x, d.y, d.z, L - 0.05);
-      return !hit;
-    }
-    lr.set(a, d);
-    lr.far = L;
-    return lr.intersectObjects(solid, false).length === 0;
-  }
-  function hurtSolo(n) {
-    hp -= n;
-    dmgV = 1;
-    shake = 0.25;
-    snd.hurt();
-    hud();
-    if (hp <= 0) {
+  combat = createCombatSystem({
+    THREE,
+    DEG2RAD,
+    WEAPONS,
+    WEAPON_SLOTS,
+    SLOT_TO_WEAPON_ID,
+    FLAG,
+    computeWeaponSpread,
+    getReloadDurationMs,
+    M416_RECOIL_PROFILE,
+    computeRecoilModifiers,
+    createRecoilController,
+    AWM_SCOPE_PROFILE,
+    STANCE,
+    createScopeController,
+    stepBallisticStep,
+    shouldSpawnTracer,
+    computeBulletWhizBy,
+    resolveSurfaceType,
+    S,
+    cam,
+    muz,
+    flashL,
+    laserRay,
+    solid,
+    ballisticsVfx,
+    muzzleFlashRig,
+    sampleHarborPuddle,
+    getGround: () => ground,
+    getViewmodelWorldPoint,
+    sceneMgr,
+    assetLoader,
+    remoteMgr,
+    vmAnim,
+    audioEngine,
+    hudUi,
+    input,
+    settings,
+    net,
+    MSG,
+    onSoloDefeated,
+    $,
+    getPlayState: () => ({
+      engineMode,
+      activeState,
+      meAlive,
+      hp,
+      isSprinting,
+      crouched,
+      grounded,
+      curFlags,
+      P,
+      yaw,
+      pitch,
+      setHp: (next) => { hp = next; },
+    }),
+    onSoloGameOver: () => {
+      meAlive = false;
       activeState = "over";
-      fire = aimHeld = false;
+      isSprinting = false;
+      input.reset();
       if (document.pointerLockElement === R.domElement) document.exitPointerLock();
-      $("pauseTitle").textContent = "Bạn đã bị hạ (Offline)";
-      $("pauseSub").textContent = `Điểm: ${soloScore} — Trụ được ${soloWave} đợt.`;
-      $("btnPauseResume").textContent = "Chơi lại";
-      $("pauseOverlay").style.display = "grid";
-    }
-  }
-  function updDrone(d, dt) {
-    const g = d.g, e = cam.position, to = e.clone().sub(g.position), dist = to.length();
-    d.ring.rotation.z += dt * 18;
-    d.hitT = Math.max(0, d.hitT - dt);
-    d.body.material.emissive.setHex(d.hitT > 0 ? 0xffffff : 0);
-    d.losT -= dt;
-    if (d.losT <= 0) { d.losT = 0.3; d.los = dist < 32 && canSee(g.position, e); }
-    if (d.st === "patrol" && d.los && dist < 26) d.st = "chase";
-    else if (d.st === "chase") { if (d.los && dist < 14) d.st = "attack"; else if (dist > 38) d.st = "patrol"; }
-    else if (d.st === "attack" && (!d.los || dist > 18)) d.st = "chase";
-    let alt = 6.5, sp = 3, dir = new Vec();
-    if (d.st === "patrol") {
-      dir.copy(d.tgt).sub(g.position).setY(0);
-      if (dir.length() < 2) d.tgt.set(rnd(-35, 35), 6.5, rnd(-35, 35));
-    } else if (d.st === "chase") {
-      alt = 4; sp = 6.5; dir.copy(to).setY(0);
-    } else {
-      alt = 2.3; sp = 3.5;
-      const f = to.clone().setY(0).normalize();
-      dir.copy(f).multiplyScalar(dist > 9 ? 1 : -1).add(new Vec(-f.z, 0, f.x).multiplyScalar(d.sd * 1.2));
-      d.cd -= dt;
-      if (d.cd <= 0) {
-        d.cd = rnd(1, 1.7);
-        snd.laser();
-        const miss = Math.random() < 0.4;
-        const aim = e.clone().add(new Vec(rnd(-1, 1), rnd(-1, 0.3), rnd(-1, 1)).multiplyScalar(miss ? 1.8 : 0));
-        tracer(g.position, aim, 0xff3a2a);
-        if (!miss) hurtSolo(9);
-      }
-    }
-    dir.setY(0).normalize();
-    g.position.addScaledVector(dir, sp * dt);
-    g.position.y += (alt + Math.sin(performance.now() / 400 + d.sd) * 0.3 - g.position.y) * Math.min(1, 2 * dt);
-    g.lookAt(e.x, g.position.y, e.z);
-  }
+      $("hud").style.display = "none";
+      $("sniperScope").style.display = "none";
+      $("pauseOverlay").style.display = "none";
+    },
+    rnd,
+    vpAspectGetter: () => vpAspect,
+  });
 
-  // ---------- Shooting, Reload, Weapon Switch & Controls ----------
-  function switchWeapon(targetSlot) {
-    if (activeState !== "play" || (engineMode === "lan" && !meAlive)) return false;
-    const wid = SLOT_TO_WEAPON_ID[targetSlot];
-    if (!wid || !WEAPONS[wid] || targetSlot === activeSlot) return false;
-
-    const cur = activeWeapon().st;
-    cur.reloadEndsAt = 0;
-    cur.reloadStartAt = 0;
-    input.clearAds();
-    testAimHeld = false;
-    ads = 0;
-
-    prevSlot = activeSlot;
-    activeSlot = targetSlot;
-    rlp = 0;
-    awmBoltCycleStartAt = 0;
-    applyViewmodelWeapon(wid);
-    gunAnim(0, 0);
-    snd.click(740);
-    if (engineMode === "lan") {
-      net.send(MSG.SWITCH_WEAPON, { slot: targetSlot });
-    }
-    hud();
-    return true;
-  }
-
-  function reload() {
-    if (activeState !== "play" || (engineMode === "lan" && !meAlive)) return false;
-    const nowMs = performance.now();
-    const { cfg, st } = activeWeapon();
-    if (st.reloadEndsAt > nowMs || st.mag >= cfg.magSize) return false;
-
-    const dur = getReloadDurationMs(cfg, st.mag);
-    st.isTactical = st.mag > 0;
-    st.reloadStartAt = nowMs;
-    st.reloadDuration = dur;
-    st.reloadEndsAt = nowMs + dur;
-    rlp = 0;
-
-    input.clearAds();
-    testAimHeld = false;
-    snd.reload();
-    if (engineMode === "lan") net.send(MSG.RELOAD, {});
-    hud();
-    return true;
-  }
-
-  function shoot() {
-    if (activeState !== "play" || (engineMode === "lan" && !meAlive)) return false;
-    const nowMs = performance.now();
-    const { cfg, st } = activeWeapon();
-
-    if (st.reloadEndsAt > nowMs || isSprinting) return false;
-    if (st.mag <= 0) {
-      snd.dryClick();
-      reload();
-      return false;
-    }
-    if (nowMs < st.nextFireAt) return false;
-
-    st.mag--;
-    st.nextFireAt = nowMs + cfg.fireInterval;
-    recoil = cfg.recoil || 0.07;
-    kick += lerp(cfg.kickHip || 0.014, cfg.kickAds || 0.009, ads);
-    flash = cfg.id === "pistol" ? 0.048 : 0.06;
-    bolt = 1;
-    if (cfg.id === "pistol") {
-      pistolRecoilPitch = 0.22 * (1 - 0.45 * ads);
-      pistolRecoilKickZ = 0.022 * (1 - 0.35 * ads);
-      pistolSlideOffset = 0.044;
-      pistolTrigPull = 0.42;
-      pistolMuzzleFlash.rotation.z = rnd(0, 6.28);
-    } else if (cfg.id === "sniper" && st.mag > 0) {
-      awmBoltCycleStartAt = nowMs + 190;
-    }
-    mf.rotation.z = rnd(0, 6.28);
-    mf.scale.setScalar(rnd(0.8, 1.3));
-    if (cfg.id === "sniper") snd.sniperShot();
-    else if (cfg.id === "pistol") snd.pistolShot();
-    else snd.shot();
-    hud();
-
-    const spread = computeWeaponSpread(cfg, curFlags);
-    ray.far = cfg.maxRange || 140;
-    ray.setFromCamera({ x: rnd(-spread, spread), y: rnd(-spread, spread) }, cam);
-
-    const enemyMeshes = [];
-    if (engineMode === "lan") {
-      for (const av of remotePlayers.values()) {
-        if (!av.alive) continue;
-        if (currentMode === "TDM" && av.team === meTeam) continue;
-        enemyMeshes.push(...av.hitMeshes);
-      }
-    }
-    const candidates = engineMode === "solo" ? drones.map((d) => d.body) : enemyMeshes;
-    let hit = null;
-    if (activeCollision) {
-      const targetHit = candidates.length ? ray.intersectObjects(candidates, false)[0] : null;
-      const worldHit = activeCollision.raycastShot(
-        ray.ray.origin.x,
-        ray.ray.origin.y,
-        ray.ray.origin.z,
-        ray.ray.direction.x,
-        ray.ray.direction.y,
-        ray.ray.direction.z,
-        ray.far,
-      );
-      if (worldHit && (!targetHit || worldHit.dist < targetHit.distance)) {
-        hit = {
-          distance: worldHit.dist,
-          point: new Vec(worldHit.x, worldHit.y, worldHit.z),
-          object: { userData: {} },
-        };
-      } else {
-        hit = targetHit || null;
-      }
-    } else {
-      const targets = ground ? [ground, ...solid, ...candidates] : [...solid, ...candidates];
-      hit = ray.intersectObjects(targets, false)[0] || null;
-    }
-    const from = getViewmodelWorldPoint(muz, new Vec());
-    const end = hit ? hit.point : ray.ray.at(75, new Vec());
-    tracer(from, end, cfg.id === "sniper" ? 0xfff5cc : 0xffe2a0);
-
-    if (engineMode === "lan") {
-      net.send(MSG.FIRE, {
-        weapon: cfg.id,
-        flags: curFlags,
-        origin: { x: ray.ray.origin.x, y: ray.ray.origin.y, z: ray.ray.origin.z },
-        dir: { x: ray.ray.direction.x, y: ray.ray.direction.y, z: ray.ray.direction.z },
-      });
-      if (hit && hit.object.userData.hitTarget) {
-        const tgt = hit.object.userData.hitTarget;
-        net.send(MSG.HIT, { targetId: tgt.id, part: tgt.part });
-        burst(hit.point, 10, 3);
-      } else if (hit) {
-        burst(hit.point, 9, 2.5, ray.ray.direction.clone().negate());
-      }
-    } else if (hit) {
-      const d = hit.object.userData.drone;
-      if (d) {
-        d.hp -= cfg.id === "sniper" ? 3 : 1;
-        d.hitT = 0.08;
-        setHitmarker(cfg.id === "sniper");
-        snd.hit();
-        burst(hit.point, 8, 3);
-        if (d.st === "patrol") d.st = "chase";
-        if (d.hp <= 0) {
-          burst(d.g.position, 45, 6);
-          snd.boom();
-          disposeDroneEntity(d);
-          drones.splice(drones.indexOf(d), 1);
-          soloScore += 100;
-          hud();
-        }
-      } else {
-        burst(hit.point, 10, 2.5, ray.ray.direction.clone().negate());
-      }
-    }
-
-    if (st.mag === 0) {
-      reload();
-    }
-    return true;
-  }
+  addEventListener("resize", () => {
+    vpAspect = Math.max(0.4, innerWidth / Math.max(1, innerHeight));
+    const aspect = innerWidth / Math.max(1, innerHeight);
+    R.setPixelRatio(computeEffectivePixelRatio(sceneMgr.getActiveQuality().preset, devicePixelRatio));
+    R.setSize(innerWidth, innerHeight);
+    cam.aspect = aspect;
+    cam.updateProjectionMatrix();
+    vmCam.aspect = aspect;
+    vmCam.updateProjectionMatrix();
+  });
 
   input.attach(R.domElement);
 
-  $("hudChatInput").addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      const txt = sanitizeText($("hudChatInput").value, "", 120);
-      if (txt) net.send(MSG.CHAT, { text: txt });
-      $("hudChatInput").value = "";
-      chatOpen = false;
-      $("hudChatInput").style.display = "none";
-      input.setTextFocusBlocked(false);
-      input.tryLock();
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      chatOpen = false;
-      $("hudChatInput").style.display = "none";
-      input.setTextFocusBlocked(false);
-      input.tryLock();
-    }
-  });
-
-  R.domElement.addEventListener("click", () => {
-    if (activeState === "play" && !input.active && !chatOpen) {
-      initAudio();
-      $("pauseOverlay").style.display = "none";
-      input.tryLock();
-    }
-  });
-
-  function showPauseOverlay(title, sub) {
-    $("pauseTitle").textContent = title;
-    $("pauseSub").textContent = sub;
-    $("btnPauseResume").textContent = "Tiếp tục";
-    $("btnPauseLeave").textContent = engineMode === "lan" ? "Rời phòng" : "Về sảnh chính";
-    $("pauseOverlay").style.display = "grid";
-  }
-
-  function onPointerLockChanged(isLocked) {
-    if (isLocked) {
-      $("pauseOverlay").style.display = "none";
-      testLocked = true;
-    } else {
-      testLocked = false;
-      $("scoreboard").style.display = "none";
-    }
-  }
-
-  function onPointerUnlocked() {
-    if (activeState === "play" && !chatOpen) {
-      if (engineMode === "lan") {
-        showPauseOverlay(
-          "Menu trận đấu (Trận đang chạy)",
-          "Esc chỉ thả chuột — Trận PvP vẫn tiếp tục trực tiếp trên LAN.",
-        );
-      } else {
-        showPauseOverlay("Tạm dừng (Offline)", "Bấm Tiếp tục để quay lại luyện tập Drone.");
-      }
-    }
-  }
-
-  function onPointerLockFailed() {
-    if (activeState === "play" && !input.active && !chatOpen) {
-      showPauseOverlay(
-        "Trận đấu đã sẵn sàng",
-        "Bấm Tiếp tục hoặc click màn hình để khóa chuột và chiến đấu.",
-      );
-    }
-  }
-
-  $("btnPauseResume").onclick = () => {
-    initAudio();
-    if (activeState === "over" && engineMode === "solo") {
-      startSolo();
-      return;
-    }
-    $("pauseOverlay").style.display = "none";
-    input.tryLock();
-  };
-  $("btnPauseLeave").onclick = () => {
-    stopEngine();
-    onRequestExitToLobby();
-  };
-
   // ---------- Networking Sync Hooks ----------
-  function applySnapshot(snap) {
+  const rosterNames = new Map();
+  function syncRoomRoster(room) {
+    if (!room || !Array.isArray(room.players)) return;
+    rosterNames.clear();
+    for (const rp of room.players) {
+      if (rp && rp.id) rosterNames.set(rp.id, rp.name || rp.id);
+    }
+  }
+
+  function applySnapshot(rawSnap) {
+    const snap = unpackSnapshot(rawSnap, rosterNames);
     if (!snap || engineMode !== "lan") return;
-    currentMode = snap.mode;
-    killLimit = snap.killLimit;
+    if (snap.mode) currentMode = snap.mode;
+    if (Number.isFinite(snap.killLimit)) killLimit = snap.killLimit;
     timeLeftSec = snap.timeLeftSec;
     teamScores = snap.teamScores || { A: 0, B: 0 };
     lastPlayers = snap.players || [];
 
     const seen = new Set();
+    const weaponsMap = combat.getWeapons();
     for (const p of lastPlayers) {
       seen.add(p.id);
       if (p.id === net.playerId) {
@@ -3348,11 +660,11 @@ export function createGameEngine({
         meInvuln = p.invulnerable;
         respawnMs = p.respawnMs;
         hp = p.hp;
-        const serverWid = p.weaponId || SLOT_TO_WEAPON_ID[activeSlot];
-        if (weapons[serverWid] && !p.reloading && Number.isFinite(p.ammo)) {
-          weapons[serverWid].mag = p.ammo;
-          if (weapons[serverWid].reloadEndsAt > performance.now() && p.ammo >= WEAPONS[serverWid].magSize) {
-            weapons[serverWid].reloadEndsAt = 0;
+        const serverWid = p.weaponId || SLOT_TO_WEAPON_ID[combat.getActiveSlot()];
+        if (weaponsMap[serverWid] && !p.reloading && Number.isFinite(p.ammo)) {
+          weaponsMap[serverWid].mag = p.ammo;
+          if (weaponsMap[serverWid].reloadEndsAt > performance.now() && p.ammo >= WEAPONS[serverWid].magSize) {
+            weaponsMap[serverWid].reloadEndsAt = 0;
           }
         }
         if (!wasAlive && p.alive) {
@@ -3362,65 +674,56 @@ export function createGameEngine({
           vy = velX = velZ = 0;
           crouched = false;
           eyeHeight = EYE_STAND;
-          resetAllWeapons();
+          combat.resetAllWeapons();
           cam.position.set(P.x, P.y + EYE_STAND, P.z);
           cam.rotation.set(pitch, yaw, 0);
         }
         continue;
       }
 
-      let av = remotePlayers.get(p.id);
-      if (!av) av = createRemoteAvatar(p);
-      else if (av.team !== p.team) swapAvatarRig(av, p.team);
+      let av = remoteMgr.remotePlayers.get(p.id);
+      if (!av) av = remoteMgr.createRemoteAvatar(p);
+      else if (av.team !== p.team) remoteMgr.swapAvatarRig(av, p.team);
       av.snapshots.push({
-        t: snap.t, x: p.x, y: p.y, z: p.z, yaw: p.yaw, pitch: p.pitch,
-        mv: p.mv || 0, flags: p.flags || 0, weaponId: p.weaponId || "m416",
-        reloading: Boolean(p.reloading), hp: p.hp, alive: p.alive, invulnerable: p.invulnerable,
+        t: snap.t,
+        x: p.x,
+        y: p.y,
+        z: p.z,
+        yaw: p.yaw,
+        pitch: p.pitch,
+        mv: p.mv || 0,
+        flags: p.flags || 0,
+        weaponId: p.weaponId || "m416",
+        reloading: Boolean(p.reloading),
+        hp: p.hp,
+        alive: p.alive,
+        invulnerable: p.invulnerable,
       });
       if (av.snapshots.length > 16) av.snapshots.shift();
     }
 
-    for (const [id, av] of remotePlayers.entries()) {
-      if (!seen.has(id)) {
-        S.remove(av.container);
-        remotePlayers.delete(id);
-      }
+    for (const [id] of remoteMgr.remotePlayers.entries()) {
+      if (!seen.has(id)) remoteMgr.removeRemotePlayer(id);
     }
-    if (input.isDown("score")) renderScoreboardTable();
-    hud();
+    if (input.isDown("score")) hudUi.renderScoreboardTable();
+    hudUi.hud();
   }
 
   net.on(MSG.SNAPSHOT, (msg) => applySnapshot(msg));
+  net.on(MSG.EVENT_SCOPE, (ev) => {
+    if (!ev || ev.playerId === net.playerId || engineMode !== "lan") return;
+    _remoteScopePos.set(ev.x || 0, ev.y || 0, ev.z || 0);
+    snd.scopeClick(ev.level, _remoteScopePos);
+  });
   net.on(MSG.AMMO, (msg) => {
     if (engineMode !== "lan") return;
-    if (msg.weapons && typeof msg.weapons === "object") {
-      for (const [wid, val] of Object.entries(msg.weapons)) {
-        if (weapons[wid] && Number.isFinite(val)) weapons[wid].mag = val;
-      }
-    }
-    if (msg.activeWeaponId && WEAPONS[msg.activeWeaponId]) {
-      const targetSlot = WEAPONS[msg.activeWeaponId].slot;
-      if (targetSlot !== activeSlot) {
-        activeSlot = targetSlot;
-        applyViewmodelWeapon(msg.activeWeaponId);
-      }
-    }
-    if (msg.id && weapons[msg.id] && Number.isFinite(msg.mag)) {
-      weapons[msg.id].mag = msg.mag;
-      if (msg.reloadingMs > 0) {
-        const dur = weapons[msg.id].reloadDuration || WEAPONS[msg.id].reloadTime;
-        weapons[msg.id].reloadStartAt = performance.now() - Math.max(0, dur - msg.reloadingMs);
-        weapons[msg.id].reloadEndsAt = performance.now() + msg.reloadingMs;
-      } else {
-        weapons[msg.id].reloadEndsAt = 0;
-      }
-    }
-    hud();
+    combat.applyAmmoMsg(msg);
+    hudUi.hud();
   });
   net.on(MSG.EVENT_RELOAD, (ev) => {
     const pid = ev.playerId || ev.pid;
     if (!pid || pid === net.playerId || engineMode !== "lan") return;
-    const av = remotePlayers.get(pid);
+    const av = remoteMgr.remotePlayers.get(pid);
     if (av) {
       av.reloadDurMs = ev.dur || 2000;
       av.reloadEndsAt = performance.now() + av.reloadDurMs;
@@ -3428,55 +731,48 @@ export function createGameEngine({
   });
   net.on(MSG.SWITCH_WEAPON, (ev) => {
     if (!ev.playerId || ev.playerId === net.playerId || engineMode !== "lan") return;
-    const av = remotePlayers.get(ev.playerId);
+    const av = remoteMgr.remotePlayers.get(ev.playerId);
     if (av) {
       av.weaponId = ev.weaponId || "m416";
       av.weaponLockUntil = performance.now() + 260;
       av.reloadEndsAt = 0;
-      syncRemoteWeaponVisibility(av);
+      remoteMgr.syncRemoteWeaponVisibility(av);
     }
   });
   net.on(MSG.EVENT_FIRE, (ev) => {
     if (ev.playerId === net.playerId || engineMode !== "lan") return;
-    const av = remotePlayers.get(ev.playerId);
-    if (av) {
-      av.flashTimer = 0.06;
-      av.radarBlipUntil = performance.now() + 2000;
-    }
-    const fromV = new Vec(ev.origin.x, ev.origin.y, ev.origin.z);
-    const dirV = new Vec(ev.dir.x, ev.dir.y, ev.dir.z).normalize();
-    tracer(fromV, fromV.clone().addScaledVector(dirV, 40), 0xffe2a0);
-    snd.remoteShot(cam.position.distanceTo(fromV));
+    combat.handleRemoteFireVisuals(ev);
   });
   net.on(MSG.EVENT_HIT, (ev) => {
     if (engineMode !== "lan") return;
     if (ev.shooterId === net.playerId) {
-      if (ev.part === "shield") showKillAlert("Mục tiêu đang bất tử hồi sinh", "#64c8ff");
-      else if (ev.part === "head") { setHitmarker(true); snd.headshot(); }
-      else { setHitmarker(false); snd.hit(); }
+      if (ev.part === "shield") hudUi.showKillAlert("Mục tiêu đang bất tử hồi sinh", "#64c8ff");
+      else if (ev.part === "head") { hudUi.setHitmarker(true); snd.headshot(); }
+      else { hudUi.setHitmarker(false); snd.hit(); }
     } else if (ev.targetId === net.playerId && ev.damage > 0) {
       hp = ev.hp;
-      dmgV = 1;
-      shake = 0.25;
+      hudUi.triggerDamageVignette();
+      combat.triggerHurtShake();
       snd.hurt();
-      hud();
+      hudUi.hud();
     }
   });
   net.on(MSG.EVENT_KILL, (ev) => {
     if (engineMode !== "lan") return;
-    pushKillfeed(ev);
+    hudUi.pushKillfeed(ev);
     if (ev.killerId === net.playerId) {
-      showKillAlert(ev.head ? `HEADSHOT! ${ev.victim}` : `HẠ GỤC ${ev.victim}`, ev.head ? "#ff3b3b" : "#f0b429");
+      hudUi.showKillAlert(ev.head ? `HEADSHOT! ${ev.victim}` : `HẠ GỤC ${ev.victim}`, ev.head ? "#ff3b3b" : "#f0b429");
     } else if (ev.victimId === net.playerId) {
       meAlive = false;
-      activeWeapon().st.reloadEndsAt = 0;
+      combat.activeWeapon().st.reloadEndsAt = 0;
+      weaponAudio.clearScheduledTimers();
       input.clearAds();
-      testAimHeld = false;
+      combat.setTestAimHeld(false);
       hp = 0;
       respawnMs = 4000;
-      dmgV = 1;
-      hud();
-      showKillAlert(`BỊ HẠ BỞI ${ev.killer}${ev.head ? " (HEADSHOT)" : ""}`, "#ff6b4a");
+      hudUi.triggerDamageVignette();
+      hudUi.hud();
+      hudUi.showKillAlert(`BỊ HẠ BỞI ${ev.killer}${ev.head ? " (HEADSHOT)" : ""}`, "#ff6b4a");
     }
   });
   net.on(MSG.EVENT_RESPAWN, (ev) => {
@@ -3487,171 +783,49 @@ export function createGameEngine({
       hp = 100;
       crouched = false;
       eyeHeight = EYE_STAND;
-      resetAllWeapons();
+      combat.resetAllWeapons();
       P.set(ev.pos.x, ev.pos.y, ev.pos.z);
       yaw = ev.yaw;
       pitch = 0;
       vy = velX = velZ = 0;
       cam.position.set(P.x, P.y + EYE_STAND, P.z);
       cam.rotation.set(pitch, yaw, 0);
-      hud();
+      hudUi.hud();
     }
   });
   net.on(MSG.CHAT, (ev) => {
-    if (engineMode === "lan") pushHudChat(ev);
+    if (engineMode === "lan") hudUi.pushHudChat(ev);
   });
 
-  // ---------- Main Frame Loop ----------
-  let ltn = rnd(8, 16), lt = 0;
-  let nextBirdAt = rnd(7, 15), nextHeartbeatAt = 0, lastStepIdx = 0;
+  // ---------- 60Hz Physics & Main Loop ----------
   const clock = new THREE.Clock();
 
-  function updateWeatherAndRain(dt) {
-    gt += dt;
-    sparks.upd(dt);
-    if (activeMapId !== "harbor") {
-      if (militaryData && militaryData.updateAtmosphere) {
-        if (militaryData.updateAtmosphere(gt, cam.position, activeQuality.preset)) {
-          shadowDirty = true;
-        }
-      }
-      if (AC && ambFilter && ambGain) {
-        const gust = 0.5 + 0.5 * Math.sin(gt * 0.27) * Math.cos(gt * 0.13);
-        ambFilter.frequency.setTargetAtTime(210 + gust * 250, AC.currentTime, 0.2);
-        ambGain.gain.setTargetAtTime(0.042 + gust * 0.032, AC.currentTime, 0.2);
-      }
-      if (activeState === "play" && AC) {
-        nextBirdAt -= dt;
-        if (nextBirdAt <= 0) {
-          nextBirdAt = rnd(10, 22);
-          snd.distantBird();
-        }
-      }
-      return;
-    }
-
-    if (harborData) {
-      harborData.updateRain(dt, gt, P.x, P.z);
-    }
-
-    ltn -= dt;
-    if (ltn <= 0) { ltn = rnd(12, 26); lt = 0.4; setTimeout(() => snd.thunder(), rnd(500, 2200)); }
-    lt = Math.max(0, lt - dt);
-    const b = lt > 0.28 || (lt < 0.2 && lt > 0.1) ? 1 : lt > 0 ? 0.3 : 0;
-    hemi.intensity = 0.28 + b * 2.0;
-    moon.intensity = 0.38 + b * 1.7;
-    S.fog.color.setRGB(0.020 + b * 0.24, 0.039 + b * 0.27, 0.067 + b * 0.33);
-    S.background.copy(S.fog.color);
-  }
-
   function canStandUp() {
-    if (activeCollision) {
-      return activeCollision.canStandUp(P.x, P.y, P.z);
-    }
+    const activeCollision = sceneMgr.getActiveCollision();
+    if (activeCollision) return activeCollision.canStandUp(P.x, P.y, P.z);
     for (const c of cols) {
       if (P.x >= c.x0 - 0.42 && P.x <= c.x1 + 0.42 && P.z >= c.z0 - 0.42 && P.z <= c.z1 + 0.42) {
         const baseY = c.y0 || 0;
         if (baseY > P.y + 1.05 && baseY < P.y + 1.85) return false;
       }
     }
-    upRay.set(new Vec(P.x, P.y + 1.0, P.z), UP);
+    _upOrigin.set(P.x, P.y + 1.0, P.z);
+    upRay.set(_upOrigin, UP);
     upRay.far = 0.86;
     return upRay.intersectObjects(solid, false).length === 0;
   }
 
-  function updateRadarAndCrosshair(nowMs) {
-    if (engineMode !== "lan") {
-      $("cross").classList.remove("targetEnemy");
-      return;
-    }
-    const enemyMeshes = [];
-    for (const av of remotePlayers.values()) {
-      if (!av.alive) continue;
-      if (currentMode === "TDM" && av.team === meTeam) continue;
-      enemyMeshes.push(...av.hitMeshes);
-    }
-    ray.far = 160;
-    ray.setFromCamera({ x: 0, y: 0 }, cam);
-    let hover = null;
-    if (activeCollision) {
-      const targetHit = enemyMeshes.length ? ray.intersectObjects(enemyMeshes, false)[0] : null;
-      const worldHit = activeCollision.raycastShot(
-        ray.ray.origin.x,
-        ray.ray.origin.y,
-        ray.ray.origin.z,
-        ray.ray.direction.x,
-        ray.ray.direction.y,
-        ray.ray.direction.z,
-        ray.far,
-      );
-      if (targetHit && (!worldHit || targetHit.distance <= worldHit.dist)) {
-        hover = targetHit;
-      }
-    } else {
-      const targets = ground ? [ground, ...solid, ...enemyMeshes] : [...solid, ...enemyMeshes];
-      hover = ray.intersectObjects(targets, false)[0];
-    }
-    $("cross").classList.toggle("targetEnemy", Boolean(hover && hover.object.userData.hitTarget));
-
-    const canvas = $("radarCanvas");
-    if (!canvas) return;
-    const g = canvas.getContext("2d");
-    const cx = 62, cy = 62, range = 45, scale = 54 / range;
-    g.clearRect(0, 0, 124, 124);
-    g.strokeStyle = "rgba(180,210,230,0.16)";
-    g.beginPath(); g.arc(cx, cy, 27, 0, Math.PI * 2); g.stroke();
-
-    const sn = Math.sin(yaw), cs = Math.cos(yaw);
-    for (const av of remotePlayers.values()) {
-      if (!av.alive) continue;
-      const isTeammate = currentMode === "TDM" && av.team === meTeam;
-      if (!isTeammate && nowMs > av.radarBlipUntil) continue;
-      const dx = av.container.position.x - P.x;
-      const dz = av.container.position.z - P.z;
-      const rx = dx * cs - dz * sn;
-      const rz = dx * sn + dz * cs;
-      let px = cx + rx * scale;
-      let py = cy + rz * scale;
-      const d = Math.hypot(px - cx, py - cy);
-      if (d > 54) {
-        px = cx + ((px - cx) / d) * 54;
-        py = cy + ((py - cy) / d) * 54;
-      }
-      g.fillStyle = (TEAM_META[av.team] || TEAM_META.FFA).hex;
-      g.beginPath();
-      g.arc(px, py, isTeammate ? 4.2 : 3.6, 0, Math.PI * 2);
-      g.fill();
-    }
-
-    g.fillStyle = "#f0b429";
-    g.beginPath();
-    g.moveTo(cx, cy - 6);
-    g.lineTo(cx - 4.5, cy + 4.5);
-    g.lineTo(cx + 4.5, cy + 4.5);
-    g.closePath();
-    g.fill();
-  }
-
-  function isControlActive() {
-    return input.active || testLocked;
-  }
-
   function stepPhysicsFixed(dtFixed, nowMs) {
     const canAct = engineMode === "solo" || (meAlive && activeState === "play");
-    const { cfg, st } = activeWeapon();
-
-    if (st.reloadEndsAt > 0 && nowMs >= st.reloadEndsAt) {
-      st.mag = cfg.magSize;
-      st.reloadEndsAt = 0;
-      hud();
-    }
-
+    combat.syncMagazineResetOnReloadComplete(nowMs);
     if (!canAct) {
       curFlags = 0;
       return;
     }
 
-    const activeInput = isControlActive();
+    const { st } = combat.activeWeapon();
+    const activeInput = hudUi.isControlActive();
+    const chatOpen = hudUi.isChatOpen();
     const f = activeInput && !chatOpen ? ((input.isDown("forward") ? 1 : 0) - (input.isDown("back") ? 1 : 0)) : 0;
     const s = activeInput && !chatOpen ? ((input.isDown("right") ? 1 : 0) - (input.isDown("left") ? 1 : 0)) : 0;
     const hasMove = f !== 0 || s !== 0;
@@ -3667,20 +841,31 @@ export function createGameEngine({
       crouched = false;
     }
 
-    const wantsAds = (testAimHeld || (activeInput && !chatOpen && input.isAdsActive())) && st.reloadEndsAt <= nowMs;
-    if (wantsAds && rawShift) sprintBrokenUntilShiftUp = true;
+    const isSniperWeapon = SLOT_TO_WEAPON_ID[combat.getActiveSlot()] === "sniper";
+    const isSniperScopedOrAiming =
+      isSniperWeapon && (combat.awmScope.getState().scoped || input.isAdsActive() || combat.getScopeOut().adsT > 0.12);
+    const wantsAds = (combat.getTestAimHeld() || (activeInput && !chatOpen && input.isAdsActive())) && st.reloadEndsAt <= nowMs;
+    if (wantsAds && rawShift && !isSniperScopedOrAiming) sprintBrokenUntilShiftUp = true;
     if ((input.fireJustPressed || input.fireHeld) && rawShift && isSprinting) {
       sprintBrokenUntilShiftUp = true;
     }
 
-    isSprinting = rawShift && !sprintBrokenUntilShiftUp && !crouched && grounded && !onLadder && hasMove;
+    isSprinting =
+      rawShift &&
+      !sprintBrokenUntilShiftUp &&
+      !crouched &&
+      grounded &&
+      !onLadder &&
+      hasMove &&
+      !isSniperScopedOrAiming;
     if (isSprinting) {
       input.clearAds();
-      testAimHeld = false;
+      combat.setTestAimHeld(false);
+      if (isSniperWeapon) combat.awmScope.cancelAutoRescope();
     }
 
     const isReloading = st.reloadEndsAt > nowMs;
-    const effectiveAds = (testAimHeld || (activeInput && input.isAdsActive())) && !isReloading && !isSprinting;
+    const effectiveAds = (combat.getTestAimHeld() || (activeInput && input.isAdsActive())) && !isReloading && !isSprinting;
 
     curFlags =
       (crouched ? FLAG.CROUCH : 0) |
@@ -3719,6 +904,7 @@ export function createGameEngine({
 
     P.x += velX * dtFixed;
     P.z += velZ * dtFixed;
+    const activeCollision = sceneMgr.getActiveCollision();
     if (activeCollision) {
       const mState = { x: P.x, y: P.y, z: P.z, vy, grounded, onLadder };
       activeCollision.stepPlayerMovement(
@@ -3745,9 +931,9 @@ export function createGameEngine({
       } else {
         grounded = false;
       }
-
       for (const c of cols) {
-        const dx = P.x - Math.max(c.x0, Math.min(P.x, c.x1)), dz = P.z - Math.max(c.z0, Math.min(P.z, c.z1));
+        const dx = P.x - Math.max(c.x0, Math.min(P.x, c.x1));
+        const dz = P.z - Math.max(c.z0, Math.min(P.z, c.z1));
         const d2 = dx * dx + dz * dz;
         if (d2 < 0.2025 && P.y < c.y1) {
           const d = Math.sqrt(d2) || 0.001;
@@ -3758,15 +944,17 @@ export function createGameEngine({
       P.x = Math.max(-48, Math.min(48, P.x));
       P.z = Math.max(-48, Math.min(48, P.z));
     }
+
     if (hasMove && grounded) {
       bob += speed * dtFixed;
       const stepIdx = Math.floor(bob / 1.55);
       if (stepIdx !== lastStepIdx) {
         lastStepIdx = stepIdx;
         if (activeState === "play") {
+          const militaryData = sceneMgr.getMilitaryData();
           let surface = "concrete";
           if (onLadder || P.y > 2.5) surface = "metal";
-          else if (activeMapId === "harbor") surface = "puddle";
+          else if (sceneMgr.getActiveMapId() === "harbor") surface = "puddle";
           else if (militaryData && militaryData.samplePuddle && militaryData.samplePuddle(P.x, P.z) > 0.35) {
             surface = "puddle";
           }
@@ -3779,46 +967,89 @@ export function createGameEngine({
     eyeHeight += (targetEye - eyeHeight) * Math.min(1, 18 * dtFixed);
   }
 
+  const lookProxy = {
+    get yaw() { return yaw; },
+    set yaw(v) { yaw = v; },
+    get pitch() { return pitch; },
+    set pitch(v) { pitch = v; },
+  };
+
   function updateGameplay(dt) {
     const nowMs = performance.now();
     const canAct = engineMode === "solo" || (meAlive && activeState === "play");
+    const activeSlot = combat.getActiveSlot();
+    const isM416Active = SLOT_TO_WEAPON_ID[activeSlot] === "m416";
+    const isSniperActive = SLOT_TO_WEAPON_ID[activeSlot] === "sniper";
+    const sCfg = settings ? settings.get() : { sens: 1, adsSens: 0.58, invertY: false, adsMode: "toggle", fov: 75 };
+    const chatOpen = hudUi.isChatOpen();
+    const activeControl = hudUi.isControlActive();
+    const scopeOut = combat.getScopeOut();
 
-    if (isControlActive() && !chatOpen) {
+    if (activeControl && !chatOpen) {
       const { dx, dy } = input.consumeMouseDelta();
-      const sCfg = settings ? settings.get() : { sens: 1, adsSens: 0.58, invertY: false };
-      const sens = 0.0022 * sCfg.sens * lerp(1.0, sCfg.adsSens, ads);
+      const zoomSensMult = isSniperActive && scopeOut.zoom > 1.02 ? scopeOut.sensMultiplier : lerp(1.0, sCfg.adsSens, vmAnim.getAds());
+      const sens = 0.0022 * sCfg.sens * zoomSensMult;
       yaw -= dx * sens;
       const ySign = sCfg.invertY ? -1 : 1;
+      const pitchBeforeMouse = pitch;
       pitch = Math.max(-1.45, Math.min(1.45, pitch - dy * sens * ySign));
+      const mousePitchDelta = pitch - pitchBeforeMouse;
+      if (isM416Active && mousePitchDelta < 0) {
+        combat.m416Recoil.absorbPlayerPull(-mousePitchDelta * RAD2DEG);
+      }
     }
 
-    if (canAct && isControlActive() && !chatOpen) {
-      if (input.wasHit("slot1")) switchWeapon(1);
-      else if (input.wasHit("slot2")) switchWeapon(2);
-      else if (input.wasHit("slot3")) switchWeapon(3);
-      else if (input.wasHit("switchPrev")) switchWeapon(prevSlot);
+    if (canAct && activeControl && !chatOpen) {
+      if (input.wasHit("slot1")) combat.switchWeapon(1);
+      else if (input.wasHit("slot2")) combat.switchWeapon(2);
+      else if (input.wasHit("slot3")) combat.switchWeapon(3);
+      else if (input.wasHit("switchPrev")) combat.switchWeapon(combat.getPrevSlot());
 
       const wDir = input.consumeWheel();
       if (wDir !== 0) {
-        const nextIdx = (WEAPON_SLOTS.indexOf(activeSlot) + (wDir > 0 ? 1 : -1) + WEAPON_SLOTS.length) % WEAPON_SLOTS.length;
-        switchWeapon(WEAPON_SLOTS[nextIdx]);
+        const nextIdx = (WEAPON_SLOTS.indexOf(combat.getActiveSlot()) + (wDir > 0 ? 1 : -1) + WEAPON_SLOTS.length) % WEAPON_SLOTS.length;
+        combat.switchWeapon(WEAPON_SLOTS[nextIdx]);
       }
 
-      if (input.wasHit("reload")) reload();
+      if (input.wasHit("reload")) combat.reload();
       if (input.wasHit("laser")) { laserOn = !laserOn; snd.click(1800); }
-      if (engineMode === "lan" && input.wasHit("chat")) {
-        chatOpen = true;
-        input.setTextFocusBlocked(true);
-        if (document.pointerLockElement === R.domElement) document.exitPointerLock();
-        $("hudChatInput").style.display = "block";
-        $("hudChatInput").focus();
+
+      const activeCfgAfterSwitch = combat.activeWeapon().cfg;
+      const activeStAfterSwitch = combat.activeWeapon().st;
+      if (activeCfgAfterSwitch.id === "sniper") {
+        const canScope = !isSprinting && activeStAfterSwitch.reloadEndsAt <= nowMs && activeStAfterSwitch.mag > 0;
+        const rmbClicked = input.consumeAdsJustPressed();
+        if (sCfg.adsMode === "hold") {
+          const wantHold = Boolean(input.adsHeld && canScope);
+          if (wantHold !== combat.awmScope.getState().scoped) {
+            combat.awmScope.setScopedState(wantHold, 1);
+            combat.emitScopeAudioCue(wantHold ? 1 : 0, "sniper");
+          }
+        } else if (rmbClicked) {
+          const zRes = combat.awmScope.toggleDoubleZoom(nowMs / 1000, canScope);
+          if (zRes.changed) combat.emitScopeAudioCue(zRes.level, "sniper");
+          input.adsToggled = combat.awmScope.getState().scoped;
+          input.adsHeld = input.adsToggled;
+        }
+        if (input.wasHit("zeroUp")) {
+          combat.awmScope.cycleZero(1);
+          snd.click(1450);
+        }
+        if (input.wasHit("zeroDown")) {
+          combat.awmScope.cycleZero(-1);
+          snd.click(1250);
+        }
+      } else {
+        input.consumeAdsJustPressed();
       }
+
+      if (engineMode === "lan" && input.wasHit("chat")) hudUi.openChat();
     }
 
-    if (engineMode === "lan" && activeState === "play" && isControlActive() && !chatOpen) {
+    if (engineMode === "lan" && activeState === "play" && activeControl && !chatOpen) {
       const showSb = input.isDown("score");
       $("scoreboard").style.display = showSb ? "block" : "none";
-      if (showSb) renderScoreboardTable();
+      if (showSb) hudUi.renderScoreboardTable();
     } else {
       $("scoreboard").style.display = "none";
     }
@@ -3829,70 +1060,41 @@ export function createGameEngine({
       physicsAccum -= FIXED_DT;
     }
 
-    if (canAct && isControlActive() && !chatOpen) {
-      const { cfg } = activeWeapon();
-      const wantsFire = cfg.auto ? input.fireHeld : input.fireJustPressed;
-      if (wantsFire && !isSprinting) shoot();
-    }
+    combat.stepWeaponUpdate(dt, nowMs, canAct, activeControl, chatOpen, isSprinting, crouched, grounded, velX, velZ, lookProxy);
 
-    input.endFrame();
-
-    recoil *= 1 - 12 * dt;
-    kick = Math.max(0, kick - dt * 0.12);
-    flash -= dt;
-    const isPistolActive = SLOT_TO_WEAPON_ID[activeSlot] === "pistol";
-    mf.visible = flash > 0 && !isPistolActive;
-    pistolMuzzleFlash.visible = flash > 0 && isPistolActive;
-    pistolFlashMat.opacity = flash > 0 && isPistolActive ? 0.92 : 0;
-    flashL.intensity = flash > 0 ? (isPistolActive ? 8.5 : 5) : 0;
-
+    const curW = combat.activeWeapon();
     const mvRatio = Math.hypot(velX, velZ) > 0.25 ? 1 : 0;
-    const scopedSniper = activeWeapon().cfg.scopeOverlay && ads > 0.72;
-    gun.visible = canAct && !scopedSniper;
-    if (armsRoot) armsRoot.visible = canAct && !scopedSniper;
+    const hideSniperModel = curW.cfg.scopeOverlay && combat.getScopeOut().hideWeaponModel;
+    gun.visible = canAct && !hideSniperModel;
+    const { armsRoot: activeArmsRoot } = assetLoader.getArms();
+    if (activeArmsRoot) activeArmsRoot.visible = canAct && !hideSniperModel;
 
-    shake = Math.max(0, shake - dt);
-    const sk = shake * 0.05;
+    const sk = combat.getShake() * 0.05;
     cam.position.set(
       P.x + rnd(-sk, sk),
-      P.y + (canAct ? eyeHeight : 0.75) + (mvRatio && grounded ? Math.sin(bob * 2) * 0.035 * (1 - 0.7 * ads) : 0),
+      P.y + (canAct ? eyeHeight : 0.75) + (mvRatio && grounded ? Math.sin(bob * 2) * 0.035 * (1 - 0.7 * vmAnim.getAds()) : 0),
       P.z,
     );
-    cam.rotation.set(pitch + kick + rnd(-sk, sk), yaw, 0);
-    gunAnim(dt, canAct ? mvRatio : 0);
+    cam.rotation.set(pitch + combat.getKick() + rnd(-sk, sk), yaw, 0);
+    vmAnim.gunAnim(dt, canAct ? mvRatio : 0);
 
     if (engineMode === "lan" && canAct && activeState === "play") {
       if (nowMs - lastInputSentAt >= 50) {
         lastInputSentAt = nowMs;
         net.send(MSG.STATE, {
-          pos: { x: P.x, y: P.y, z: P.z },
-          yaw,
-          pitch,
+          pos: { x: +P.x.toFixed(3), y: +P.y.toFixed(3), z: +P.z.toFixed(3) },
+          yaw: +yaw.toFixed(4),
+          pitch: +pitch.toFixed(4),
           flags: curFlags,
           anim: { mv: mvRatio ? (isSprinting ? 1.4 : crouched ? 0.65 : 1) : 0, laser: laserOn },
         });
       }
     }
 
-    if (engineMode === "solo" && activeState === "play") {
-      if (drones.length === 0) {
-        soloWaveCd -= dt;
-        if (soloWaveCd <= 0) { soloWave++; for (let i = 0; i < 2 + soloWave; i++) spawnDrone(); soloWaveCd = 3; hud(); }
-      }
-      drones.slice().forEach((d) => updDrone(d, dt));
-    }
+    if (engineMode === "solo" && activeState === "play") combat.stepSoloDrones(dt);
 
-    if (hm > 0) {
-      hm = Math.max(0, hm - dt * 5);
-      $("hm").style.opacity = hm;
-    }
-    if (dmgV > 0) {
-      dmgV = Math.max(0, dmgV - dt * 1.6);
-      $("dmg").style.opacity = dmgV;
-    }
-    if (killAlertT > 0) { killAlertT -= dt; if (killAlertT <= 0) $("killAlert").style.opacity = "0"; }
-
-    updateCanvasPostGrade(gt);
+    hudUi.stepTransientFeedback(dt);
+    sceneMgr.updateCanvasPostGrade(sceneMgr.getGt());
     if (meAlive && hp <= 30 && activeState === "play") {
       nextHeartbeatAt -= dt;
       if (nextHeartbeatAt <= 0) {
@@ -3904,71 +1106,87 @@ export function createGameEngine({
       nextHeartbeatAt = 0.15;
     }
 
-    updateRadarAndCrosshair(nowMs);
-    hud();
+    hudUi.updateRadarAndCrosshair(nowMs);
+    if (nowMs - lastHudSyncMs >= 100) {
+      lastHudSyncMs = nowMs;
+      hudUi.hud();
+    }
   }
 
-  R.autoClear = false;
-  R.shadowMap.autoUpdate = false;
   function renderFrame() {
-    if (activeQuality.preset.shadowsEnabled) {
-      shadowFrameTick++;
-      const hasDynamicCasters = drones.length > 0 || remotePlayers.size > 0;
-      if (shadowDirty || (hasDynamicCasters && shadowFrameTick >= activeQuality.preset.shadowUpdateInterval)) {
-        R.shadowMap.needsUpdate = true;
-        shadowDirty = false;
-        shadowFrameTick = 0;
-      }
+    const hasDynamicCasters = combat.hasDrones() || remoteMgr.remotePlayers.size > 0;
+    if (sceneMgr.consumeShadowUpdate(hasDynamicCasters)) {
+      R.shadowMap.needsUpdate = true;
     }
     cam.layers.set(0);
     R.clear();
     R.render(S, cam);
+    let totalCalls = R.info && R.info.render ? R.info.render.calls : 0;
+    let totalTris = R.info && R.info.render ? R.info.render.triangles : 0;
     if (engineMode !== "idle") {
       const bg = S.background;
       S.background = null;
       R.clearDepth();
       vmCam.layers.set(VIEW_LAYER);
       R.render(S, vmCam);
+      if (R.info && R.info.render) {
+        totalCalls += R.info.render.calls;
+        totalTris += R.info.render.triangles;
+      }
       S.background = bg;
     }
+    hudUi.samplePerfStats(totalCalls, totalTris);
   }
 
   function loop() {
     requestAnimationFrame(loop);
-    if (suspendRenderLoop) return;
-    const dt = Math.min(clock.getDelta(), 0.05);
-    if (activeState === "play") updateGameplay(dt);
-    if (engineMode === "lan") updateRemotePlayers(dt);
-    tr.forEach((l) => { l.userData.t -= dt; l.material.opacity = Math.max(0, l.userData.t / 0.09); });
-    updateWeatherAndRain(dt);
+    if (sceneMgr.isSuspended() || (engineMode === "solo" && activeState === "over")) return;
+    const rawDt = freezeVfxClock ? 0 : clock.getDelta();
+    const dt = Math.min(rawDt, 0.05);
+    if (!freezeVfxClock) {
+      if (activeState === "play") updateGameplay(dt);
+      else if (engineMode === "idle") sceneMgr.updateLobbyCamera(Math.min(rawDt, 0.25));
+      if (engineMode === "lan") remoteMgr.updateRemotePlayers(dt);
+      sceneMgr.updateWeatherAndRain(dt);
+      ballisticsVfx.update(dt, cam);
+    }
     cam.updateMatrixWorld(true);
     vmCam.position.copy(cam.position);
     vmCam.quaternion.copy(cam.quaternion);
     vmCam.updateMatrixWorld(true);
-    laserBeam.visible = laserLens.visible =
-      laserOn && engineMode !== "idle" && meAlive && SLOT_TO_WEAPON_ID[activeSlot] === "m416";
-    if (laserBeam.visible) {
+
+    const showLaser = laserOn && engineMode !== "idle" && meAlive && SLOT_TO_WEAPON_ID[combat.getActiveSlot()] === "m416";
+    laserBeam.visible = showLaser;
+    assetLoader.getNodes().laserLens.visible = showLaser;
+    if (showLaser) {
       getViewmodelWorldPoint(laserOrigin, _lp);
       _ld.set(0, 0, -1).transformDirection(gun.matrixWorld);
       _ls.copy(_lp).addScaledVector(_ld, -0.9);
       let hit = null;
+      const activeCollision = sceneMgr.getActiveCollision();
       if (activeCollision) {
         const wh = activeCollision.raycastShot(_ls.x, _ls.y, _ls.z, _ld.x, _ld.y, _ld.z, 81);
-        if (wh) hit = { distance: wh.dist, point: new Vec(wh.x, wh.y, wh.z) };
+        if (wh) {
+          _laserEnd.set(wh.x, wh.y, wh.z);
+          hit = { distance: wh.dist, point: _laserEnd };
+        }
       } else {
         laserRay.set(_ls, _ld);
         laserRay.far = 81;
         const targets = ground ? [ground, ...solid] : solid;
         hit = laserRay.intersectObjects(targets, false)[0] || null;
       }
-      const end = hit ? hit.point : _lp.clone().addScaledVector(_ld, 80);
+      const end = hit ? hit.point : _laserEnd.copy(_lp).addScaledVector(_ld, 80);
       const bp = laserBeam.geometry.attributes.position;
       laserBeam.visible = !(hit && hit.distance < 0.9);
       bp.setXYZ(0, _lp.x, _lp.y, _lp.z);
       bp.setXYZ(1, end.x, end.y, end.z);
       bp.needsUpdate = true;
-      laserDot.visible = !!hit;
-      if (hit) { laserDot.position.copy(hit.point).addScaledVector(_ld, -0.02); laserDot.scale.setScalar(0.05 + hit.distance * 0.004); }
+      laserDot.visible = Boolean(hit);
+      if (hit) {
+        laserDot.position.copy(hit.point).addScaledVector(_ld, -0.02);
+        laserDot.scale.setScalar(0.05 + hit.distance * 0.004);
+      }
     } else {
       laserDot.visible = false;
     }
@@ -3982,30 +1200,46 @@ export function createGameEngine({
     requestAnimationFrame(loop);
   }
 
+  // ---------- Match Lifecycle ----------
   function startLanMatch(room, initialSnapshot) {
     initAudio();
+    syncRoomRoster(room);
     const targetMap = normalizeMapId(room && room.map ? room.map : "military");
-    if (!mapGuard.activateSyncIfCached(targetMap).ok) {
-      ensureMapActive(targetMap);
-    }
-    clearAllDrones();
-    clearRemotePlayers();
+    if (!sceneMgr.activateSyncIfCached(targetMap).ok) sceneMgr.ensureMapActive(targetMap);
+
+    combat.clearAllDrones();
+    remoteMgr.clearRemotePlayers();
+    weaponAudio.clearScheduledTimers();
+    ballisticsVfx.clear();
+    muzzleFlashRig.setWarmupVisible(false);
+    combat.resetVisualStateOnMatchStart();
+
     engineMode = "lan";
     activeState = "play";
     currentMode = room.mode;
     killLimit = room.killLimit;
     hp = 100;
     meAlive = true;
-    activeSlot = 1;
-    prevSlot = 2;
-    resetAllWeapons();
-    applyViewmodelWeapon("m416");
+    sceneMgr.setLobbyOrbitLocked(false);
+
+    const baseFov = settings ? settings.get().fov : 75;
+    if (Math.abs(cam.fov - baseFov) > 0.05) {
+      cam.fov = baseFov;
+      cam.updateProjectionMatrix();
+    }
+    combat.setActiveSlot(1);
+    combat.setPrevSlot(2);
+    combat.resetAllWeapons();
+    assetLoader.applyViewmodelWeapon("m416");
     crouched = false;
     grounded = true;
     onLadder = false;
     eyeHeight = EYE_STAND;
-    velX = velZ = vy = ads = bolt = rlp = trigPull = 0;
-    chatOpen = testAimHeld = isSprinting = false;
+    velX = velZ = vy = 0;
+    bob = 0;
+    isSprinting = false;
+    vmAnim.resetAnimState();
+    hudUi.setChatOpen(false);
     input.reset();
     $("hudChatInput").style.display = "none";
     $("sniperScope").style.display = "none";
@@ -4013,7 +1247,10 @@ export function createGameEngine({
     $("pauseOverlay").style.display = "none";
 
     if (initialSnapshot) {
-      const meSnap = initialSnapshot.players.find((p) => p.id === net.playerId);
+      const unpacked = unpackSnapshot(initialSnapshot, rosterNames);
+      const meSnap = unpacked && Array.isArray(unpacked.players)
+        ? unpacked.players.find((p) => p.id === net.playerId)
+        : null;
       if (meSnap) {
         P.set(meSnap.x, meSnap.y, meSnap.z);
         yaw = meSnap.yaw;
@@ -4022,36 +1259,46 @@ export function createGameEngine({
         meAlive = meSnap.alive;
         meInvuln = meSnap.invulnerable;
       }
-      applySnapshot(initialSnapshot);
+      if (unpacked) applySnapshot(unpacked);
     }
-    gunAnim(0, 0);
-    hud();
+    vmAnim.gunAnim(0, 0);
+    hudUi.hud();
     input.tryLock();
     setTimeout(() => {
-      if (engineMode === "lan" && activeState === "play" && !isControlActive() && !chatOpen) {
-        onPointerLockFailed();
+      if (engineMode === "lan" && activeState === "play" && !hudUi.isControlActive() && !hudUi.isChatOpen()) {
+        hudUi.onPointerLockFailed();
       }
     }, 90);
   }
 
-  function startSolo(mapId = activeMapId || initialDefaultMap) {
+  function startSolo(mapId = sceneMgr.getActiveMapId() || sceneMgr.getInitialDefaultMap()) {
     const targetMap = normalizeMapId(mapId);
-    // Step 2: Zero-ms synchronous cache fast-path so requestPointerLock() runs directly in click gesture!
-    if (!mapGuard.activateSyncIfCached(targetMap).ok) {
-      ensureMapActive(targetMap);
-    }
+    if (!sceneMgr.activateSyncIfCached(targetMap).ok) sceneMgr.ensureMapActive(targetMap);
     initAudio();
-    clearRemotePlayers();
-    clearAllDrones();
+    remoteMgr.clearRemotePlayers();
+    combat.clearAllDrones();
+    weaponAudio.clearScheduledTimers();
+    ballisticsVfx.clear();
+    muzzleFlashRig.setWarmupVisible(false);
+    combat.resetVisualStateOnMatchStart();
+
     engineMode = "solo";
     activeState = "play";
     hp = 100;
-    soloScore = 0; soloWave = 0; soloWaveCd = 1.0;
-    meAlive = true; meInvuln = false;
-    activeSlot = 1;
-    prevSlot = 2;
-    resetAllWeapons();
-    applyViewmodelWeapon("m416");
+    combat.resetSoloStats();
+    meAlive = true;
+    meInvuln = false;
+    sceneMgr.setLobbyOrbitLocked(false);
+
+    const baseFov = settings ? settings.get().fov : 75;
+    if (Math.abs(cam.fov - baseFov) > 0.05) {
+      cam.fov = baseFov;
+      cam.updateProjectionMatrix();
+    }
+    combat.setActiveSlot(1);
+    combat.setPrevSlot(2);
+    combat.resetAllWeapons();
+    assetLoader.applyViewmodelWeapon("m416");
     if (targetMap === "military") {
       P.set(0, 0, -40);
       yaw = Math.PI;
@@ -4059,22 +1306,30 @@ export function createGameEngine({
       P.set(0, 0, 0);
       yaw = 0;
     }
-    pitch = vy = velX = velZ = ads = bolt = rlp = trigPull = 0;
-    crouched = false; grounded = true; onLadder = false; eyeHeight = EYE_STAND;
-    chatOpen = testAimHeld = isSprinting = false;
+    pitch = vy = velX = velZ = 0;
+    bob = 0;
+    crouched = false;
+    grounded = true;
+    onLadder = false;
+    eyeHeight = EYE_STAND;
+    isSprinting = false;
+    vmAnim.resetAnimState();
+    hudUi.setChatOpen(false);
     input.reset();
     $("sniperScope").style.display = "none";
     $("hud").style.display = "block";
     $("pauseOverlay").style.display = "none";
-    gunAnim(0, 0);
-    hud();
+    vmAnim.gunAnim(0, 0);
+    hudUi.hud();
     input.tryLock();
   }
 
   function stopEngine() {
     activeState = "menu";
     engineMode = "idle";
-    chatOpen = testAimHeld = testLocked = false;
+    isSprinting = false;
+    hudUi.setChatOpen(false);
+    hudUi.setTestLocked(false);
     input.setTextFocusBlocked(false);
     input.reset();
     $("hud").style.display = "none";
@@ -4082,17 +1337,24 @@ export function createGameEngine({
     $("scoreboard").style.display = "none";
     $("pauseOverlay").style.display = "none";
     $("hudChatInput").style.display = "none";
-    updateCanvasPostGrade(gt);
+    sceneMgr.updateCanvasPostGrade(sceneMgr.getGt());
     if (document.pointerLockElement === R.domElement) document.exitPointerLock();
-    clearRemotePlayers();
-    clearAllDrones();
+    remoteMgr.clearRemotePlayers();
+    combat.clearAllDrones();
+    weaponAudio.clearScheduledTimers();
+    ballisticsVfx.clear();
+    muzzleFlashRig.setWarmupVisible(false);
+    combat.resetOnStop();
+    vmAnim.resetAnimState();
+    sceneMgr.setLobbyOrbitLocked(false);
+    sceneMgr.applyLobbyCameraImmediate(sceneMgr.getActiveMapId());
   }
 
-  async function bootstrapInitialScene(defaultMapId = initialDefaultMap) {
+  async function bootstrapInitialScene(defaultMapId = sceneMgr.getInitialDefaultMap()) {
     const target = normalizeMapId(defaultMapId);
     const mapLabel = target === "harbor" ? "Bến Cảng Mưa" : "Khu Quân Sự Cũ";
     const tracker = createLoadingTracker((st) => {
-      emitLoading({
+      sceneMgr.emitLoading({
         visible: true,
         mode: "startup",
         title: "Đang khởi tạo chiến trường 3D",
@@ -4106,87 +1368,74 @@ export function createGameEngine({
     await yieldToUI();
 
     try {
-      // Phase 1: Build default map async with yieldToUI()
       const mapStage = tracker.subProgress(4, 44, `Đang dựng bản đồ ${mapLabel}...`);
-      const mapData = await buildMapAssetsAsync(target, mapStage);
-      if (mapData && mapData.envMap) {
-        activeEnvMap = mapData.envMap;
-      }
+      await sceneMgr.buildMapAssetsAsync(target, mapStage);
 
-      // Phase 2: Load all 5 shared GLB models sequentially with yieldToUI()
       const modelStage = tracker.subProgress(44, 70, "Đang nạp mô hình vũ khí & nhân vật...");
-      await loadAllSharedModelsAsync(modelStage);
+      await assetLoader.loadAllSharedModelsAsync(modelStage);
 
-      // Phase 3: Precompute audio noise/reverb buffers so first-click initAudio() is 0ms
       tracker.report(72, "Đang chuẩn bị bộ đệm âm thanh...", "Tạo sẵn buffer tiếng súng & vang môi trường");
       await precomputeAudioBuffersAsync();
       await yieldToUI();
 
-      // Phase 4: Activate map, upload all textures to VRAM & pre-compile shaders + 1 hidden warmup frame
-      activateCachedMap(target);
+      sceneMgr.activateCachedMap(target);
       const gpuStage = tracker.subProgress(74, 98, "Đang nạp VRAM & biên dịch Shader...");
-      await warmupGpuForMap(target, { includeShared: true, onProgress: gpuStage });
+      await sceneMgr.warmupGpuForMap(target, { includeShared: true, onProgress: gpuStage });
 
       tracker.report(100, "Sẵn sàng chiến đấu!", `Đã tối ưu ${mapLabel} & 3 vũ khí`);
       await yieldToUI();
     } catch (err) {
       console.error("Startup bootstrap encountered an error, applying fallback:", err);
-      // Unhappy-path fallback: ensure at least Harbor loads if Military failed
-      if (target === "military" && !militaryData) {
+      if (target === "military" && !sceneMgr.getMilitaryData()) {
         try {
-          await buildHarborSceneAsync();
-          activateCachedMap("harbor");
+          await sceneMgr.buildMapAssetsAsync("harbor");
+          sceneMgr.activateCachedMap("harbor");
         } catch (fbErr) {
           console.error("Fallback harbor build also failed:", fbErr);
         }
       }
     } finally {
       isBootstrapped = true;
-      suspendRenderLoop = false;
+      sceneMgr.setSuspended(false);
       startRenderLoop();
-      emitLoading({ visible: false, done: true, mode: "startup", percent: 100 });
+      sceneMgr.emitLoading({ visible: false, done: true, mode: "startup", percent: 100 });
       window.__fpsReady = true;
     }
   }
 
-  const readyPromise = bootstrapInitialScene(initialDefaultMap);
+  const readyPromise = bootstrapInitialScene(sceneMgr.getInitialDefaultMap());
 
   return {
     readyPromise,
-    prepareMap,
-    isMapCached,
-    isMapActiveAndReady: (mapId) => mapGuard.isActiveAndReady(mapId),
+    prepareMap: (id, opts) => sceneMgr.prepareMap(id, opts),
+    isMapCached: (id) => sceneMgr.isMapCached(id),
+    isMapActiveAndReady: (id) => sceneMgr.isMapActiveAndReady(id),
     startLanMatch,
     startSolo,
     stopEngine,
     applySnapshot,
-    shoot,
-    reload,
-    switchWeapon,
-    gunAnim,
+    syncRoomRoster,
+    shoot: () => combat.shoot(),
+    reload: () => combat.reload(),
+    switchWeapon: (slot) => combat.switchWeapon(slot),
+    gunAnim: (dt, mv) => vmAnim.gunAnim(dt, mv),
     renderFrame,
-    onPointerLockChanged,
-    onPointerUnlocked,
-    onPointerLockFailed,
+    onPointerLockChanged: (locked) => hudUi.onPointerLockChanged(locked),
+    onPointerUnlocked: () => hudUi.onPointerUnlocked(),
+    onPointerLockFailed: () => hudUi.onPointerLockFailed(),
     getState: () => ({
       engineMode,
       activeState,
       P,
       isBootstrapped,
-      getLoadingStats: () => ({
-        isBootstrapped,
-        currentActiveMapId,
-        cachedMaps: [
-          ...(militaryData ? ["military"] : []),
-          ...(harborData ? ["harbor"] : []),
-        ],
-        warmedMaps: Array.from(warmedMaps),
-        uploadedTextureCount: uploadedTextures.size,
-        sharedGpuWarmed,
-        lastWarmupStats,
-      }),
+      getLoadingStats: () => sceneMgr.getLoadingStats(isBootstrapped),
       getYaw: () => yaw,
+      getPitch: () => pitch,
+      getM416RecoilState: () => combat.getM416RecoilState(),
+      getAwmScopeState: () => combat.getAwmScopeState(),
       setPose: (nx, ny, nz, nyaw, npitch) => {
+        if (engineMode === "idle") sceneMgr.setLobbyOrbitLocked(true);
+        combat.resetOnSetPose();
         P.set(nx, ny, nz);
         yaw = nyaw;
         pitch = npitch;
@@ -4196,31 +1445,34 @@ export function createGameEngine({
         vmCam.position.copy(cam.position);
         vmCam.quaternion.copy(cam.quaternion);
         vmCam.updateMatrixWorld(true);
-        if (activeMapId === "military" && militaryData && militaryData.updateAtmosphere) {
-          militaryData.updateAtmosphere(gt, cam.position, activeQuality.preset);
+        const mil = sceneMgr.getMilitaryData();
+        if (sceneMgr.getActiveMapId() === "military" && mil && mil.updateAtmosphere) {
+          mil.updateAtmosphere(sceneMgr.getGt(), cam.position, sceneMgr.getActiveQuality().preset);
         }
-        shadowDirty = true;
+        sceneMgr.markShadowDirty();
       },
-      getGraphicsQuality: () => ({
-        choice: activeQuality.choice,
-        detectedTier: activeQuality.detectedTier,
-        effectiveTier: activeQuality.effectiveTier,
-        preset: activeQuality.preset,
-        hwInfo,
-        pixelRatio: R.getPixelRatio(),
-        cameraFar: cam.far,
-        shadowMapEnabled: R.shadowMap.enabled,
-        mapQualityStats: militaryData && militaryData.getQualityStats ? militaryData.getQualityStats() : null,
-      }),
-      setGraphicsQuality: (choice) => {
-        if (settings && typeof settings.update === "function") settings.update({ graphicsQuality: choice });
-        else applyGraphicsQuality(choice);
-        return activeQuality;
+      getGraphicsQuality: () => sceneMgr.getGraphicsQuality(),
+      setGraphicsQuality: (choice, opts = {}) => sceneMgr.setGraphicsQuality(choice, opts),
+      waitForQualityApply: () => sceneMgr.waitForQualityApply(),
+      setLobbyViewState: (viewName) => sceneMgr.setLobbyViewState(viewName),
+      getLobbyViewState: () => sceneMgr.getLobbyViewState(),
+      getPerfStats: () => hudUi.getPerfStats(),
+      getWeaponAudioStats: () => weaponAudio.getStats(),
+      getVfxStats: () => combat.getVfxStats(),
+      stepVfx: (dt = 0.016) => {
+        ballisticsVfx.update(dt, cam);
+        muzzleFlashRig.update(dt);
       },
+      setLoopPaused: (paused) => {
+        freezeVfxClock = Boolean(paused);
+        if (!paused) clock.getDelta();
+      },
+      triggerRemoteFireTest: (ev) => combat.handleRemoteFireVisuals(ev),
       getViewmodelState: () => {
+        const { armsCtrl: curArmsCtrl, armsRoot: curArmsRoot } = assetLoader.getArms();
         let skinningEnabled = false;
-        if (armsRoot) {
-          armsRoot.traverse((o) => {
+        if (curArmsRoot) {
+          curArmsRoot.traverse((o) => {
             if (o.isSkinnedMesh && o.material && o.material.skinning) skinningEnabled = true;
           });
         }
@@ -4228,8 +1480,8 @@ export function createGameEngine({
           vmFov: vmCam.fov,
           vmNear: vmCam.near,
           worldFov: cam.fov,
-          armsReady: Boolean(armsCtrl && armsCtrl.ready),
-          armsVisible: Boolean(armsRoot && armsRoot.visible),
+          armsReady: Boolean(curArmsCtrl && curArmsCtrl.ready),
+          armsVisible: Boolean(curArmsRoot && curArmsRoot.visible),
           skinningEnabled,
           gunPos: { x: gun.position.x, y: gun.position.y, z: gun.position.z },
           gunRot: { x: gun.rotation.x, y: gun.rotation.y, z: gun.rotation.z },
@@ -4237,38 +1489,43 @@ export function createGameEngine({
       },
       setTestCombat: (opts = {}) => {
         if (typeof opts.locked === "boolean") {
-          testLocked = opts.locked;
+          hudUi.setTestLocked(opts.locked);
           input.active = opts.locked;
         }
-        if (typeof opts.aimHeld === "boolean") testAimHeld = opts.aimHeld;
+        combat.setTestCombat(opts);
         if (typeof opts.crouched === "boolean") {
           crouched = opts.crouched;
           eyeHeight = opts.crouched ? EYE_CROUCH : EYE_STAND;
         }
         if (typeof opts.hp === "number" && Number.isFinite(opts.hp)) {
           hp = Math.max(1, Math.min(100, opts.hp));
-          hud();
-          updateCanvasPostGrade(gt);
+          hudUi.hud();
+          sceneMgr.updateCanvasPostGrade(sceneMgr.getGt());
         }
-        if (opts.adsSteps) for (let i = 0; i < opts.adsSteps; i++) gunAnim(0.02, 0);
+        if (opts.adsSteps) for (let i = 0; i < opts.adsSteps; i++) vmAnim.gunAnim(0.02, 0);
       },
-      getRemotePlayers: () => remotePlayers,
-      getWeapons: () => ({ activeSlot, activeWeaponId: SLOT_TO_WEAPON_ID[activeSlot], weapons }),
-      getTeamMaterials: () => teamAccentMats,
-      getMapInfo: () => ({
-        mapId: activeMapId,
-        currentActiveMapId,
-        ready: isMapCached(activeMapId),
-        warmed: warmedMaps.has(activeMapId),
-        onLadder,
-        bounds: activeCollision ? activeCollision.bounds : { minX: -48, maxX: 48, minZ: -48, maxZ: 48 },
-        raycastShot: activeCollision ? activeCollision.raycastShot : null,
+      damageSolo: (amount) => combat.hurtSolo(amount),
+      getRemotePlayers: () => remoteMgr.remotePlayers,
+      getWeapons: () => ({
+        activeSlot: combat.getActiveSlot(),
+        activeWeaponId: SLOT_TO_WEAPON_ID[combat.getActiveSlot()],
+        weapons: combat.getWeapons(),
       }),
+      getTeamMaterials: () => assetLoader.teamAccentMats,
+      getMapInfo: () => sceneMgr.getMapInfo(onLadder),
       getMe: () => ({
-        meAlive, meTeam, hp,
-        ammo: activeWeapon().st.mag,
-        reloading: activeWeapon().st.reloadEndsAt > performance.now(),
-        crouched, grounded, onLadder, isSprinting, ads, flags: curFlags, eyeHeight,
+        meAlive,
+        meTeam,
+        hp,
+        ammo: combat.activeWeapon().st.mag,
+        reloading: combat.activeWeapon().st.reloadEndsAt > performance.now(),
+        crouched,
+        grounded,
+        onLadder,
+        isSprinting,
+        ads: vmAnim.getAds(),
+        flags: curFlags,
+        eyeHeight,
       }),
     }),
   };

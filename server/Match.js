@@ -3,7 +3,7 @@
  * multi-weapon reload/switch state machine, crouch hitbox LoS, respawn, and scoring.
  */
 
-import { ERR, MSG, ROOM_STATE } from "./protocol.js";
+import { ERR, MSG, ROOM_STATE, SNAPSHOT_WEAPON_CODE } from "./protocol.js";
 import { clampAndResolvePlayerPos, hasLineOfSight } from "./spawn.js";
 import {
   BASE_MOVE_SPEED,
@@ -213,6 +213,22 @@ export class Match {
     return true;
   }
 
+  handleScope(player, msg = {}) {
+    if (this.room.state !== ROOM_STATE.PLAYING || !player.alive) return false;
+    const level = Number.isInteger(msg.level) ? Math.max(0, Math.min(2, msg.level)) : 0;
+    const weapon = typeof msg.weapon === "string" && msg.weapon ? msg.weapon : player.activeWeaponId;
+    this.room.broadcast({
+      type: MSG.EVENT_SCOPE,
+      playerId: player.id,
+      weapon,
+      level,
+      x: Number(player.x.toFixed(2)),
+      y: Number(player.y.toFixed(2)),
+      z: Number(player.z.toFixed(2)),
+    });
+    return true;
+  }
+
   handleReload(player, now) {
     if (this.room.state !== ROOM_STATE.PLAYING || !player.alive) return false;
     this.tickWeapon(player, now);
@@ -287,6 +303,9 @@ export class Match {
       ? msg.origin
       : { x: player.x, y: player.y + (player.flags & FLAG.CROUCH ? 1.12 : 1.7), z: player.z };
     const dir = finiteVec3(msg.dir) ? msg.dir : { x: 0, y: 0, z: -1 };
+    const seed = Number.isInteger(msg.seed)
+      ? (msg.seed >>> 0) % 1000000
+      : ((now ^ Math.imul(player.id.length + 1, 2654435761)) >>> 0) % 1000000;
 
     this.room.sendTo(player.id, {
       type: MSG.AMMO,
@@ -301,6 +320,7 @@ export class Match {
       weapon: w.id,
       origin,
       dir,
+      seed,
     });
 
     if (w.mag === 0) {
@@ -443,45 +463,42 @@ export class Match {
     for (const p of this.room.players.values()) {
       const activeW = p.weapons && p.weapons[p.activeWeaponId];
       const reloading = Boolean(p.alive && activeW && activeW.reloadEndsAt > now);
-      players.push({
-        id: p.id,
-        name: p.name,
-        team: p.team,
-        connected: p.connected,
-        x: Number(p.x.toFixed(3)),
-        y: Number(p.y.toFixed(3)),
-        z: Number(p.z.toFixed(3)),
-        yaw: Number(p.yaw.toFixed(4)),
-        pitch: Number(p.pitch.toFixed(4)),
-        mv: Number((p.mv || 0).toFixed(2)),
-        ads: Boolean(p.ads),
-        laser: Boolean(p.laser),
-        flags: p.flags || 0,
-        weaponId: p.activeWeaponId || "m416",
-        alive: p.alive,
-        hp: p.hp,
-        ammo: activeW ? activeW.mag : 0,
-        reloading,
-        invulnerable: p.alive && now < p.invulnerableUntil,
-        respawnMs: p.alive ? 0 : Math.max(0, p.respawnAt - now),
-        kills: p.kills,
-        deaths: p.deaths,
-        headshots: p.headshots,
-      });
+      const flags = reloading ? ((p.flags || 0) | FLAG.RELOADING) : ((p.flags || 0) & ~FLAG.RELOADING);
+      const st =
+        (p.alive ? 1 : 0) |
+        (p.alive && now < p.invulnerableUntil ? 2 : 0) |
+        (p.laser ? 4 : 0);
+      const teamCode = p.team === "A" ? 0 : p.team === "B" ? 1 : 2;
+      const wCode = SNAPSHOT_WEAPON_CODE[p.activeWeaponId] ?? 0;
+      players.push([
+        p.id,
+        teamCode,
+        Number(p.x.toFixed(2)),
+        Number(p.y.toFixed(2)),
+        Number(p.z.toFixed(2)),
+        Number(p.yaw.toFixed(3)),
+        Number(p.pitch.toFixed(3)),
+        Number((p.mv || 0).toFixed(2)),
+        flags,
+        st,
+        wCode,
+        p.hp,
+        activeW ? activeW.mag : 0,
+        p.alive ? 0 : Math.max(0, p.respawnAt - now),
+        p.kills,
+        p.deaths,
+        p.headshots,
+      ]);
     }
     return {
       type: MSG.SNAPSHOT,
       t: now,
-      roomId: this.room.id,
-      state: this.room.state,
-      mode: this.room.mode,
-      killLimit: this.room.killLimit,
-      timeLeftSec:
+      tl:
         this.room.state === ROOM_STATE.PLAYING
           ? Math.max(0, Math.ceil((this.matchEndsAt - now) / 1000))
           : 0,
-      teamScores: { ...this.room.teamScores },
-      players,
+      ts: [this.room.teamScores.A || 0, this.room.teamScores.B || 0],
+      p: players,
     };
   }
 }

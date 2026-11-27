@@ -8,16 +8,27 @@
 
 import { buildTriangleBVH, createMapCollision } from "/js/map_collision.js";
 import { MILITARY_COLLIDERS, MILITARY_LAYOUT } from "/js/military_map_data.js";
-import { QUALITY_PRESETS } from "/js/graphics_quality.js";
+import { QUALITY_PRESETS, updateTexturesAnisotropyInPlace } from "/js/graphics_quality.js";
 import { yieldToUI } from "/js/loading_manager.js";
+import {
+  MILITARY_FOG_HEX,
+  MILITARY_SUN_FOG_HEX,
+  buildMilitaryEnvironmentGroupAsync,
+  buildMilitaryGodRaysAndDust,
+  buildMilitarySkySystemAsync,
+} from "/js/military_environment.js";
 
 // Rich weathered military tones (deep saturation without pastel washout or crushed blacks)
 const CONTAINER_PALETTE = [0x86382b, 0x47573d, 0x384e5e];
 const BARREL_PALETTE = [0x445438, 0x823426, 0x4b555d];
-// Crisp 3/4 cross-lighting from East-Northeast (~31 deg elevation) so containers, warehouses & crates show sunlit + shaded faces
-const SUN_POS = { x: 50, y: 32, z: -26 };
-const FOG_HORIZON_HEX = 0xa8b8c6;
-const FOG_SUN_HEX = 0xe4d5ba;
+// Unified Compass Convention (matches model/maps/layout_spec.py):
+//   North = -Z (Team A base, looking South +Z) | South = +Z (Team B base, looking North -Z)
+//   West  = -X (Lane A twin warehouses)        | East  = +X (Lane B container yard)
+// Pure West afternoon cross-sun (z = 0, ~34 deg elevation) guarantees 100% N-S team visual fairness!
+export const MILITARY_SUN_POS = Object.freeze({ x: -56, y: 38, z: 0 });
+const SUN_POS = MILITARY_SUN_POS;
+const FOG_HORIZON_HEX = MILITARY_FOG_HEX;
+const FOG_SUN_HEX = MILITARY_SUN_FOG_HEX;
 
 function decodeBase64ToArrayBuffer(b64) {
   const bin = atob(b64);
@@ -78,6 +89,12 @@ function sampleMilitaryPuddle(x, z) {
   if (x > -27.2 && x < -16.8 && Math.abs(Math.abs(z) - 14.0) < 7.2) return 0;
   const pField = fbm2Js(x * 0.072, z * 0.072, 4);
   return smoothstepJs(0.58, 0.68, pField);
+}
+
+function sampleMilitaryDirt(x, z) {
+  if (x > -27.2 && x < -16.8 && Math.abs(Math.abs(z) - 14.0) < 7.2) return 0;
+  const macroA = fbm2Js(x * 0.042, z * 0.042, 3);
+  return smoothstepJs(0.46, 0.72, macroA);
 }
 
 // Pre-bake world-space macro variation, puddles & convoy tire tracks into 1 single 512x512 RGBA DataTexture!
@@ -148,7 +165,7 @@ const HEIGHT_FOG_FRAG_CHUNK = `
     float milDistFog = 1.0 - exp(-milDist * (uMilFogParams.z + uMilFogParams.w * milHeightBand));
     float milFogAmt = clamp(milDistFog * milNearClear, 0.0, 0.88);
     float milSunScatter = pow(max(dot(milViewDir, uMilSunDir), 0.0), 4.5);
-    vec3 milFogCol = mix(fogColor, uMilSunFogColor, milSunScatter * 0.42);
+    vec3 milFogCol = mix(fogColor, uMilSunFogColor, milSunScatter * 0.22);
     gl_FragColor.rgb = mix(gl_FragColor.rgb, milFogCol, milFogAmt);
   #endif
   if (uMilPostGrade > 0.5) {
@@ -188,287 +205,6 @@ function applyMilitaryHeightFog(mat, fogUniforms, extraHook = null, cacheTag = "
       )
       .replace("#include <fog_fragment>", HEIGHT_FOG_FRAG_CHUNK);
     if (extraHook) extraHook(shader, renderer);
-  };
-}
-
-async function buildSkyDomeAndEnvMapAsync(renderer, THREE, yieldFn) {
-  // 512x256 sculpted volumetric sky dome (4x faster load, visually smooth with linear filtering)
-  const w = 512, h = 256;
-  const canvas = document.createElement("canvas");
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext("2d");
-  const img = ctx.createImageData(w, h);
-  const d = img.data;
-
-  const sl = Math.hypot(SUN_POS.x, SUN_POS.y, SUN_POS.z);
-  const sx = SUN_POS.x / sl, sy = SUN_POS.y / sl, sz = SUN_POS.z / sl;
-
-  for (let py = 0; py < h; py++) {
-    if (py === 128 && yieldFn) await yieldFn();
-    const v = py / (h - 1);
-    const phi = v * Math.PI;
-    const sinP = Math.sin(phi), cosP = Math.cos(phi);
-    for (let px = 0; px < w; px++) {
-      const u = px / w;
-      const theta = u * Math.PI * 2;
-      const dx = -Math.cos(theta) * sinP;
-      const dy = cosP;
-      const dz = Math.sin(theta) * sinP;
-      const idx = (py * w + px) * 4;
-
-      if (dy < -0.02) {
-        const gFade = Math.min(1, (-dy - 0.02) * 3.0);
-        d[idx] = Math.round(78 * (1 - gFade) + 28 * gFade);
-        d[idx + 1] = Math.round(74 * (1 - gFade) + 26 * gFade);
-        d[idx + 2] = Math.round(68 * (1 - gFade) + 22 * gFade);
-        d[idx + 3] = 255;
-        continue;
-      }
-
-      const sunDot = Math.max(0, dx * sx + dy * sy + dz * sz);
-      const mieGlow = Math.pow(sunDot, 4.5) * 0.30 + Math.pow(sunDot, 36.0) * 0.72;
-      const sunDisc = Math.pow(sunDot, 420.0) * 1.15;
-
-      const c1 = periodicNoise(u * 5, v * 4, 5, 19);
-      const c2 = periodicNoise(u * 12, v * 9, 12, 47);
-      const c3 = periodicNoise(u * 26, v * 18, 26, 89);
-      const cloudField = 0.50 * c1 + 0.32 * c2 + 0.18 * c3;
-      const elevFade = Math.max(0, Math.min(1, (dy - 0.03) / 0.14)) * (1 - Math.max(0, (dy - 0.78) / 0.22));
-      const cloudMask = Math.max(0, Math.min(1, (cloudField - 0.45) * 3.1)) * elevFade;
-
-      const cSun = 0.55 * periodicNoise((u + 0.014) * 5, (v - 0.012) * 4, 5, 19)
-        + 0.45 * periodicNoise((u + 0.014) * 12, (v - 0.012) * 9, 12, 47);
-      const cloudLit = Math.max(0.18, Math.min(1.0, 0.52 + (cloudField - cSun) * 3.8 + sunDot * 0.35 + dy * 0.25));
-
-      const tElev = Math.max(0, Math.min(1, dy));
-      const horizonMix = Math.pow(1 - tElev, 2.5);
-      let r = 0.21 + 0.45 * horizonMix + mieGlow * 0.46 + sunDisc;
-      let g = 0.33 + 0.39 * horizonMix + mieGlow * 0.37 + sunDisc * 0.94;
-      let b = 0.49 + 0.29 * horizonMix + mieGlow * 0.19 + sunDisc * 0.80;
-
-      const cR = 0.40 + cloudLit * 0.46 + mieGlow * 0.24;
-      const cG = 0.44 + cloudLit * 0.43 + mieGlow * 0.18;
-      const cB = 0.49 + cloudLit * 0.37 + mieGlow * 0.08;
-      r = r * (1 - cloudMask * 0.82) + cR * (cloudMask * 0.82);
-      g = g * (1 - cloudMask * 0.82) + cG * (cloudMask * 0.82);
-      b = b * (1 - cloudMask * 0.82) + cB * (cloudMask * 0.82);
-
-      d[idx] = Math.min(255, Math.round(r * 255));
-      d[idx + 1] = Math.min(255, Math.round(g * 255));
-      d[idx + 2] = Math.min(255, Math.round(b * 255));
-      d[idx + 3] = 255;
-    }
-  }
-  ctx.putImageData(img, 0, 0);
-
-  const skyTex = new THREE.CanvasTexture(canvas);
-  skyTex.encoding = THREE.sRGBEncoding || THREE.LinearEncoding;
-
-  const skyGeo = new THREE.SphereGeometry(225, 32, 16);
-  const skyMat = new THREE.MeshBasicMaterial({
-    map: skyTex,
-    side: THREE.BackSide,
-    fog: false,
-    depthWrite: false,
-  });
-  const skyMesh = new THREE.Mesh(skyGeo, skyMat);
-  skyMesh.name = "military_sky_dome";
-
-  if (yieldFn) await yieldFn();
-
-  // Slow-drifting upper wispy cloud deck
-  const cw = 256, ch = 128;
-  const cCanvas = document.createElement("canvas");
-  cCanvas.width = cw;
-  cCanvas.height = ch;
-  const cCtx = cCanvas.getContext("2d");
-  const cImg = cCtx.createImageData(cw, ch);
-  const cd = cImg.data;
-  for (let py = 0; py < ch; py++) {
-    const v = py / (ch - 1);
-    const dy = Math.cos(v * Math.PI);
-    const band = Math.max(0, Math.min(1, (dy - 0.10) / 0.18)) * Math.max(0, Math.min(1, (0.92 - dy) / 0.25));
-    for (let px = 0; px < cw; px++) {
-      const u = px / cw;
-      const idx = (py * cw + px) * 4;
-      const n = 0.58 * periodicNoise(u * 7, v * 5, 7, 311)
-        + 0.42 * periodicNoise(u * 16, v * 11, 16, 419);
-      const a = Math.max(0, Math.min(1, (n - 0.50) * 2.8)) * band;
-      cd[idx] = 236;
-      cd[idx + 1] = 232;
-      cd[idx + 2] = 224;
-      cd[idx + 3] = Math.round(a * 115);
-    }
-  }
-  cCtx.putImageData(cImg, 0, 0);
-  const driftTex = new THREE.CanvasTexture(cCanvas);
-  driftTex.wrapS = THREE.RepeatWrapping;
-  if (THREE.sRGBEncoding) driftTex.encoding = THREE.sRGBEncoding;
-  const cloudMesh = new THREE.Mesh(
-    new THREE.SphereGeometry(212, 24, 12),
-    new THREE.MeshBasicMaterial({
-      map: driftTex,
-      transparent: true,
-      opacity: 0.72,
-      side: THREE.BackSide,
-      fog: false,
-      depthWrite: false,
-    }),
-  );
-  cloudMesh.name = "military_drifting_clouds";
-
-  if (yieldFn) await yieldFn();
-
-  // Balanced PMREM IBL
-  const es = new THREE.Scene();
-  const envSphere = new THREE.Mesh(
-    new THREE.SphereGeometry(28, 28, 14),
-    new THREE.MeshBasicMaterial({ map: skyTex, side: THREE.BackSide, toneMapped: false }),
-  );
-  const sunBounce = new THREE.Mesh(
-    new THREE.SphereGeometry(3.4, 12, 8),
-    new THREE.MeshBasicMaterial({ color: new THREE.Color(2.15, 1.76, 1.32), toneMapped: false }),
-  );
-  sunBounce.position.set(SUN_POS.x * 0.4, SUN_POS.y * 0.4, SUN_POS.z * 0.4);
-  es.add(envSphere, sunBounce);
-
-  const pm = new THREE.PMREMGenerator(renderer);
-  const rt = pm.fromScene(es, 0.032);
-  pm.dispose();
-  envSphere.geometry.dispose();
-  sunBounce.geometry.dispose();
-
-  return { skyMesh, cloudMesh, envMap: rt.texture, skyTex, driftTex };
-}
-
-function buildGodRaysDustAndFlare(THREE) {
-  const rayCanvas = document.createElement("canvas");
-  rayCanvas.width = 64;
-  rayCanvas.height = 128;
-  const g = rayCanvas.getContext("2d");
-  const gr = g.createLinearGradient(0, 0, 0, 128);
-  gr.addColorStop(0.0, "rgba(255, 236, 198, 0.0)");
-  gr.addColorStop(0.20, "rgba(255, 232, 188, 0.16)");
-  gr.addColorStop(0.68, "rgba(235, 214, 178, 0.08)");
-  gr.addColorStop(1.0, "rgba(210, 196, 172, 0.0)");
-  g.fillStyle = gr;
-  g.fillRect(0, 0, 64, 128);
-  g.globalCompositeOperation = "destination-in";
-  const hr = g.createLinearGradient(0, 0, 64, 0);
-  hr.addColorStop(0.0, "rgba(0,0,0,0)");
-  hr.addColorStop(0.32, "rgba(0,0,0,0.85)");
-  hr.addColorStop(0.5, "rgba(0,0,0,1.0)");
-  hr.addColorStop(0.68, "rgba(0,0,0,0.85)");
-  hr.addColorStop(1.0, "rgba(0,0,0,0)");
-  g.fillStyle = hr;
-  g.fillRect(0, 0, 64, 128);
-
-  const rayTex = new THREE.CanvasTexture(rayCanvas);
-  const rayMat = new THREE.MeshBasicMaterial({
-    map: rayTex,
-    transparent: true,
-    opacity: 0.18,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-    fog: false,
-  });
-
-  const rayGroup = new THREE.Group();
-  rayGroup.name = "military_god_rays";
-  const shaftGroup = new THREE.Group();
-  shaftGroup.name = "military_god_ray_shafts";
-  const shaftGeo = new THREE.PlaneGeometry(13, 56);
-  const sunDir = new THREE.Vector3(SUN_POS.x, SUN_POS.y, SUN_POS.z).normalize();
-  const alignQ = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), sunDir);
-
-  const shaftSpecs = [
-    [-10, 18, -12, 0.2],
-    [4, 20, -2, 0.85],
-    [16, 19, 8, -0.45],
-    [-4, 21, 16, 1.1],
-  ];
-  for (const [sx, sy, sz, yawOff] of shaftSpecs) {
-    const m = new THREE.Mesh(shaftGeo, rayMat);
-    m.position.set(sx, sy, sz);
-    m.quaternion.copy(alignQ);
-    m.rotateY(yawOff);
-    m.renderOrder = 4;
-    shaftGroup.add(m);
-  }
-  rayGroup.add(shaftGroup);
-
-  // Subtle occluded sun glare / lens flare corona along sun direction
-  const flareCanvas = document.createElement("canvas");
-  flareCanvas.width = flareCanvas.height = 128;
-  const fg = flareCanvas.getContext("2d");
-  const fGrad = fg.createRadialGradient(64, 64, 1, 64, 64, 62);
-  fGrad.addColorStop(0.0, "rgba(255, 248, 226, 0.72)");
-  fGrad.addColorStop(0.18, "rgba(255, 224, 168, 0.36)");
-  fGrad.addColorStop(0.50, "rgba(255, 198, 130, 0.10)");
-  fGrad.addColorStop(1.0, "rgba(255, 180, 110, 0.0)");
-  fg.fillStyle = fGrad;
-  fg.fillRect(0, 0, 128, 128);
-  const flareTex = new THREE.CanvasTexture(flareCanvas);
-  const sunFlare = new THREE.Sprite(
-    new THREE.SpriteMaterial({
-      map: flareTex,
-      transparent: true,
-      opacity: 0.65,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      depthTest: true,
-      fog: false,
-    }),
-  );
-  sunFlare.position.copy(sunDir).multiplyScalar(202);
-  sunFlare.scale.set(42, 42, 1);
-  sunFlare.name = "military_sun_flare";
-  rayGroup.add(sunFlare);
-
-  // Wind-swept airborne dust motes (160 particles, skipped cleanly when dustEnabled=false)
-  const N = 160;
-  const posArr = new Float32Array(N * 3);
-  const baseArr = new Float32Array(N * 3);
-  let s = 918273;
-  const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
-  for (let i = 0; i < N; i++) {
-    const x = (rnd() - 0.5) * 64;
-    const y = 0.35 + rnd() * 7.5;
-    const z = (rnd() - 0.5) * 80;
-    posArr[i * 3] = baseArr[i * 3] = x;
-    posArr[i * 3 + 1] = baseArr[i * 3 + 1] = y;
-    posArr[i * 3 + 2] = baseArr[i * 3 + 2] = z;
-  }
-  const dustGeo = new THREE.BufferGeometry();
-  dustGeo.setAttribute("position", new THREE.BufferAttribute(posArr, 3));
-  const dustMat = new THREE.PointsMaterial({
-    color: 0xdccbb0,
-    size: 0.075,
-    transparent: true,
-    opacity: 0.38,
-    depthWrite: false,
-  });
-  const dustPoints = new THREE.Points(dustGeo, dustMat);
-  dustPoints.frustumCulled = false;
-  dustPoints.name = "military_dust_motes";
-
-  return {
-    rayGroup,
-    shaftGroup,
-    sunFlare,
-    dustPoints,
-    update(tSec) {
-      if (!dustPoints.visible) return;
-      const p = dustGeo.attributes.position.array;
-      for (let i = 0; i < N; i++) {
-        const driftX = ((baseArr[i * 3] + tSec * 0.55 + 32) % 64 + 64) % 64 - 32;
-        p[i * 3] = driftX + Math.sin(tSec * 0.65 + i) * 0.35;
-        p[i * 3 + 1] = baseArr[i * 3 + 1] + Math.cos(tSec * 0.42 + i * 0.7) * 0.22;
-      }
-      dustGeo.attributes.position.needsUpdate = true;
-    },
   };
 }
 
@@ -540,7 +276,7 @@ async function buildConcreteGroundTexturesAsync(THREE, maxAniso, yieldFn) {
       d[i * 4 + 3] = 255;
     }
     g.putImageData(im, 0, 0);
-  }, 16, 20, true);
+  }, 5, 7, true);
   if (yieldFn) await yieldFn();
 
   const normal = makeTex((g, w, h) => {
@@ -560,7 +296,7 @@ async function buildConcreteGroundTexturesAsync(THREE, maxAniso, yieldFn) {
       }
     }
     g.putImageData(im, 0, 0);
-  }, 16, 20, false);
+  }, 5, 7, false);
   if (yieldFn) await yieldFn();
 
   const roughness = makeTex((g, w, h) => {
@@ -575,7 +311,7 @@ async function buildConcreteGroundTexturesAsync(THREE, maxAniso, yieldFn) {
       d[i * 4 + 3] = 255;
     }
     g.putImageData(im, 0, 0);
-  }, 16, 20, false);
+  }, 5, 7, false);
   if (yieldFn) await yieldFn();
 
   const worldMask = await buildWorldGroundMaskAsync(THREE, yieldFn);
@@ -860,7 +596,8 @@ function buildTacticalClutter(THREE, layout, envMap, fogUniforms, windUniform, w
     [13.4, 0, 21.8, -0.52], [4.1, 4.0, -0.9, 0.30],
   ];
   const ammoInst = new THREE.InstancedMesh(ammoGeo, ammoMat, ammoSpots.length);
-  ammoInst.castShadow = true;
+  // Small ground props rely on 2-stage contact shadows -> castShadow=false trims shadow-pass work
+  ammoInst.castShadow = false;
   ammoInst.receiveShadow = true;
   ammoInst.matrixAutoUpdate = false;
   ammoInst.name = "military_ammo_crates";
@@ -918,7 +655,7 @@ function buildTacticalClutter(THREE, layout, envMap, fogUniforms, windUniform, w
     [33.8, 0, -16.0, -1.57, 0.02], [-33.8, 0, 10.0, 1.57, -0.03],
   ];
   const signInst = new THREE.InstancedMesh(signGeo, signMat, signSpots.length);
-  signInst.castShadow = true;
+  signInst.castShadow = false;
   signInst.receiveShadow = true;
   signInst.matrixAutoUpdate = false;
   signInst.name = "military_hazard_signs";
@@ -1005,528 +742,6 @@ function buildTacticalClutter(THREE, layout, envMap, fogUniforms, windUniform, w
 
   clutterGroup.add(poleMesh, flagMesh);
   return clutterGroup;
-}
-
-async function buildBackgroundTreesAndMountainsAsync(THREE, layout, envMap, fogUniforms, windUniform, windScaleUniform, yieldFn) {
-  const bgGroup = new THREE.Group();
-  bgGroup.name = "military_background_horizon";
-  bgGroup.matrixAutoUpdate = false;
-  const { maxX, maxZ } = layout.bounds;
-
-  // 1. Multi-layer atmospheric mountain ridges
-  const makeRidgeRing = (rTop, rBot, height, baseY, segs, hSegs, peakBias, sunRgb, shadeRgb, valleyRgb, seedShift) => {
-    const geo = new THREE.CylinderGeometry(rTop, rBot, height, segs, hSegs, true);
-    const pos = geo.attributes.position;
-    for (let i = 0; i < pos.count; i++) {
-      const y = pos.getY(i);
-      const x = pos.getX(i);
-      const z = pos.getZ(i);
-      const ang = Math.atan2(z, x);
-      const tH = Math.max(0, (y + height * 0.5) / height);
-      if (tH > 0.10) {
-        const heroPeak = Math.exp(-Math.pow(((ang - 1.72 + Math.PI * 3) % (Math.PI * 2)) - Math.PI, 2) / 0.30) * peakBias;
-        const heroRight = Math.exp(-Math.pow(((ang - 0.94 + Math.PI * 3) % (Math.PI * 2)) - Math.PI, 2) / 0.22) * (peakBias * 0.74);
-        const ridge =
-          Math.sin(ang * 3 + 0.6 + seedShift) * 7.8 +
-          Math.abs(Math.sin(ang * 6 + 1.1 + seedShift)) * 6.8 +
-          Math.cos(ang * 13 + seedShift) * 3.1 +
-          Math.sin(ang * 23 + seedShift * 2.1) * 1.35 +
-          heroPeak +
-          heroRight;
-        pos.setY(i, Math.max(-height * 0.45, y + ridge * tH));
-      }
-    }
-    geo.computeVertexNormals();
-    const nrm = geo.attributes.normal;
-    const cols = new Float32Array(pos.count * 3);
-    const sLen = Math.hypot(SUN_POS.x, SUN_POS.y, SUN_POS.z) || 1;
-    const sx = SUN_POS.x / sLen, sy = SUN_POS.y / sLen, sz = SUN_POS.z / sLen;
-    for (let i = 0; i < pos.count; i++) {
-      const tH = Math.max(0, Math.min(1, (pos.getY(i) + height * 0.5) / (height * 1.32)));
-      const nx = -nrm.getX(i), ny = Math.abs(nrm.getY(i)), nz = -nrm.getZ(i);
-      const sunDot = Math.max(0, Math.min(1, nx * sx + ny * sy + nz * sz));
-      const baseMix = Math.pow(1 - tH, 1.45) * 0.62;
-      const cr = (shadeRgb[0] + (sunRgb[0] - shadeRgb[0]) * sunDot) * (1 - baseMix) + valleyRgb[0] * baseMix;
-      const cg = (shadeRgb[1] + (sunRgb[1] - shadeRgb[1]) * sunDot) * (1 - baseMix) + valleyRgb[1] * baseMix;
-      const cb = (shadeRgb[2] + (sunRgb[2] - shadeRgb[2]) * sunDot) * (1 - baseMix) + valleyRgb[2] * baseMix;
-      cols[i * 3] = cr; cols[i * 3 + 1] = cg; cols[i * 3 + 2] = cb;
-    }
-    geo.setAttribute("color", new THREE.BufferAttribute(cols, 3));
-    const mat = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide });
-    applyMilitaryHeightFog(mat, fogUniforms, null, "mil_hfog_mountain");
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.position.y = baseY;
-    mesh.matrixAutoUpdate = false;
-    mesh.updateMatrix();
-    return mesh;
-  };
-  const nearRidge = makeRidgeRing(130, 162, 46, 15, 76, 5, 22.0, [0.46, 0.44, 0.37], [0.22, 0.27, 0.33], [0.54, 0.61, 0.68], 0.0);
-  const farRidge = makeRidgeRing(166, 200, 66, 23, 64, 4, 29.0, [0.52, 0.56, 0.62], [0.36, 0.43, 0.52], [0.64, 0.70, 0.76], 1.7);
-  bgGroup.add(nearRidge, farRidge);
-
-  const mergeStaticParts = (parts, withColor = false) => {
-    let totalV = 0, totalI = 0;
-    for (const g of parts) {
-      totalV += g.attributes.position.count;
-      totalI += g.index.count;
-    }
-    const pArr = new Float32Array(totalV * 3);
-    const nArr = new Float32Array(totalV * 3);
-    const uArr = new Float32Array(totalV * 2);
-    const cArr = withColor ? new Float32Array(totalV * 3) : null;
-    const iArr = new Uint16Array(totalI);
-    let vo = 0, io = 0;
-    for (const g of parts) {
-      pArr.set(g.attributes.position.array, vo * 3);
-      nArr.set(g.attributes.normal.array, vo * 3);
-      uArr.set(g.attributes.uv.array, vo * 2);
-      if (withColor && g.attributes.color) cArr.set(g.attributes.color.array, vo * 3);
-      const idx = g.index.array;
-      for (let k = 0; k < idx.length; k++) iArr[io + k] = idx[k] + vo;
-      vo += g.attributes.position.count;
-      io += idx.length;
-      g.dispose();
-    }
-    const out = new THREE.BufferGeometry();
-    out.setAttribute("position", new THREE.BufferAttribute(pArr, 3));
-    out.setAttribute("normal", new THREE.BufferAttribute(nArr, 3));
-    out.setAttribute("uv", new THREE.BufferAttribute(uArr, 2));
-    if (withColor) out.setAttribute("color", new THREE.BufferAttribute(cArr, 3));
-    out.setIndex(new THREE.BufferAttribute(iArr, 1));
-    return out;
-  };
-
-  const fixAlphaBleed = (ctx, w, h, fillR, fillG, fillB) => {
-    const img = ctx.getImageData(0, 0, w, h);
-    const d = img.data;
-    for (let i = 0; i < w * h; i++) {
-      if (d[i * 4 + 3] < 20) {
-        d[i * 4] = fillR;
-        d[i * 4 + 1] = fillG;
-        d[i * 4 + 2] = fillB;
-      }
-    }
-    ctx.putImageData(img, 0, 0);
-  };
-
-  const buildBroadleafTex = () => {
-    const c = document.createElement("canvas");
-    c.width = c.height = 256;
-    const g = c.getContext("2d");
-    g.clearRect(0, 0, 256, 256);
-    let ls = 882211;
-    const lrnd = () => ((ls = (ls * 16807) % 2147483647) / 2147483647);
-    g.strokeStyle = "#3c3326";
-    g.lineWidth = 3.2;
-    for (let t = 0; t < 7; t++) {
-      const ang = (t / 7) * Math.PI * 2 + (lrnd() - 0.5) * 0.4;
-      g.beginPath();
-      g.moveTo(128, 134);
-      g.lineTo(128 + Math.cos(ang) * (54 + lrnd() * 38), 128 + Math.sin(ang) * (54 + lrnd() * 38));
-      g.stroke();
-    }
-    const shades = ["#38422a", "#434e31", "#4e5836", "#5a603a", "#67643d", "#746840", "#303a24"];
-    for (let k = 0; k < 245; k++) {
-      const rDist = Math.pow(lrnd(), 0.62) * 96;
-      const theta = lrnd() * Math.PI * 2;
-      const lx = 128 + Math.cos(theta) * rDist;
-      const ly = 128 + Math.sin(theta) * rDist;
-      const wLeaf = 7.5 + lrnd() * 8.5;
-      const hLeaf = 3.2 + lrnd() * 3.8;
-      const rot = theta + (lrnd() - 0.5) * 1.4;
-      const isOuterTop = ly < 118 && rDist > 34;
-      const idx = isOuterTop ? Math.min(5, Math.floor(2 + lrnd() * 4)) : Math.floor(lrnd() * 5);
-      g.save();
-      g.translate(lx, ly);
-      g.rotate(rot);
-      g.fillStyle = shades[idx];
-      g.beginPath();
-      g.moveTo(-wLeaf, 0);
-      g.quadraticCurveTo(0, -hLeaf * 1.35, wLeaf, 0);
-      g.quadraticCurveTo(0, hLeaf * 1.35, -wLeaf, 0);
-      g.fill();
-      g.restore();
-    }
-    fixAlphaBleed(g, 256, 256, 66, 76, 48);
-    const t = new THREE.CanvasTexture(c);
-    if (THREE.sRGBEncoding) t.encoding = THREE.sRGBEncoding;
-    return t;
-  };
-
-  const buildPineTex = () => {
-    const c = document.createElement("canvas");
-    c.width = c.height = 256;
-    const g = c.getContext("2d");
-    g.clearRect(0, 0, 256, 256);
-    let ps = 553319;
-    const prnd = () => ((ps = (ps * 16807) % 2147483647) / 2147483647);
-    const pineCols = ["#243322", "#2d3e29", "#374930", "#425338", "#1e2b1d", "#4c583c"];
-    for (let b = 0; b < 9; b++) {
-      const bAng = (b / 9) * Math.PI * 2 + (prnd() - 0.5) * 0.28;
-      const bLen = 78 + prnd() * 34;
-      g.strokeStyle = "#372d22";
-      g.lineWidth = 2.6;
-      g.beginPath();
-      g.moveTo(128, 128);
-      g.lineTo(128 + Math.cos(bAng) * bLen, 128 + Math.sin(bAng) * bLen);
-      g.stroke();
-      for (let n = 0; n < 38; n++) {
-        const frac = 0.14 + (n / 38) * 0.86;
-        const bx = 128 + Math.cos(bAng) * bLen * frac;
-        const by = 128 + Math.sin(bAng) * bLen * frac;
-        const side = n % 2 === 0 ? 1 : -1;
-        const nAng = bAng + side * (0.48 + prnd() * 0.55);
-        const nLen = (14 + prnd() * 14) * (1.15 - frac * 0.45);
-        g.strokeStyle = pineCols[Math.floor(prnd() * pineCols.length)];
-        g.lineWidth = 2.4 + prnd() * 1.4;
-        g.beginPath();
-        g.moveTo(bx, by);
-        g.lineTo(bx + Math.cos(nAng) * nLen, by + Math.sin(nAng) * nLen);
-        g.stroke();
-      }
-    }
-    fixAlphaBleed(g, 256, 256, 44, 58, 39);
-    const t = new THREE.CanvasTexture(c);
-    if (THREE.sRGBEncoding) t.encoding = THREE.sRGBEncoding;
-    return t;
-  };
-
-  let s = 334455;
-  const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
-  const groves = [
-    [-46, -42, 10, 12, 7],
-    [-48, -14, 11, 14, 8],
-    [-46, 20, 10, 14, 7],
-    [-44, 48, 11, 10, 6],
-    [-16, -56, 12, 8, 7],
-    [18, -56, 13, 9, 7],
-    [-18, 56, 13, 9, 7],
-    [16, 56, 13, 9, 7],
-    [46, -34, 11, 13, 7],
-    [48, 2, 11, 14, 7],
-    [46, 36, 11, 12, 7],
-  ];
-
-  const broadleafList = [];
-  const pineList = [];
-  const deadList = [];
-  const bushList = [];
-
-  for (const [gx, gz, rx, rz, cnt] of groves) {
-    for (let k = 0; k < cnt; k++) {
-      let x = gx + (rnd() - 0.5) * rx * 2;
-      let z = gz + (rnd() - 0.5) * rz * 2;
-      if (Math.abs(x) < maxX + 3.2 && Math.abs(z) < maxZ + 3.2) {
-        if (Math.abs(x) / maxX > Math.abs(z) / maxZ) x = Math.sign(x || 1) * (maxX + 3.8 + rnd() * 5);
-        else z = Math.sign(z || 1) * (maxZ + 3.8 + rnd() * 5);
-      }
-      const dist = Math.hypot(x, z);
-      const pick = rnd();
-      if (pick < 0.50) {
-        broadleafList.push({ x, z, dist, trunkH: 2.6 + rnd() * 2.6, r: 2.4 + rnd() * 1.9, ry: rnd() * Math.PI * 2, tint: Math.floor(rnd() * 5) });
-      } else if (pick < 0.86) {
-        pineList.push({ x, z, dist, h: 9.0 + rnd() * 6.5, r: 2.1 + rnd() * 1.3, ry: rnd() * Math.PI * 2, tint: Math.floor(rnd() * 4) });
-      } else {
-        deadList.push({ x, z, dist, h: 6.2 + rnd() * 4.5, r: 1.6 + rnd() * 1.0, ry: rnd() * Math.PI * 2 });
-      }
-    }
-    for (let b = 0; b < 2; b++) {
-      let bx = gx * 0.90 + (rnd() - 0.5) * rx * 1.7;
-      let bz = gz * 0.90 + (rnd() - 0.5) * rz * 1.7;
-      if (Math.abs(bx) < maxX + 2.4 && Math.abs(bz) < maxZ + 2.4) {
-        if (Math.abs(bx) / maxX > Math.abs(bz) / maxZ) bx = Math.sign(bx || 1) * (maxX + 2.8 + rnd() * 2.5);
-        else bz = Math.sign(bz || 1) * (maxZ + 2.8 + rnd() * 2.5);
-      }
-      bushList.push({ x: bx, z: bz, s: 1.3 + rnd() * 1.3, ry: rnd() * Math.PI * 2, tint: Math.floor(rnd() * 5) });
-    }
-  }
-
-  // Sort nearest-first so treeDrawDistance cleanly adjusts inst.count without reallocating GPU buffers!
-  broadleafList.sort((a, b) => a.dist - b.dist);
-  pineList.sort((a, b) => a.dist - b.dist);
-
-  const trunkMat = new THREE.MeshStandardMaterial({
-    color: 0x3b2f23, roughness: 0.94, metalness: 0.0, envMap, envMapIntensity: 0.25,
-  });
-  applyMilitaryHeightFog(trunkMat, fogUniforms, null, "mil_hfog_std");
-
-  const broadleafTex = buildBroadleafTex();
-  if (yieldFn) await yieldFn();
-  const pineTex = buildPineTex();
-  if (yieldFn) await yieldFn();
-
-  const makeFoliageMat = (mapTex) => {
-    const m = new THREE.MeshStandardMaterial({
-      map: mapTex,
-      vertexColors: true,
-      roughness: 0.86,
-      metalness: 0.0,
-      envMap,
-      envMapIntensity: 0.58,
-      alphaTest: 0.44,
-      side: THREE.DoubleSide,
-    });
-    // Share ONE compiled foliage shader program across broadleaf, pine & bushes!
-    applyMilitaryHeightFog(
-      m,
-      fogUniforms,
-      (shader) => {
-        shader.uniforms.uWindTime = windUniform;
-        shader.uniforms.uWindScale = windScaleUniform;
-        shader.vertexShader = shader.vertexShader
-          .replace("#include <common>", "#include <common>\nuniform float uWindTime;\nuniform float uWindScale;")
-          .replace(
-            "#include <begin_vertex>",
-            "#include <begin_vertex>\nfloat wAmp = max(0.0, transformed.y - 0.25) * 0.045 * uWindScale;\ntransformed.x += sin(uWindTime * 1.55 + transformed.y * 2.4 + transformed.z * 2.0) * wAmp;\ntransformed.z += cos(uWindTime * 1.20 + transformed.x * 2.2) * wAmp * 0.55;",
-          );
-      },
-      "mil_hfog_foliage",
-    );
-    return m;
-  };
-
-  const dummy = new THREE.Object3D();
-  const col = new THREE.Color();
-  const treeControls = {
-    farRidge,
-    blTrunkInst: null,
-    blCrownInst: null,
-    blDists: broadleafList.map((t) => t.dist),
-    pineTrunkInst: null,
-    pineCrownInst: null,
-    pineDists: pineList.map((t) => t.dist),
-    deadInst: null,
-    bushInst: null,
-  };
-
-  // ---- Species 1: Broadleaf / Deciduous Trees (outer perimeter -> castShadow=false saves ~3.5k alpha shadow tris!) ----
-  if (broadleafList.length > 0) {
-    const stem = new THREE.CylinderGeometry(0.14, 0.30, 1.0, 5); stem.translate(0, 0.50, 0);
-    const b1 = new THREE.CylinderGeometry(0.06, 0.12, 0.55, 4); b1.rotateZ(0.62); b1.translate(-0.18, 0.92, 0.06);
-    const b2 = new THREE.CylinderGeometry(0.06, 0.12, 0.55, 4); b2.rotateZ(-0.56); b2.rotateY(2.1); b2.translate(0.16, 0.94, -0.08);
-    const b3 = new THREE.CylinderGeometry(0.05, 0.10, 0.48, 4); b3.rotateX(0.55); b3.translate(0.03, 0.96, 0.15);
-    const blTrunkGeo = mergeStaticParts([stem, b1, b2, b3], false);
-    const blTrunkInst = new THREE.InstancedMesh(blTrunkGeo, trunkMat, broadleafList.length);
-    blTrunkInst.castShadow = false;
-    blTrunkInst.matrixAutoUpdate = false;
-
-    const cards = [];
-    let cs = 774411;
-    const crnd = () => ((cs = (cs * 16807) % 2147483647) / 2147483647);
-    const lobes = [[0, 0.95, 0, 1.0], [-0.45, 0.65, 0.30, 0.72], [0.48, 0.72, -0.26, 0.75]];
-    for (let cIdx = 0; cIdx < 32; cIdx++) {
-      const lobe = lobes[cIdx % lobes.length];
-      const phi = Math.acos(1 - 2 * ((cIdx + 0.5) / 32));
-      const theta = Math.PI * (1 + Math.sqrt(5)) * cIdx + crnd() * 0.45;
-      const rad = (0.34 + crnd() * 0.68) * lobe[3];
-      const ox = lobe[0] + Math.sin(phi) * Math.cos(theta) * rad;
-      const oy = lobe[1] + Math.cos(phi) * rad * 0.78;
-      const oz = lobe[2] + Math.sin(phi) * Math.sin(theta) * rad;
-      const cardSz = 0.88 + crnd() * 0.44;
-      const card = new THREE.PlaneGeometry(cardSz, cardSz);
-      card.rotateX((crnd() - 0.5) * 1.5);
-      card.rotateY(theta + (crnd() - 0.5) * 1.6);
-      card.rotateZ((crnd() - 0.5) * 1.3);
-      card.translate(ox, oy, oz);
-
-      const cp = card.attributes.position;
-      const cn = card.attributes.normal;
-      const vc = new Float32Array(cp.count * 3);
-      for (let vi = 0; vi < cp.count; vi++) {
-        const vx = cp.getX(vi), vy = cp.getY(vi) - 0.85, vz = cp.getZ(vi);
-        const distC = Math.hypot(vx, vy, vz);
-        const len = distC || 1;
-        const nx = (vx / len) * 0.82;
-        const ny = (vy / len) * 0.68 + 0.38;
-        const nz = (vz / len) * 0.82;
-        const nLen = Math.hypot(nx, ny, nz) || 1;
-        cn.setXYZ(vi, nx / nLen, ny / nLen, nz / nLen);
-        const aoRad = Math.max(0.0, Math.min(1.0, (distC - 0.28) / 0.92));
-        const aoH = Math.max(0.0, Math.min(1.0, (cp.getY(vi) - 0.15) / 1.45));
-        const ao = 0.48 + 0.34 * aoRad + 0.24 * aoH;
-        vc[vi * 3] = ao;
-        vc[vi * 3 + 1] = ao * (0.97 + 0.03 * aoH);
-        vc[vi * 3 + 2] = ao * 0.92;
-      }
-      card.setAttribute("color", new THREE.BufferAttribute(vc, 3));
-      cards.push(card);
-    }
-    const blCrownGeo = mergeStaticParts(cards, true);
-    const blCrownMat = makeFoliageMat(broadleafTex);
-    const blCrownInst = new THREE.InstancedMesh(blCrownGeo, blCrownMat, broadleafList.length);
-    blCrownInst.castShadow = false;
-    blCrownInst.receiveShadow = false;
-    blCrownInst.matrixAutoUpdate = false;
-
-    const blPalette = [0xbdc29e, 0xb0b896, 0xc9bd94, 0xa5b090, 0xc2ae84];
-    broadleafList.forEach((tr, idx) => {
-      dummy.position.set(tr.x, 0, tr.z);
-      dummy.rotation.set(0, tr.ry, 0);
-      dummy.scale.set(tr.r * 0.55, tr.trunkH, tr.r * 0.55);
-      dummy.updateMatrix();
-      blTrunkInst.setMatrixAt(idx, dummy.matrix);
-
-      dummy.position.set(tr.x, tr.trunkH * 0.82, tr.z);
-      dummy.rotation.set(0, tr.ry, 0);
-      dummy.scale.set(tr.r, tr.r * (0.96 + (idx % 3) * 0.10), tr.r);
-      dummy.updateMatrix();
-      blCrownInst.setMatrixAt(idx, dummy.matrix);
-      col.setHex(blPalette[tr.tint]);
-      blCrownInst.setColorAt(idx, col);
-    });
-    blTrunkInst.instanceMatrix.needsUpdate = true; blTrunkInst.updateMatrix();
-    blCrownInst.instanceMatrix.needsUpdate = true; blCrownInst.updateMatrix();
-    if (blCrownInst.instanceColor) blCrownInst.instanceColor.needsUpdate = true;
-    bgGroup.add(blTrunkInst, blCrownInst);
-    treeControls.blTrunkInst = blTrunkInst;
-    treeControls.blCrownInst = blCrownInst;
-  }
-
-  // ---- Species 2: Conifer / Pine Trees ----
-  if (pineList.length > 0) {
-    const pStem = new THREE.CylinderGeometry(0.05, 0.24, 0.92, 5); pStem.translate(0, 0.46, 0);
-    const pineTrunkInst = new THREE.InstancedMesh(pStem, trunkMat, pineList.length);
-    pineTrunkInst.castShadow = false;
-    pineTrunkInst.matrixAutoUpdate = false;
-
-    const pCards = [];
-    let ps = 661188;
-    const prnd = () => ((ps = (ps * 16807) % 2147483647) / 2147483647);
-    const tiers = [
-      [0.26, 0.85, 7, 1.05],
-      [0.46, 0.68, 6, 0.92],
-      [0.65, 0.48, 5, 0.78],
-      [0.82, 0.28, 4, 0.62],
-      [0.95, 0.08, 2, 0.48],
-    ];
-    for (const [ty, rad, cnt, sz] of tiers) {
-      for (let k = 0; k < cnt; k++) {
-        const ang = (k / cnt) * Math.PI * 2 + ty * 4.5 + (prnd() - 0.5) * 0.35;
-        const card = new THREE.PlaneGeometry(sz, sz);
-        card.rotateX(-0.55 + (prnd() - 0.5) * 0.35);
-        card.rotateY(ang);
-        card.translate(Math.cos(ang) * rad * 0.55, ty, Math.sin(ang) * rad * 0.55);
-        const cp = card.attributes.position;
-        const cn = card.attributes.normal;
-        const vc = new Float32Array(cp.count * 3);
-        for (let vi = 0; vi < cp.count; vi++) {
-          const vx = cp.getX(vi), vy = cp.getY(vi), vz = cp.getZ(vi);
-          const rHoriz = Math.hypot(vx, vz);
-          const len = Math.hypot(vx, 0.55, vz) || 1;
-          cn.setXYZ(vi, vx / len, 0.55 / len, vz / len);
-          const ao = 0.46 + 0.32 * Math.min(1, rHoriz / (rad + 0.25)) + 0.28 * vy;
-          vc[vi * 3] = ao * 0.94;
-          vc[vi * 3 + 1] = ao;
-          vc[vi * 3 + 2] = ao * 0.92;
-        }
-        card.setAttribute("color", new THREE.BufferAttribute(vc, 3));
-        pCards.push(card);
-      }
-    }
-    const pineCrownGeo = mergeStaticParts(pCards, true);
-    const pineCrownMat = makeFoliageMat(pineTex);
-    const pineCrownInst = new THREE.InstancedMesh(pineCrownGeo, pineCrownMat, pineList.length);
-    pineCrownInst.castShadow = false;
-    pineCrownInst.receiveShadow = false;
-    pineCrownInst.matrixAutoUpdate = false;
-
-    const pinePalette = [0xa2b398, 0x94a68d, 0xabb89c, 0x899a82];
-    pineList.forEach((tr, idx) => {
-      dummy.position.set(tr.x, 0, tr.z);
-      dummy.rotation.set(0, tr.ry, 0);
-      dummy.scale.set(tr.r * 0.5, tr.h, tr.r * 0.5);
-      dummy.updateMatrix();
-      pineTrunkInst.setMatrixAt(idx, dummy.matrix);
-
-      dummy.position.set(tr.x, 0, tr.z);
-      dummy.rotation.set(0, tr.ry, 0);
-      dummy.scale.set(tr.r, tr.h, tr.r);
-      dummy.updateMatrix();
-      pineCrownInst.setMatrixAt(idx, dummy.matrix);
-      col.setHex(pinePalette[tr.tint]);
-      pineCrownInst.setColorAt(idx, col);
-    });
-    pineTrunkInst.instanceMatrix.needsUpdate = true; pineTrunkInst.updateMatrix();
-    pineCrownInst.instanceMatrix.needsUpdate = true; pineCrownInst.updateMatrix();
-    if (pineCrownInst.instanceColor) pineCrownInst.instanceColor.needsUpdate = true;
-    bgGroup.add(pineTrunkInst, pineCrownInst);
-    treeControls.pineTrunkInst = pineTrunkInst;
-    treeControls.pineCrownInst = pineCrownInst;
-  }
-
-  // ---- Species 3: Weathered Dead / Dry Snag Trees + Low Scrub Bushes ----
-  if (deadList.length > 0) {
-    const dStem = new THREE.CylinderGeometry(0.08, 0.26, 0.85, 5); dStem.translate(0, 0.425, 0);
-    const db1 = new THREE.CylinderGeometry(0.03, 0.09, 0.48, 4); db1.rotateZ(0.75); db1.translate(-0.18, 0.72, 0.04);
-    const db2 = new THREE.CylinderGeometry(0.025, 0.08, 0.45, 4); db2.rotateZ(-0.68); db2.rotateY(1.4); db2.translate(0.16, 0.78, -0.06);
-    const db3 = new THREE.CylinderGeometry(0.02, 0.06, 0.36, 4); db3.rotateX(0.70); db3.translate(0.02, 0.86, 0.14);
-    const deadGeo = mergeStaticParts([dStem, db1, db2, db3], false);
-    const deadMat = new THREE.MeshStandardMaterial({
-      color: 0x5c5347, roughness: 0.95, metalness: 0.0, envMap, envMapIntensity: 0.25,
-    });
-    applyMilitaryHeightFog(deadMat, fogUniforms, null, "mil_hfog_std");
-    const deadInst = new THREE.InstancedMesh(deadGeo, deadMat, deadList.length);
-    deadInst.castShadow = false;
-    deadInst.matrixAutoUpdate = false;
-    deadList.forEach((tr, idx) => {
-      dummy.position.set(tr.x, 0, tr.z);
-      dummy.rotation.set((rnd() - 0.5) * 0.08, tr.ry, (rnd() - 0.5) * 0.08);
-      dummy.scale.set(tr.r * 0.65, tr.h, tr.r * 0.65);
-      dummy.updateMatrix();
-      deadInst.setMatrixAt(idx, dummy.matrix);
-    });
-    deadInst.instanceMatrix.needsUpdate = true; deadInst.updateMatrix();
-    bgGroup.add(deadInst);
-    treeControls.deadInst = deadInst;
-  }
-
-  if (bushList.length > 0) {
-    const bCards = [];
-    let bs = 992233;
-    const brnd = () => ((bs = (bs * 16807) % 2147483647) / 2147483647);
-    for (let k = 0; k < 12; k++) {
-      const ang = (k / 12) * Math.PI * 2 + brnd() * 0.4;
-      const rad = 0.22 + brnd() * 0.38;
-      const c = new THREE.PlaneGeometry(0.75 + brnd() * 0.25, 0.70 + brnd() * 0.22);
-      c.rotateX((brnd() - 0.5) * 1.1);
-      c.rotateY(ang + (brnd() - 0.5) * 1.2);
-      c.translate(Math.cos(ang) * rad, 0.36 + brnd() * 0.28, Math.sin(ang) * rad);
-      const cp = c.attributes.position;
-      const cn = c.attributes.normal;
-      const vc = new Float32Array(cp.count * 3);
-      for (let vi = 0; vi < cp.count; vi++) {
-        const vy = cp.getY(vi);
-        cn.setXYZ(vi, cp.getX(vi) * 0.45, 0.88, cp.getZ(vi) * 0.45);
-        const ao = 0.42 + 0.56 * Math.max(0, Math.min(1, vy / 0.85));
-        vc[vi * 3] = ao; vc[vi * 3 + 1] = ao * 0.96; vc[vi * 3 + 2] = ao * 0.88;
-      }
-      c.setAttribute("color", new THREE.BufferAttribute(vc, 3));
-      bCards.push(c);
-    }
-    const bushGeo = mergeStaticParts(bCards, true);
-    const bushMat = makeFoliageMat(broadleafTex);
-    const bushInst = new THREE.InstancedMesh(bushGeo, bushMat, bushList.length);
-    bushInst.castShadow = false;
-    bushInst.receiveShadow = false;
-    bushInst.matrixAutoUpdate = false;
-    const bushPal = [0x8b916c, 0x7d8460, 0x9b8e66, 0x6f7a58, 0x8d835c];
-    bushList.forEach((b, idx) => {
-      dummy.position.set(b.x, 0, b.z);
-      dummy.rotation.set(0, b.ry, 0);
-      dummy.scale.set(b.s * 1.15, b.s * 0.85, b.s * 1.15);
-      dummy.updateMatrix();
-      bushInst.setMatrixAt(idx, dummy.matrix);
-      col.setHex(bushPal[b.tint]);
-      bushInst.setColorAt(idx, col);
-    });
-    bushInst.instanceMatrix.needsUpdate = true; bushInst.updateMatrix();
-    if (bushInst.instanceColor) bushInst.instanceColor.needsUpdate = true;
-    bgGroup.add(bushInst);
-    treeControls.bushInst = bushInst;
-  }
-
-  bgGroup.updateMatrix();
-  return { bgGroup, treeControls };
 }
 
 function buildContactShadows(THREE, layout) {
@@ -1679,8 +894,8 @@ export function createMilitaryMapLoader({ renderer, THREE }) {
     if (!concreteTexCache) concreteTexCache = await buildConcreteGroundTexturesAsync(THREE, startAniso, stepYield);
     await stepYield();
 
-    emit(0.18, "Dựng bầu trời & bản đồ ánh sáng PMREM...");
-    if (!skyEnvCache) skyEnvCache = await buildSkyDomeAndEnvMapAsync(renderer, THREE, stepYield);
+    emit(0.18, "Dựng bầu trời tán xạ khí quyển & bản đồ ánh sáng PMREM...");
+    if (!skyEnvCache) skyEnvCache = await buildMilitarySkySystemAsync(renderer, THREE, SUN_POS, stepYield);
     await stepYield();
 
     const assetNames = [
@@ -1718,9 +933,9 @@ export function createMilitaryMapLoader({ renderer, THREE }) {
     const group = new THREE.Group();
     group.name = "MilitaryMapGroup";
     if (deferActivate) group.visible = false;
-    group.add(skyEnvCache.skyMesh, skyEnvCache.cloudMesh);
+    group.add(skyEnvCache.skyMesh);
 
-    const { rayGroup, shaftGroup, sunFlare, dustPoints, update: updateDust } = buildGodRaysDustAndFlare(THREE);
+    const { rayGroup, shaftGroup, sunFlare, flareTex, dustPoints, update: updateDust } = buildMilitaryGodRaysAndDust(THREE, SUN_POS);
     group.add(rayGroup, dustPoints);
 
     // Ultra-fast pre-baked world-mask ground (1 texture2D replaces 14 octaves of per-pixel FBM!)
@@ -1805,7 +1020,8 @@ export function createMilitaryMapLoader({ renderer, THREE }) {
       "mil_hfog_ground",
     );
 
-    const groundMesh = new THREE.Mesh(new THREE.PlaneGeometry(240, 260), groundMat);
+    // Fit courtyard concrete tightly inside/under the perimeter walls (72x92m) so sculpted foothills begin right outside!
+    const groundMesh = new THREE.Mesh(new THREE.PlaneGeometry(72, 92), groundMat);
     groundMesh.rotation.x = -Math.PI / 2;
     groundMesh.receiveShadow = true;
     groundMesh.name = "military_ground";
@@ -1824,19 +1040,21 @@ export function createMilitaryMapLoader({ renderer, THREE }) {
     group.add(buildContactShadows(THREE, layout));
     await stepYield();
 
-    emit(0.83, "Dựng đạo cụ chiến thuật & rừng núi hậu cảnh...");
+    emit(0.83, "Dựng núi 3D xói mòn, rừng thông sườn núi & hậu cảnh...");
     group.add(buildTacticalClutter(THREE, layout, skyEnvCache.envMap, fogUniforms, windUniform, windScaleUniform));
     await stepYield();
 
-    const { bgGroup, treeControls } = await buildBackgroundTreesAndMountainsAsync(
+    const { bgGroup, envControls } = await buildMilitaryEnvironmentGroupAsync({
       THREE,
       layout,
-      skyEnvCache.envMap,
+      sunPos: SUN_POS,
+      envMap: skyEnvCache.envMap,
       fogUniforms,
       windUniform,
       windScaleUniform,
-      stepYield,
-    );
+      applyMilitaryHeightFog,
+      yieldFn: stepYield,
+    });
     group.add(bgGroup);
     await stepYield();
 
@@ -1982,11 +1200,13 @@ export function createMilitaryMapLoader({ renderer, THREE }) {
     }
 
     // Golden-afternoon directional sun (~3.5:1 - 4:1 sunlit-to-shadow ratio)
+    // Keep sun.castShadow = true ALWAYS so NUM_DIR_LIGHT_SHADOWS never flips (zero shader recompilation on quality switch!).
+    const EMPTY_SHADOW_OFFSET_Y = 500;
     const hemi = new THREE.HemisphereLight(0xa2c0de, 0x564b3d, 0.52);
     const sun = new THREE.DirectionalLight(0xffe9c2, 2.65);
     sun.position.set(SUN_POS.x, SUN_POS.y, SUN_POS.z);
-    sun.castShadow = Boolean(initialPreset.shadowsEnabled);
-    const initShadowSize = initialPreset.shadowMapSize || 2048;
+    sun.castShadow = true;
+    const initShadowSize = initialPreset.shadowMapSize || (initialPreset.shadowsEnabled ? 2048 : 16);
     const initShadowExtent = initialPreset.shadowExtent || 28;
     sun.shadow.mapSize.set(initShadowSize, initShadowSize);
     Object.assign(sun.shadow.camera, {
@@ -2003,11 +1223,66 @@ export function createMilitaryMapLoader({ renderer, THREE }) {
     sun.layers.enableAll();
     group.add(hemi, sun, sun.target);
 
+    let curShadowsEnabled = Boolean(initialPreset.shadowsEnabled);
     let currentShadowExtent = initShadowExtent;
     let currentShadowSize = initShadowSize;
     let lastSnapX = Number.NaN;
     let lastSnapZ = Number.NaN;
+    let lastCamX = 0;
+    let lastCamZ = -40;
     let curFogDensity = initialPreset.fogDensity || 0.0034;
+
+    const resizeSunShadowMap = (nextSize) => {
+      if (nextSize === currentShadowSize) return;
+      currentShadowSize = nextSize;
+      sun.shadow.mapSize.set(nextSize, nextSize);
+      if (sun.shadow.map) {
+        sun.shadow.map.dispose();
+        sun.shadow.map = null;
+      }
+    };
+
+    const setSunShadowFrustum = (extent, near, far) => {
+      if (
+        currentShadowExtent === extent &&
+        sun.shadow.camera.near === near &&
+        sun.shadow.camera.far === far
+      ) {
+        return;
+      }
+      currentShadowExtent = extent;
+      Object.assign(sun.shadow.camera, {
+        left: -extent,
+        right: extent,
+        top: extent,
+        bottom: -extent,
+        near,
+        far,
+      });
+      sun.shadow.camera.updateProjectionMatrix();
+    };
+
+    const parkEmptySunShadow = () => {
+      // Preserve exact (SUN_POS.x, SUN_POS.y, SUN_POS.z) light direction while moving shadow frustum into empty sky
+      sun.target.position.set(0, EMPTY_SHADOW_OFFSET_Y, 0);
+      sun.target.updateMatrixWorld();
+      sun.position.set(SUN_POS.x, EMPTY_SHADOW_OFFSET_Y + SUN_POS.y, SUN_POS.z);
+      setSunShadowFrustum(0.05, 0.1, 1.0);
+    };
+
+    const snapSunToPosition = (x, z) => {
+      const texelWorld = (currentShadowExtent * 2) / Math.max(16, currentShadowSize);
+      const stepWorld = Math.max(texelWorld * 12, 0.36);
+      const snapX = Math.round(x / stepWorld) * stepWorld;
+      const snapZ = Math.round(z / stepWorld) * stepWorld;
+      if (snapX === lastSnapX && snapZ === lastSnapZ) return false;
+      lastSnapX = snapX;
+      lastSnapZ = snapZ;
+      sun.target.position.set(snapX, 0, snapZ);
+      sun.target.updateMatrixWorld();
+      sun.position.set(snapX + SUN_POS.x, SUN_POS.y, snapZ + SUN_POS.z);
+      return true;
+    };
 
     const countWithinDist = (dists, maxDist, minKeep = 4) => {
       let c = 0;
@@ -2018,36 +1293,52 @@ export function createMilitaryMapLoader({ renderer, THREE }) {
       return Math.max(Math.min(minKeep, dists.length), c);
     };
 
-    const applyQualityPreset = (preset = QUALITY_PRESETS.high) => {
-      // 1. Shadows (enable/disable, mapSize & frustum without leaks)
-      sun.castShadow = Boolean(preset.shadowsEnabled);
-      if (preset.shadowsEnabled) {
-        const nextSize = preset.shadowMapSize || 1024;
-        const nextExt = preset.shadowExtent || 24;
-        if (nextExt !== currentShadowExtent) {
-          currentShadowExtent = nextExt;
-          Object.assign(sun.shadow.camera, {
-            left: -nextExt, right: nextExt, top: nextExt, bottom: -nextExt,
-          });
-          sun.shadow.camera.updateProjectionMatrix();
-        }
-        if (nextSize !== currentShadowSize) {
-          currentShadowSize = nextSize;
-          sun.shadow.mapSize.set(nextSize, nextSize);
-          if (sun.shadow.map) {
-            sun.shadow.map.dispose();
-            sun.shadow.map = null;
-          }
+    const applyQualityPreset = (preset = QUALITY_PRESETS.high, camPos = null) => {
+      if (camPos) {
+        lastCamX = camPos.x;
+        lastCamZ = camPos.z;
+        // Lock sun corona sprite strictly to infinite sun direction relative to camera (zero double-sun parallax!)
+        if (sunFlare.visible) {
+          const sl = Math.hypot(SUN_POS.x, SUN_POS.y, SUN_POS.z) || 1;
+          sunFlare.position.set(
+            camPos.x + (SUN_POS.x / sl) * 300,
+            (camPos.y || 0) + (SUN_POS.y / sl) * 300,
+            camPos.z + (SUN_POS.z / sl) * 300,
+          );
         }
       }
+
+      // 1. Invariant-shader shadow control: keep sun.castShadow=true; park tiny 16x16 frustum on Low
+      sun.castShadow = true;
+      curShadowsEnabled = Boolean(preset.shadowsEnabled);
       lastSnapX = Number.NaN;
       lastSnapZ = Number.NaN;
+      if (curShadowsEnabled) {
+        const nextSize = preset.shadowMapSize || 1024;
+        const nextExt = preset.shadowExtent || 24;
+        setSunShadowFrustum(nextExt, 4, 150);
+        resizeSunShadowMap(nextSize);
+        snapSunToPosition(lastCamX, lastCamZ);
+      } else {
+        resizeSunShadowMap(preset.shadowMapSize || 16);
+        parkEmptySunShadow();
+      }
 
-      // 2. Post-processing & atmospheric extras
+      // 2. Post-processing & atmospheric extras (all uniform/visibility switches -> 0 shader recompile!)
       fogUniforms.uMilPostGrade.value = preset.postGradeEnabled ? 1.0 : 0.0;
       shaftGroup.visible = Boolean(preset.godRaysEnabled);
       sunFlare.visible = Boolean(preset.sunFlareEnabled);
-      skyEnvCache.cloudMesh.visible = Boolean(preset.cloudsEnabled);
+      if (skyEnvCache.skyUniforms) {
+        skyEnvCache.skyUniforms.uCloudEnabled.value = preset.cloudsEnabled ? 1.0 : 0.0;
+        skyEnvCache.skyUniforms.uCloudDetail.value = preset.cloudDetail ?? 1.0;
+      }
+      if (envControls.valleyMistMesh) {
+        envControls.valleyMistMesh.visible = Boolean(preset.valleyMistEnabled);
+      }
+      if (envControls.terrainUniforms) {
+        envControls.terrainUniforms.uHazeScale.value =
+          preset.id === "low" ? 1.25 : preset.id === "medium" ? 1.08 : 1.0;
+      }
       dustPoints.visible = Boolean(preset.dustEnabled);
       windScaleUniform.value = preset.windEnabled ? (preset.id === "medium" ? 0.6 : 1.0) : 0.0;
 
@@ -2055,21 +1346,35 @@ export function createMilitaryMapLoader({ renderer, THREE }) {
       grassInst.count = Math.max(1, Math.round(maxGrassCount * (preset.grassDensity ?? 1.0)));
       debInst.count = Math.max(1, Math.round(maxDebrisCount * (preset.rubbleDensity ?? 1.0)));
 
-      // 4. Tree draw distance (nearest-sorted InstancedMesh.count + outer dead/bush visibility)
-      const maxTreeDist = preset.treeDrawDistance ?? 200;
-      if (treeControls.blTrunkInst && treeControls.blCrownInst) {
-        const blCnt = countWithinDist(treeControls.blDists, maxTreeDist, 6);
-        treeControls.blTrunkInst.count = blCnt;
-        treeControls.blCrownInst.count = blCnt;
+      // 4. Tree draw distance (2-tier LOD: <60m 3D InstancedMesh + >=60m full-tree billboard + mountain-slope conifer carpet)
+      const maxTreeDist = preset.treeDrawDistance ?? 215;
+      if (envControls.blTrunkInst && envControls.blCrownInst) {
+        const blCnt = countWithinDist(envControls.blDists, maxTreeDist, 6);
+        envControls.blTrunkInst.count = blCnt;
+        envControls.blCrownInst.count = blCnt;
       }
-      if (treeControls.pineTrunkInst && treeControls.pineCrownInst) {
-        const pineCnt = countWithinDist(treeControls.pineDists, maxTreeDist, 4);
-        treeControls.pineTrunkInst.count = pineCnt;
-        treeControls.pineCrownInst.count = pineCnt;
+      if (envControls.blFarLodInst) {
+        const blFarCnt = countWithinDist(envControls.blFarDists, maxTreeDist, 0);
+        envControls.blFarLodInst.count = blFarCnt;
+        envControls.blFarLodInst.visible = blFarCnt > 0;
       }
-      if (treeControls.deadInst) treeControls.deadInst.visible = Boolean(preset.showDeadTrees);
-      if (treeControls.bushInst) treeControls.bushInst.visible = Boolean(preset.showBushes);
-      if (treeControls.farRidge) treeControls.farRidge.visible = preset.id !== "low";
+      if (envControls.pineTrunkInst && envControls.pineCrownInst) {
+        const pineCnt = countWithinDist(envControls.pineDists, maxTreeDist, 6);
+        envControls.pineTrunkInst.count = pineCnt;
+        envControls.pineCrownInst.count = pineCnt;
+      }
+      if (envControls.slopeConiferInst) {
+        const slopeDens = preset.slopeForestDensity ?? 1.0;
+        const maxSlopeByDist = countWithinDist(envControls.slopeConiferDists, maxTreeDist, 0);
+        const slopeCnt = slopeDens <= 0 ? 0 : Math.min(maxSlopeByDist, Math.round(envControls.slopeConiferDists.length * slopeDens));
+        envControls.slopeConiferInst.count = slopeCnt;
+        envControls.slopeConiferInst.visible = slopeCnt > 0;
+      }
+      if (envControls.deadInst) envControls.deadInst.visible = Boolean(preset.showDeadTrees);
+      if (envControls.bushInst) envControls.bushInst.visible = Boolean(preset.showBushes);
+      if (envControls.boulderInst) envControls.boulderInst.visible = preset.id !== "low";
+      if (envControls.outerFenceInst) envControls.outerFenceInst.visible = preset.id !== "low";
+      if (envControls.farRidge) envControls.farRidge.visible = preset.id !== "low";
 
       // 5. Fog distance & height-fog falloff
       curFogDensity = preset.fogDensity ?? 0.0034;
@@ -2080,40 +1385,76 @@ export function createMilitaryMapLoader({ renderer, THREE }) {
         preset.fogHeightAmp ?? 0.0030,
       );
 
-      // 6. Texture anisotropy cap
+      // 6. Texture anisotropy cap in-place (ZERO texImage2D / generateMipmap re-uploads!)
       const nextAniso = Math.min(hwMaxAniso, preset.maxAnisotropy || 4);
-      for (const tex of managedTextures) {
-        if (tex.anisotropy !== nextAniso) {
-          tex.anisotropy = nextAniso;
-          tex.needsUpdate = true;
+      updateTexturesAnisotropyInPlace(renderer, managedTextures, nextAniso);
+    };
+
+    const setWarmupPassActive = (active, preset = QUALITY_PRESETS.high, camPos = null) => {
+      if (active) {
+        // Expose all High-only meshes & expand shadow frustum behind Loading Screen so every shader + MeshDepthMaterial compiles once
+        shaftGroup.visible = true;
+        sunFlare.visible = true;
+        if (skyEnvCache.skyUniforms) {
+          skyEnvCache.skyUniforms.uCloudEnabled.value = 1.0;
+          skyEnvCache.skyUniforms.uCloudDetail.value = 1.0;
         }
+        dustPoints.visible = true;
+        if (envControls.valleyMistMesh) envControls.valleyMistMesh.visible = true;
+        if (envControls.deadInst) envControls.deadInst.visible = true;
+        if (envControls.bushInst) envControls.bushInst.visible = true;
+        if (envControls.boulderInst) envControls.boulderInst.visible = true;
+        if (envControls.outerFenceInst) envControls.outerFenceInst.visible = true;
+        if (envControls.farRidge) envControls.farRidge.visible = true;
+        if (envControls.blFarLodInst) {
+          envControls.blFarLodInst.visible = true;
+          envControls.blFarLodInst.count = Math.max(1, envControls.blFarDists.length);
+        }
+        if (envControls.slopeConiferInst) {
+          envControls.slopeConiferInst.visible = true;
+          envControls.slopeConiferInst.count = Math.max(1, envControls.slopeConiferDists.length);
+        }
+        if (!curShadowsEnabled) {
+          sun.target.position.set(0, 0, 0);
+          sun.target.updateMatrixWorld();
+          sun.position.set(SUN_POS.x, SUN_POS.y, SUN_POS.z);
+          setSunShadowFrustum(55, 4, 150);
+        }
+        return;
       }
+      applyQualityPreset(preset, camPos);
     };
 
     applyQualityPreset(initialPreset);
 
     const updateAtmosphere = (tSec, camPos, preset = QUALITY_PRESETS.high) => {
       if (preset.windEnabled) windUniform.value = tSec;
-      if (preset.cloudsEnabled) skyEnvCache.cloudMesh.rotation.y = tSec * 0.0045;
-      if (preset.dustEnabled) updateDust(tSec);
+      if (skyEnvCache.skyUniforms && preset.cloudsEnabled && preset.windEnabled) {
+        skyEnvCache.skyUniforms.uTime.value = tSec;
+      }
+      if (envControls.mistUniforms && preset.valleyMistEnabled && preset.windEnabled) {
+        envControls.mistUniforms.uTime.value = tSec;
+      }
+      if (preset.dustEnabled || preset.godRaysEnabled) updateDust(tSec);
 
-      let shadowMoved = false;
-      if (preset.shadowsEnabled && camPos) {
-        // Snap shadow camera in 0.40m chunks (clean texel-aligned steps) so shadows only re-render on real player movement!
-        const texelWorld = (currentShadowExtent * 2) / currentShadowSize;
-        const stepWorld = Math.max(texelWorld * 12, 0.36);
-        const snapX = Math.round(camPos.x / stepWorld) * stepWorld;
-        const snapZ = Math.round(camPos.z / stepWorld) * stepWorld;
-        if (snapX !== lastSnapX || snapZ !== lastSnapZ) {
-          lastSnapX = snapX;
-          lastSnapZ = snapZ;
-          sun.target.position.set(snapX, 0, snapZ);
-          sun.target.updateMatrixWorld();
-          sun.position.set(snapX + SUN_POS.x, SUN_POS.y, snapZ + SUN_POS.z);
-          shadowMoved = true;
+      if (camPos) {
+        lastCamX = camPos.x;
+        lastCamZ = camPos.z;
+        // Lock sun corona sprite strictly to infinite sun direction relative to camera (zero double-sun parallax!)
+        if (sunFlare.visible) {
+          const sl = Math.hypot(SUN_POS.x, SUN_POS.y, SUN_POS.z) || 1;
+          sunFlare.position.set(
+            camPos.x + (SUN_POS.x / sl) * 300,
+            (camPos.y || 0) + (SUN_POS.y / sl) * 300,
+            camPos.z + (SUN_POS.z / sl) * 300,
+          );
         }
       }
-      return shadowMoved;
+      if (preset.shadowsEnabled && camPos) {
+        // Snap shadow camera in texel-aligned steps so shadows only re-render on real player movement!
+        return snapSunToPosition(camPos.x, camPos.z);
+      }
+      return false;
     };
 
     const collision = createMapCollision({
@@ -2150,8 +1491,9 @@ export function createMilitaryMapLoader({ renderer, THREE }) {
       concreteTexCache.roughness,
       concreteTexCache.worldMask,
       skyEnvCache.envMap,
-      skyEnvCache.skyTex,
-      skyEnvCache.driftTex,
+      skyEnvCache.cloudNoiseTex,
+      flareTex,
+      ...envControls.extraTextures,
       ...managedTextures,
     ];
     emit(1.0, "Hoàn tất dựng bản đồ Khu Quân Sự Cũ");
@@ -2169,21 +1511,35 @@ export function createMilitaryMapLoader({ renderer, THREE }) {
       fogColor: FOG_HORIZON_HEX,
       get fogDensity() { return curFogDensity; },
       applyQualityPreset,
+      setWarmupPassActive,
       updateAtmosphere,
       samplePuddle: sampleMilitaryPuddle,
+      sampleDirt: sampleMilitaryDirt,
       getQualityStats: () => ({
         grassCount: grassInst.count,
         maxGrassCount,
         rubbleCount: debInst.count,
-        broadleafCount: treeControls.blCrownInst ? treeControls.blCrownInst.count : 0,
-        pineCount: treeControls.pineCrownInst ? treeControls.pineCrownInst.count : 0,
-        deadTreesVisible: treeControls.deadInst ? treeControls.deadInst.visible : false,
-        bushesVisible: treeControls.bushInst ? treeControls.bushInst.visible : false,
-        cloudsVisible: skyEnvCache.cloudMesh.visible,
+        broadleafCount:
+          (envControls.blCrownInst ? envControls.blCrownInst.count : 0) +
+          (envControls.blFarLodInst && envControls.blFarLodInst.visible ? envControls.blFarLodInst.count : 0),
+        pineCount:
+          (envControls.pineCrownInst ? envControls.pineCrownInst.count : 0) +
+          (envControls.slopeConiferInst && envControls.slopeConiferInst.visible ? envControls.slopeConiferInst.count : 0),
+        farTreeLodCount:
+          (envControls.blFarLodInst && envControls.blFarLodInst.visible ? envControls.blFarLodInst.count : 0) +
+          (envControls.slopeConiferInst && envControls.slopeConiferInst.visible ? envControls.slopeConiferInst.count : 0),
+        slopeForestCount:
+          envControls.slopeConiferInst && envControls.slopeConiferInst.visible ? envControls.slopeConiferInst.count : 0,
+        deadTreesVisible: envControls.deadInst ? envControls.deadInst.visible : false,
+        bushesVisible: envControls.bushInst ? envControls.bushInst.visible : false,
+        valleyMistVisible: envControls.valleyMistMesh ? envControls.valleyMistMesh.visible : false,
+        cloudsVisible: skyEnvCache.skyUniforms ? skyEnvCache.skyUniforms.uCloudEnabled.value > 0.5 : false,
         godRaysVisible: shaftGroup.visible,
         dustVisible: dustPoints.visible,
         sunFlareVisible: sunFlare.visible,
+        dynamicShadowsActive: curShadowsEnabled,
         sunCastShadow: sun.castShadow,
+        sunPos: { x: SUN_POS.x, y: SUN_POS.y, z: SUN_POS.z },
         shadowMapSize: currentShadowSize,
         fogDensity: curFogDensity,
         postGradeValue: fogUniforms.uMilPostGrade.value,

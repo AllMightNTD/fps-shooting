@@ -13,6 +13,7 @@ import {
   formatQualitySummary,
   normalizeQualityChoice,
   resolveQualityPreset,
+  updateTexturesAnisotropyInPlace,
 } from "../../public/js/graphics_quality.js";
 
 test("detectHardwareTier automatically selects low on software renderers, weak iGPUs, mobile, or low RAM/CPU", () => {
@@ -90,14 +91,140 @@ test("QUALITY_PRESETS strictly increase visual fidelity across low < medium < hi
   assert.equal(low.shadowsEnabled, false);
   assert.equal(med.shadowsEnabled, true);
   assert.equal(high.shadowsEnabled, true);
+  assert.equal(low.shadowMapSize, 16);
   assert.ok(med.shadowMapSize < high.shadowMapSize);
+  // Shadow shader mode must stay invariant ("pcf") across all tiers to guarantee 0 shader recompiles
+  assert.equal(low.shadowType, "pcf");
+  assert.equal(med.shadowType, "pcf");
+  assert.equal(high.shadowType, "pcf");
   assert.equal(low.vignetteEnabled, false);
   assert.equal(low.postGradeEnabled, false);
   assert.equal(high.postGradeEnabled, true);
   assert.ok(low.grassDensity < med.grassDensity && med.grassDensity < high.grassDensity);
   assert.ok(low.treeDrawDistance < med.treeDrawDistance && med.treeDrawDistance < high.treeDrawDistance);
+  assert.ok(low.cloudDetail < med.cloudDetail && med.cloudDetail < high.cloudDetail);
+  assert.ok(low.slopeForestDensity < med.slopeForestDensity && med.slopeForestDensity < high.slopeForestDensity);
+  assert.ok(low.vfxScale < med.vfxScale && med.vfxScale < high.vfxScale);
+  assert.ok(low.maxBulletHoles < med.maxBulletHoles && med.maxBulletHoles < high.maxBulletHoles);
+  assert.equal(low.waterRipplesEnabled, false);
+  assert.equal(high.waterRipplesEnabled, true);
   assert.ok(low.cameraFar < med.cameraFar && med.cameraFar < high.cameraFar);
+  assert.ok(high.cameraFar >= 460, `High cameraFar must cover 3-layer alpine horizon, got ${high.cameraFar}`);
   assert.ok(low.fogDensity > med.fogDensity && med.fogDensity > high.fogDensity);
   assert.equal(computeEffectivePixelRatio(low, Number.NaN), 0.78);
+});
+
+test("updateTexturesAnisotropyInPlace patches WebGL anisotropy via gl.texParameterf without triggering needsUpdate", () => {
+  // Arrange
+  const prevBound = { id: "prev-bound-tex" };
+  const gpuTexA = { id: "gpu-tex-a" };
+  const bindCalls = [];
+  const paramCalls = [];
+  let needsUpdateSetCount = 0;
+
+  const makeTex = (initialAniso) => {
+    const t = { anisotropy: initialAniso };
+    Object.defineProperty(t, "needsUpdate", {
+      set() {
+        needsUpdateSetCount++;
+      },
+      get() {
+        return false;
+      },
+    });
+    return t;
+  };
+
+  const texUploaded = makeTex(2);
+  const texNotUploaded = makeTex(2);
+  const texAlreadyAtMax = makeTex(8);
+
+  const propMap = new WeakMap([
+    [texUploaded, { __webglTexture: gpuTexA }],
+    [texNotUploaded, {}],
+    [texAlreadyAtMax, { __webglTexture: { id: "gpu-tex-c" } }],
+  ]);
+
+  const gl = {
+    TEXTURE_2D: 0x0de1,
+    TEXTURE_BINDING_2D: 0x8069,
+    getParameter(pname) {
+      return pname === 0x8069 ? prevBound : 0;
+    },
+    bindTexture(target, handle) {
+      bindCalls.push([target, handle]);
+    },
+    texParameterf(target, pname, val) {
+      paramCalls.push([target, pname, val]);
+    },
+  };
+  const renderer = {
+    getContext: () => gl,
+    capabilities: { getMaxAnisotropy: () => 8 },
+    extensions: {
+      get: (name) =>
+        name === "EXT_texture_filter_anisotropic"
+          ? { TEXTURE_MAX_ANISOTROPY_EXT: 0x84fe, MAX_TEXTURE_MAX_ANISOTROPY_EXT: 0x84ff }
+          : null,
+    },
+    properties: { get: (tex) => propMap.get(tex) || {} },
+  };
+
+  // Act
+  const result = updateTexturesAnisotropyInPlace(
+    renderer,
+    new Set([texUploaded, texNotUploaded, texAlreadyAtMax]),
+    16,
+  );
+
+  // Assert
+  assert.equal(result.anisotropy, 8);
+  assert.equal(result.updated, 2);
+  assert.equal(result.glUpdated, 1);
+  assert.equal(texUploaded.anisotropy, 8);
+  assert.equal(texNotUploaded.anisotropy, 8);
+  assert.equal(texAlreadyAtMax.anisotropy, 8);
+  assert.equal(needsUpdateSetCount, 0, "Must never set tex.needsUpdate = true");
+  assert.deepEqual(paramCalls, [[0x0de1, 0x84fe, 8]]);
+  assert.deepEqual(bindCalls, [
+    [0x0de1, gpuTexA],
+    [0x0de1, prevBound],
+  ]);
+});
+
+test("updateTexturesAnisotropyInPlace handles missing renderer, missing extension, and GL errors safely (unhappy path)", () => {
+  // Arrange
+  const texA = { anisotropy: 4 };
+  const texB = { anisotropy: 2 };
+  const prevBound = { id: "saved" };
+  const restored = [];
+  const throwingRenderer = {
+    getContext: () => ({
+      TEXTURE_2D: 0x0de1,
+      TEXTURE_BINDING_2D: 0x8069,
+      getParameter: () => prevBound,
+      bindTexture: (_t, h) => restored.push(h),
+      texParameterf: () => {
+        throw new Error("Simulated context lost");
+      },
+    }),
+    capabilities: { getMaxAnisotropy: () => 16 },
+    extensions: { get: () => ({ TEXTURE_MAX_ANISOTROPY_EXT: 0x84fe }) },
+    properties: { get: () => ({ __webglTexture: { id: "gpu" } }) },
+  };
+
+  // Act
+  const emptyRes = updateTexturesAnisotropyInPlace(null, [], 4);
+  const noRendererRes = updateTexturesAnisotropyInPlace(null, [texA], Number.NaN);
+  const errRes = updateTexturesAnisotropyInPlace(throwingRenderer, [texB], 8);
+
+  // Assert
+  assert.deepEqual(emptyRes, { updated: 0, glUpdated: 0, anisotropy: 1 });
+  assert.equal(noRendererRes.updated, 1);
+  assert.equal(noRendererRes.glUpdated, 0);
+  assert.equal(texA.anisotropy, 1);
+  assert.equal(errRes.glUpdated, 0);
+  assert.equal(texB.anisotropy, 8);
+  assert.equal(restored[restored.length - 1], prevBound, "Previous TEXTURE_BINDING_2D must be restored even on GL error");
 });
 

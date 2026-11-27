@@ -203,6 +203,29 @@ class TestMilitaryMapAssets(unittest.TestCase):
         self.assertTrue(has_los((-19.0, 1.65, -10.9), (-14.0, 1.65, -10.9)))
         self.assertTrue(has_los((-8.5, 1.80, -11.5), (-3.5, 1.80, -13.5)))
 
+        # 5v5 Watchtower balance: sniper at (4, 5.7, 0) cannot lock down spawn exits, Lane B entries, or outer flanks
+        wt_eye = (4.0, 5.7, 0.0)
+        for blocked_pt in (
+            (-10.0, 1.5, -32.0),  # Team A exit West
+            (10.0, 1.5, -32.0),   # Team A exit East
+            (-10.0, 1.5, 32.0),   # Team B exit West
+            (10.0, 1.5, 32.0),    # Team B exit East
+            (20.0, 1.5, -26.0),   # Lane B North entry (Team A)
+            (20.0, 1.5, 26.0),    # Lane B South entry (Team B - symmetric!)
+            (-31.0, 1.5, 0.0),    # Lane A outer West flank
+            (30.0, 1.5, 0.0),     # Lane B outer East flank
+        ):
+            self.assertFalse(has_los(wt_eye, blocked_pt), f"Watchtower should not dominate {blocked_pt}")
+
+        # Watchtower high-risk counterplay: crouched sniper head (4, 5.10, 0) is vulnerable from Warehouse windows & Lane B
+        crouched_head = (4.0, 5.10, 0.0)
+        self.assertTrue(has_los((-17.0, 1.65, -18.0), crouched_head), "WH North window must counter crouched watchtower")
+        self.assertTrue(has_los((-17.0, 1.65, 18.0), crouched_head), "WH South window must counter crouched watchtower")
+        self.assertTrue(has_los((19.0, 1.65, 0.0), crouched_head), "Lane B containers must counter crouched watchtower")
+        # Frontal North/South 1.1m parapets still protect crouched sniper from direct Mid frontal fire
+        self.assertFalse(has_los((4.0, 1.65, -20.0), crouched_head))
+        self.assertFalse(has_los((4.0, 1.65, 20.0), crouched_head))
+
 
 if __name__ == "__main__":
     unittest.main()

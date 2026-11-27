@@ -1,4 +1,4 @@
-# Bến Cảng Mưa – Web FPS (Three.js)
+# BEFORE THE BREACH – Web FPS (Three.js)
 
 Trò chơi bắn súng góc nhìn thứ nhất (FPS) trên nền WebGL sử dụng Three.js r128, lấy bối cảnh bến cảng đêm mưa với các container hàng hóa, thời tiết sấm chớp, âm thanh tổng hợp Web Audio API, bộ viewmodel M416 + tay FPP chuẩn PBR, hệ thống **đa vũ khí nạp đạn băng vô hạn** (`M416`, `Glock-17`, `AWM Sniper`), **kiến trúc Input 3 lớp & vật lý 60 Hz**, và chế độ **đấu người với người qua mạng LAN phong cách Truy Kích** (Sảnh chờ → Phòng chờ → Đếm ngược → Trong trận → Tổng kết) cùng mục **Luyện tập Offline (Drone)**.
 
@@ -93,22 +93,22 @@ Server mặc định lắng nghe `0.0.0.0:8090` (tự động chuyển sang cổ
 
 ## Điều khiển mặc định & Cài đặt
 
-*(Có thể đổi phím, độ nhạy chuột, độ nhạy ADS, đảo trục Y, FOV `65–95°` và chế độ Giữ/Bật-tắt cho Ngồi/Ngắm trong mục **Cài đặt** từ Sảnh chờ hoặc Menu `Esc`)*
+_(Có thể đổi phím, độ nhạy chuột, độ nhạy ADS, đảo trục Y, FOV `65–95°` và chế độ Giữ/Bật-tắt cho Ngồi/Ngắm trong mục **Cài đặt** từ Sảnh chờ hoặc Menu `Esc`)_
 
-| Phím / Chuột | Chức năng | Ghi chú |
-| --- | --- | --- |
-| `W` `A` `S` `D` | Di chuyển (`e.code`) | Chuẩn hóa chéo, air control `25%`, vật lý `60 Hz` |
-| `Space` | Nhảy | Jump buffer `100ms`, Coyote time `80ms`, chống bunny-hop `300ms` |
-| `C` / `Ctrl` | Ngồi | Camera trượt xuống `1.12m`, hitbox đầu hạ `1.08m`, raycast kiểm tra trần |
-| `Shift` (trái) | Chạy nước rút | Nhanh ×1.35; vẫn nạp đạn được, không bắn/ngắm được |
-| `Chuột trái` | Bắn | Tự động (`M416`) hoặc bán tự động (`Glock-17`, `AWM Sniper`); click khóa chuột đầu không bắn nhầm |
-| `Chuột phải` | Ngắm (ADS) | Thu hẹp FOV (`55°`/`60°`/`24°` ống ngắm Sniper); tự tắt khi nạp hoặc sprint |
-| `R` | Nạp đạn | Băng đạn dự trữ vô hạn (`mag / ∞`), tự nạp khi `mag = 0`, nạp chiến thuật nhanh hơn nạp rỗng |
-| `1` `2` `3` `Q` / `Cuộn chuột` | Đổi súng / Về súng trước | Đổi khi đang nạp sẽ hủy nạp và giữ nguyên `mag` súng cũ |
-| `L` | Bật / tắt laser xanh | Hoạt động trên `M416` AN/PEQ-15 |
-| `Tab` | Bảng điểm PvP LAN | Giữ để xem |
-| `Enter` | Mở chat trong trận | Tạm khóa phím di chuyển khi gõ |
-| `Esc` | Thả chuột & Mở Menu | **Không đóng băng trận khi chơi mạng LAN** |
+| Phím / Chuột                   | Chức năng                | Ghi chú                                                                                           |
+| ------------------------------ | ------------------------ | ------------------------------------------------------------------------------------------------- |
+| `W` `A` `S` `D`                | Di chuyển (`e.code`)     | Chuẩn hóa chéo, air control `25%`, vật lý `60 Hz`                                                 |
+| `Space`                        | Nhảy                     | Jump buffer `100ms`, Coyote time `80ms`, chống bunny-hop `300ms`                                  |
+| `C` / `Ctrl`                   | Ngồi                     | Camera trượt xuống `1.12m`, hitbox đầu hạ `1.08m`, raycast kiểm tra trần                          |
+| `Shift` (trái)                 | Chạy nước rút            | Nhanh ×1.35; vẫn nạp đạn được, không bắn/ngắm được                                                |
+| `Chuột trái`                   | Bắn                      | Tự động (`M416`) hoặc bán tự động (`Glock-17`, `AWM Sniper`); click khóa chuột đầu không bắn nhầm |
+| `Chuột phải`                   | Ngắm (ADS)               | Thu hẹp FOV (`55°`/`60°`/`24°` ống ngắm Sniper); tự tắt khi nạp hoặc sprint                       |
+| `R`                            | Nạp đạn                  | Băng đạn dự trữ vô hạn (`mag / ∞`), tự nạp khi `mag = 0`, nạp chiến thuật nhanh hơn nạp rỗng      |
+| `1` `2` `3` `Q` / `Cuộn chuột` | Đổi súng / Về súng trước | Đổi khi đang nạp sẽ hủy nạp và giữ nguyên `mag` súng cũ                                           |
+| `L`                            | Bật / tắt laser xanh     | Hoạt động trên `M416` AN/PEQ-15                                                                   |
+| `Tab`                          | Bảng điểm PvP LAN        | Giữ để xem                                                                                        |
+| `Enter`                        | Mở chat trong trận       | Tạm khóa phím di chuyển khi gõ                                                                    |
+| `Esc`                          | Thả chuột & Mở Menu      | **Không đóng băng trận khi chơi mạng LAN**                                                        |
 
 ## Điểm nổi bật kỹ thuật
 

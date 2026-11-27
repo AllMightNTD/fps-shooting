@@ -24,6 +24,8 @@ export const DEFAULT_BIND = Object.freeze({
   slot4: ["Digit4"],
   switchPrev: ["KeyQ"],
   laser: ["KeyL"],
+  zeroDown: ["BracketLeft"],
+  zeroUp: ["BracketRight"],
   score: ["Tab"],
   chat: ["Enter"],
 });
@@ -36,8 +38,11 @@ const DEFAULT_SETTINGS = {
   invertY: false,
   fov: 75,
   crouchMode: "hold",
-  adsMode: "hold",
+  adsMode: "toggle",
   graphicsQuality: "auto",
+  showPerfHud: false,
+  lobbyMusicEnabled: true,
+  lobbyMusicVolume: 0.45,
   bindings: {},
 };
 
@@ -85,8 +90,11 @@ export function createSettingsStore() {
       base.invertY = Boolean(parsed.invertY);
       base.fov = Math.round(clampNum(parsed.fov, 65, 95, 75));
       base.crouchMode = parsed.crouchMode === "toggle" ? "toggle" : "hold";
-      base.adsMode = parsed.adsMode === "toggle" ? "toggle" : "hold";
+      base.adsMode = parsed.adsMode === "hold" ? "hold" : "toggle";
       base.graphicsQuality = normalizeQualityChoice(parsed.graphicsQuality);
+      base.showPerfHud = Boolean(parsed.showPerfHud);
+      base.lobbyMusicEnabled = parsed.lobbyMusicEnabled !== false;
+      base.lobbyMusicVolume = clampNum(parsed.lobbyMusicVolume, 0, 1, 0.45);
       if (parsed.bindings && typeof parsed.bindings === "object") {
         for (const action of Object.keys(DEFAULT_BIND)) {
           const list = parsed.bindings[action];
@@ -121,6 +129,9 @@ export function createSettingsStore() {
       if (patch.crouchMode !== undefined) state.crouchMode = patch.crouchMode === "toggle" ? "toggle" : "hold";
       if (patch.adsMode !== undefined) state.adsMode = patch.adsMode === "toggle" ? "toggle" : "hold";
       if (patch.graphicsQuality !== undefined) state.graphicsQuality = normalizeQualityChoice(patch.graphicsQuality);
+      if (patch.showPerfHud !== undefined) state.showPerfHud = Boolean(patch.showPerfHud);
+      if (patch.lobbyMusicEnabled !== undefined) state.lobbyMusicEnabled = Boolean(patch.lobbyMusicEnabled);
+      if (patch.lobbyMusicVolume !== undefined) state.lobbyMusicVolume = clampNum(patch.lobbyMusicVolume, 0, 1, state.lobbyMusicVolume);
       save();
     },
     rebind(action, newCode) {
@@ -150,6 +161,8 @@ const ACTION_LABELS = [
   ["reload", "Nạp đạn"],
   ["switchPrev", "Về súng trước"],
   ["laser", "Bật/tắt Laser"],
+  ["zeroDown", "Giảm tầm Zeroing AWM"],
+  ["zeroUp", "Tăng tầm Zeroing AWM"],
   ["score", "Bảng điểm"],
   ["chat", "Mở chat"],
 ];
@@ -167,10 +180,27 @@ export function mountSettingsUI(store, inputCtrl) {
   const adsModeIn = document.getElementById("setAdsMode");
   const qualityIn = document.getElementById("setGraphicsQuality");
   const qualityHint = document.getElementById("setGraphicsHint");
+  const showPerfHudIn = document.getElementById("setShowPerfHud");
+  const lobbyMusicIn = document.getElementById("setLobbyMusic");
+  const lobbyMusicVolIn = document.getElementById("setLobbyMusicVol");
+  const lobbyMusicVolVal = document.getElementById("setLobbyMusicVolVal");
   const bindList = document.getElementById("setBindList");
 
   let listeningAction = null;
   let detectedTier = "medium";
+  let isQualityApplying = false;
+  let applyingHintText = "";
+
+  function updateQualityHint() {
+    if (!qualityHint) return;
+    if (isQualityApplying) {
+      qualityHint.textContent = applyingHintText || "Đang áp dụng cấu hình đồ họa...";
+      return;
+    }
+    const s = store.get();
+    const resolved = resolveQualityPreset(s.graphicsQuality, detectedTier);
+    qualityHint.textContent = formatQualitySummary(resolved);
+  }
 
   function render() {
     const s = store.get();
@@ -184,10 +214,11 @@ export function mountSettingsUI(store, inputCtrl) {
     crouchModeIn.value = s.crouchMode;
     adsModeIn.value = s.adsMode;
     if (qualityIn) qualityIn.value = s.graphicsQuality;
-    if (qualityHint) {
-      const resolved = resolveQualityPreset(s.graphicsQuality, detectedTier);
-      qualityHint.textContent = formatQualitySummary(resolved);
-    }
+    if (showPerfHudIn) showPerfHudIn.checked = Boolean(s.showPerfHud);
+    if (lobbyMusicIn) lobbyMusicIn.checked = Boolean(s.lobbyMusicEnabled);
+    if (lobbyMusicVolIn) lobbyMusicVolIn.value = String(s.lobbyMusicVolume);
+    if (lobbyMusicVolVal) lobbyMusicVolVal.textContent = `${Math.round(s.lobbyMusicVolume * 100)}%`;
+    updateQualityHint();
 
     bindList.textContent = "";
     for (const [action, label] of ACTION_LABELS) {
@@ -223,6 +254,15 @@ export function mountSettingsUI(store, inputCtrl) {
   if (qualityIn) {
     qualityIn.onchange = () => store.update({ graphicsQuality: qualityIn.value });
   }
+  if (showPerfHudIn) {
+    showPerfHudIn.onchange = () => store.update({ showPerfHud: showPerfHudIn.checked });
+  }
+  if (lobbyMusicIn) {
+    lobbyMusicIn.onchange = () => store.update({ lobbyMusicEnabled: lobbyMusicIn.checked });
+  }
+  if (lobbyMusicVolIn) {
+    lobbyMusicVolIn.oninput = () => store.update({ lobbyMusicVolume: Number(lobbyMusicVolIn.value) });
+  }
 
   document.getElementById("btnSetReset").onclick = () => {
     listeningAction = null;
@@ -251,6 +291,14 @@ export function mountSettingsUI(store, inputCtrl) {
     setDetectedTier(tier) {
       detectedTier = tier || "medium";
       render();
+    },
+    setQualityApplying(pending, resolved = null) {
+      isQualityApplying = Boolean(pending);
+      applyingHintText =
+        resolved && resolved.preset
+          ? `Đang áp dụng mức ${resolved.preset.label}...`
+          : "Đang áp dụng cấu hình đồ họa...";
+      updateQualityHint();
     },
   };
 }
