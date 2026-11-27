@@ -381,9 +381,23 @@ test("buildStaticSite outputs complete Cloudflare Pages bundle without .bundle.j
     const distFiles = fs.readdirSync(path.join(tmpOut, "model", "dist"));
     assert.equal(distFiles.some((f) => f.endsWith(".bundle.js")), false);
 
-    // Unhappy paths: invalid WS scheme & unsafe root outDir
+    // Unhappy paths: invalid WS scheme, unsafe root outDir, and missing model/dist/*.glb
     assert.throws(() => buildStaticSite({ outDir: tmpOut, wsUrl: "https://not-websocket.com/ws" }));
     assert.throws(() => buildStaticSite({ outDir: path.resolve(".") }));
+
+    const emptyRoot = fs.mkdtempSync(path.join(os.tmpdir(), "fps-empty-models-"));
+    const emptyOut = fs.mkdtempSync(path.join(os.tmpdir(), "fps-empty-out-"));
+    try {
+      fs.mkdirSync(path.join(emptyRoot, "public"), { recursive: true });
+      fs.writeFileSync(path.join(emptyRoot, "public", "FPS.html"), "<html><head></head></html>", "utf8");
+      fs.mkdirSync(path.join(emptyRoot, "server"), { recursive: true });
+      fs.writeFileSync(path.join(emptyRoot, "server", "protocol.js"), "", "utf8");
+      fs.writeFileSync(path.join(emptyRoot, "server", "weapons.js"), "", "utf8");
+      assert.throws(() => buildStaticSite({ rootDir: emptyRoot, outDir: emptyOut }), /No \.glb model files found/);
+    } finally {
+      fs.rmSync(emptyRoot, { recursive: true, force: true });
+      fs.rmSync(emptyOut, { recursive: true, force: true });
+    }
   } finally {
     fs.rmSync(tmpOut, { recursive: true, force: true });
   }

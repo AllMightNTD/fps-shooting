@@ -62,8 +62,8 @@ ehthumbs_vista.db
 .nfs*
 
 # Build / Deploy Output
-dist/
-dist-static/
+/dist/
+/dist-static/
 
 # Agent / Tooling Local State
 .superpowers/

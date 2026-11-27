@@ -161,6 +161,12 @@ export function buildStaticSite({
     path.join(resolvedOut, "model", "dist"),
     (name) => name.endsWith(".glb"),
   );
+  if (modelStats.count === 0) {
+    throw new Error(
+      `No .glb model files found in ${path.join(resolvedRoot, "model", "dist")}. ` +
+        "Ensure model/dist/*.glb are committed to Git (not ignored by .gitignore) or run python3 -m model.build.",
+    );
+  }
   fileCount += modelStats.count;
   totalBytes += modelStats.bytes;
 
