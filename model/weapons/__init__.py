@@ -2,7 +2,7 @@
 
 from .awm import AWM_METADATA, build_awm_glb
 from .m416 import M416_METADATA, build_m416_nodes
-from .pistol import PISTOL_METADATA, build_pistol_nodes
+from .pistol import PISTOL_METADATA, build_pistol_glb
 
 __all__ = [
     "AWM_METADATA",
@@ -10,6 +10,6 @@ __all__ = [
     "PISTOL_METADATA",
     "build_awm_glb",
     "build_m416_nodes",
-    "build_pistol_nodes",
+    "build_pistol_glb",
 ]
 

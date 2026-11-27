@@ -25,7 +25,7 @@ export function createAssetLoader({
   const Vec = THREE.Vector3;
 
   const m416MuzAnchorPos = new Vec(0, 0.02, -0.615);
-  const pistolMuzAnchorPos = new Vec(0, 0.0495, -0.172);
+  const pistolMuzAnchorPos = new Vec(0, 0.0482, -0.156);
   const awmMuzAnchorPos = new Vec(0, 0.02, -0.802);
   let awmOpticY = 0.0947;
 
@@ -108,10 +108,10 @@ export function createAssetLoader({
       bolt: makeSocketNode("socket_charging", [-0.026, 0.035, 0.130], [0.68, 0.08, -0.73], [0.24, -0.94, 0.23], false),
     },
     pistol: {
-      handguard: makeSocketNode("socket_handguard", [-0.024, -0.038, 0.024], [-0.16, -0.12, -0.980], [0.90, 0.34, 0.27], false),
-      grip: makeSocketNode("socket_grip", [0.020, -0.036, 0.056], [0.16, -0.04, -0.986], [-0.96, 0.08, 0.26], true),
-      mag: makeSocketNode("socket_mag", [-0.014, -0.072, 0.040], [0.54, -0.18, -0.82], [0.78, 0.32, 0.54], false),
-      bolt: makeSocketNode("socket_slide", [-0.015, 0.048, 0.022], [0.66, 0.06, -0.75], [0.35, -0.90, 0.26], false),
+      handguard: makeSocketNode("socket_handguard", [-0.021, -0.031, 0.024], [-0.12, 0.02, -0.992], [0.92, 0.28, 0.26], false),
+      grip: makeSocketNode("socket_grip", [0.018, -0.025, 0.041], [0.08, -0.02, -0.996], [-0.96, 0.08, 0.25], true),
+      mag: makeSocketNode("socket_mag", [-0.014, -0.072, 0.04], [0.54, -0.18, -0.82], [0.78, 0.32, 0.54], false),
+      bolt: makeSocketNode("socket_slide", [-0.016, 0.048, 0.015], [0.66, 0.06, -0.75], [0.35, -0.9, 0.26], false),
     },
     sniper: {
       handguard: sniperSockHandguard,

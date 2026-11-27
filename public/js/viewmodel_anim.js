@@ -30,7 +30,7 @@ export function createViewmodelAnimator({
   const HIP_POS = new Vec(0.172, -0.156, -0.435);
   const ADS_POS = new Vec(0, -OPTIC_Y, -0.215);
   const PISTOL_HIP_POS = new Vec(0.125, -0.128, -0.315);
-  const PISTOL_ADS_POS = new Vec(0, -0.0671, -0.245);
+  const PISTOL_ADS_POS = new Vec(0, -0.0654, -0.280);
   const SNIPER_HIP_POS = new Vec(0.166, -0.140, -0.455);
   gun.position.copy(HIP_POS);
 
@@ -364,7 +364,7 @@ export function createViewmodelAnimator({
     trigPull += ((firingVisual ? 1 : 0) - trigPull) * Math.min(1, 25 * dt);
     pistolTrigPull = lerp(pistolTrigPull, firingVisual && isPistol ? 0.42 : 0, dt > 0 ? 1 - Math.exp(-18 * dt) : 1);
     trig.rotation.x = trigPull * 0.3;
-    pistolTriggerNode.rotation.x = pistolTrigPull;
+    pistolTriggerNode.rotation.x = -pistolTrigPull * 0.45;
 
     const hip = 1 - ads;
     const calm = 1 - 0.78 * ads;

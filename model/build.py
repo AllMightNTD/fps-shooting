@@ -27,7 +27,7 @@ from model.maps import (
     build_wrecked_truck_nodes,
     export_military_shared_json,
 )
-from model.weapons import build_awm_glb, build_m416_nodes, build_pistol_nodes
+from model.weapons import build_awm_glb, build_m416_nodes, build_pistol_glb
 
 
 @dataclass(frozen=True)
@@ -88,7 +88,7 @@ def build_all(output_dir: Path, texture_size: int = 512, seed: int = 42) -> list
     glove_size = max(64, texture_size // 2)
     models_spec = [
         ("m416", lambda: export_glb(build_m416_nodes(texture_size=texture_size, seed=seed), scene_name="M416_PBR_Scene")),
-        ("pistol", lambda: export_glb(build_pistol_nodes(texture_size=texture_size, seed=seed), scene_name="Pistol_PBR_Scene")),
+        ("pistol", lambda: build_pistol_glb(texture_size=texture_size)),
         ("awm", lambda: build_awm_glb(texture_size=texture_size)),
         ("fps_arms", lambda: build_fps_arms_glb(texture_size=texture_size)),
         ("soldier", lambda: export_glb(build_soldier_nodes(tex_size=glove_size, seed=seed), scene_name="Soldier_PBR_Scene")),

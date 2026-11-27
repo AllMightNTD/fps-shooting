@@ -762,7 +762,7 @@ def inspect_scene_materials(page: Page) -> dict[str, Any]:
     poly_mat = vm.get("M416_Polymer")
     gun_mat = vm.get("M416_GunMetal")
     glass_mat = vm.get("M416_HoloGlass") or vm.get("holo_lens")
-    pistol_poly = vm.get("Pistol_Polymer") or vm.get("Pistol_GripStipple")
+    pistol_poly = vm.get("Pistol_PBR") or vm.get("Pistol_Polymer") or vm.get("Pistol_GripStipple")
     awm_mat = vm.get("AWM_RiflePBR")
 
     warm_lamps = [l for l in data["streetlamps"] if l["r"] > l["b"] + 0.05]

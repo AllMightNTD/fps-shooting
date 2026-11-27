@@ -14,6 +14,8 @@ _(ghi đè mỗi lần cập nhật)_
 
 ## 2. Quyết định đã chốt
 
+- [2026-11-27] Tích hợp model Sketchfab `pistol.glb` (`Pistol` — DJMaesen, CC-BY-4.0) thay cho súng lục thủ công cũ tại slot `2`: resize 3 texture PBR từ `2048×2048` về `512×512` (`model/dist/pistol.glb` `1,149,088 B`, `dist-static` tải nhanh), nắn gọn vành cò theo trục X (`0.80× cosine taper` còn `±0.0066m`) để giữ dáng tay cầm/vành cò như cũ, bake trực tiếp transform hệ mét `-Z` vào từng node `pistol_frame`/`pistol_slide`/`pistol_trigger`/`pistol_mag` (kèm 2 viên đạn đồng), và căn lại 4 socket + `WEAPON_FINGER_PROFILES.pistol` giữ thế cầm 2 tay chiến thuật — Lý do: Người dùng chốt phương án `1: 512x512 + chỉnh hình dáng tay cầm/vành cò như cũ` và `2: giữ tư thế cầm 2 tay chiến thuật`.
+
 - [2026-11-25] Giữ kiến trúc Procedural 3D trên Three.js r128 tích hợp trong `FPS.html` — Lý do: Chạy độc lập không phụ thuộc asset ngoài hay lỗi CORS `file://`.
 - [2026-11-25] Mẫu vũ khí: **M416 / HK416 Tactical chuẩn PUBG** (báng chiến thuật, ốp M-LOK, đầu ngắm gập MBUS, khối trích khí, băng đạn cong PMAG có cửa sổ thấy đạn đồng giảm dần, hộp laser AN/PEQ-15 FDE, kính ngắm Holographic nhìn xuyên thấu, tay cầm góc AFG) — Lý do: Người dùng xác nhận lựa chọn.
 - [2026-11-25] Mẫu tay nhân vật: **Găng tay chiến thuật hở ngón (da + gù carbon) + ngón tay lộ da có móng tay + cẳng tay ướt mưa + đồng hồ quân đội đeo trực tiếp trên cổ tay trái (`leftArm`) + tay áo camo xắn** — Lý do: Người dùng xác nhận phong cách đặc trưng PUBG FPP; đồng hồ gắn trên nhóm cẳng tay đảm bảo luôn ôm khít cổ tay ở mọi góc xoay.
@@ -89,6 +91,20 @@ _(ghi đè mỗi lần cập nhật)_
 - [ ] Tích hợp nốt âm thanh cho Glock-17 (`sound/pistol/*.wav`) và AWM/M200 (`sound/m200/*.wav`), hoặc commit bản hiện tại — Vai trò: Tech Lead, Frontend/Backend Dev — Ưu tiên: trung bình
 
 ## 4. Nhật ký bàn giao (mới nhất ở trên cùng)
+
+### [2026-11-27 18:01] Tích hợp model `pistol.glb` (DJMaesen CC-BY-4.0) & căn chỉnh thế cầm 2 tay chiến thuật — Vai trò: Tech Lead, Python Model Dev, Frontend Dev, QA, Security, Technical Writer
+
+- **Đã làm:**
+  - **Chuyển đổi Metric & Texture 512×512 ([model/weapons/pistol.py](file:///home/dev_ntd/Documents/FPS/model/weapons/pistol.py), [model/weapons/__init__.py](file:///home/dev_ntd/Documents/FPS/model/weapons/__init__.py), [model/build.py](file:///home/dev_ntd/Documents/FPS/model/build.py)):** Sao lưu nguồn tại `model/assets/pistol.glb` (fallback hermetic); thay thế `build_pistol_nodes` bằng `build_pistol_glb(texture_size=512)`: resize 3 texture PNG (`baseColor`, `metallicRoughness+AO`, `normal`) về `512×512` (~`1.15 MB` `.glb`), dựng hệ node chuẩn `-Z`/mét (`pistol_root` với metadata `sightY=0.0662`, `triggerPivot=[0,0.0221,-0.0338]`, `muzzlePos=[0,0.0482,-0.156]`), giữ nguyên 2 viên đạn đồng trong `pistol_mag`, nắn nhẹ vành cò `_GUARD_X_SCALE=0.80`, cấu hình vật liệu `Pistol_PBR` (`clearcoat=0.14`, `occlusionTexture.strength=0.65`) và build lại toàn bộ `model/dist/` + `dist-static/` (`node scripts/build_static.mjs` → `74` files, `18.34 MB`).
+  - **Thế cầm 2 tay, Trigger Discipline, ADS & 3P ([public/js/arm_rig.js](file:///home/dev_ntd/Documents/FPS/public/js/arm_rig.js), [public/js/asset_loader.js](file:///home/dev_ntd/Documents/FPS/public/js/asset_loader.js), [public/js/viewmodel_anim.js](file:///home/dev_ntd/Documents/FPS/public/js/viewmodel_anim.js)):** Căn lại 4 socket (`socket_handguard`, `socket_grip`, `socket_mag`, `socket_slide`) và `WEAPON_FINGER_PROFILES.pistol` sao cho 2 tay ôm khít thân súng, ngón cái trái dọc khung trượt, ngón trỏ phải duỗi dọc khung trên vành cò ở trạng thái nghỉ (`indexIdle`) và móc chuẩn vào cò khi bắn (`indexFire`, xoay `pistolTriggerNode.rotation.x = -pistolTrigPull * 0.45`), căn `PISTOL_ADS_POS = (0, -0.0654, -0.280)` giúp beavertail/búa đập không bị tay che và đầu ruồi khớp giữa khe thước ngắm.
+  - **Kiểm thử, OWASP & Tài liệu ([model/tests/test_pistol_model.py](file:///home/dev_ntd/Documents/FPS/model/tests/test_pistol_model.py), [server/tests/test_arm_rig.mjs](file:///home/dev_ntd/Documents/FPS/server/tests/test_arm_rig.mjs), [server/tests/verify_e2e_suite.py](file:///home/dev_ntd/Documents/FPS/server/tests/verify_e2e_suite.py), [README.md](file:///home/dev_ntd/Documents/FPS/README.md), [model/README.md](file:///home/dev_ntd/Documents/FPS/model/README.md)):**
+    - Python (`python3 -m unittest discover -s model/tests -v`): **30/30 PASS** (bao gồm `TestPistolTextures` & `TestPistolGLBConverter` Happy + Unhappy paths).
+    - Node (`node --test server/tests/test_*.js server/tests/test_*.mjs`): **63/63 PASS** (bao gồm test tích hợp thật `model/dist/pistol.glb + fps_arms.glb` và `build_static`).
+    - Playwright WebGL trên cả 2 map Military & Harbor (`verify_pistol_visuals.py` 7 ảnh & `verify_military_e2e.py`): **PASS (`0` console/pageerror/HTTP>=400)**; `verify_e2e_suite.py` cũ lệch UI lobby Harbor + abort preload MP3 (nhưng không phát sinh `console_errors`/`pageerrors`).
+    - Quét OWASP (`eval`, `innerHTML`, `dangerouslySetInnerHTML`, `shell=True`, secrets): **`OWASP_CLEAN` (`0` hits)**.
+    - Cập nhật ghi công `DJMaesen CC-BY-4.0` trong `README.md` và `model/README.md`.
+- **File ảnh hưởng:** `model/assets/pistol.glb`, `model/weapons/{pistol.py,__init__.py}`, `model/build.py`, `model/tests/test_pistol_model.py`, `model/dist/pistol.*`, `dist-static/*`, `public/js/{arm_rig,asset_loader,viewmodel_anim}.js`, `server/tests/{test_arm_rig.mjs,verify_e2e_suite.py}`, `README.md`, `model/README.md`, `agents/context.md`.
+- **Bước tiếp theo:** Nhấn `Ctrl+F5` trên bản local hoặc push lên GitHub để Cloudflare Workers tự deploy `pistol.glb` mới (`1.15 MB`) và kiểm tra slot `[2]` trực tiếp.
 
 ### [2026-11-27 16:40] Triển khai trọn gói Bước 3: Tách Static Cloudflare Pages + Render WebSocket + GitHub Actions Keep-Alive — Vai trò: Tech Lead, Backend/Frontend/DevOps, QA, Security
 

@@ -18,9 +18,10 @@ model/
 ├── weapons/
 │   ├── __init__.py
 │   ├── m416.py             # Dựng chi tiết HK416/M416 (SOPMOD stock, EOTech vát, Quad-Rail, băng đạn cong, PEQ-15)
-│   ├── pistol.py           # Dựng Glock-17 Tactical Gen4/Gen5 (slide, barrel, frame stippling, trigger, mag, Tritium)
+│   ├── pistol.py           # Chuyển đổi & chuẩn hóa PBR model pistol.glb (M1911 DJMaesen CC-BY-4.0, 512x512, vành cò gọn & socket 2 tay)
 │   └── awm.py              # Chuyển đổi awm.glb (Spec-Gloss -> Metallic-Roughness, bolt pivot, mag group & IK sockets)
 ├── assets/
+│   ├── pistol.glb          # Model nguồn Pistol M1911 (DJMaesen, CC-BY-4.0 — fallback hermetic cho pistol.py)
 │   ├── awm.glb             # Model nguồn AWM Sniper (fallback hermetic cho awm.py)
 │   └── fps_arms.glb        # Model nguồn SkinnedMesh tay chiến thuật 47 xương (DJMaesen, CC-BY-4.0)
 ├── characters/
@@ -31,7 +32,7 @@ model/
 ├── tests/
 │   ├── __init__.py
 │   ├── test_m416_model.py     # Unit test chuẩn AAA cho geometry, PBR M416 & GLB exporter (Happy & Unhappy paths)
-│   ├── test_pistol_model.py   # Unit test chuẩn AAA cho geometry, textures PBR & GLB Glock-17
+│   ├── test_pistol_model.py   # Unit test chuẩn AAA cho textures PBR & chuyển đổi metric pistol.glb
 │   ├── test_awm_model.py      # Unit test chuẩn AAA cho chuyển đổi PBR awm.glb, trục -Z/mét & bolt/mag sockets
 │   ├── test_arms_model.py     # Unit test chuẩn AAA cho chuyển đổi Spec-Gloss -> PBR, bufferView & skinned fps_arms.glb
 │   ├── test_soldier_model.py  # Unit test chuẩn AAA cho texture quân phục BDU/Kevlar & rigged soldier.glb
@@ -39,8 +40,8 @@ model/
 └── dist/
     ├── m416.glb            # Asset nhị phân glTF 2.0 chuẩn PBR cho súng M416
     ├── m416.bundle.js      # Gói Base64 JS cho M416 chạy không lỗi CORS trên file://
-    ├── pistol.glb          # Asset nhị phân glTF 2.0 chuẩn PBR cho súng lục Glock-17
-    ├── pistol.bundle.js    # Gói Base64 JS cho Glock-17 chạy không lỗi CORS trên file://
+    ├── pistol.glb          # Asset nhị phân glTF 2.0 chuẩn PBR cho súng lục slot 2 (1.15 MB, textures 512x512)
+    ├── pistol.bundle.js    # Gói Base64 JS cho súng lục slot 2 chạy không lỗi CORS trên file://
     ├── awm.glb             # Asset nhị phân glTF 2.0 chuẩn PBR cho súng tỉa AWM Sniper
     ├── awm.bundle.js       # Gói Base64 JS cho AWM chạy không lỗi CORS trên file://
     ├── fps_arms.glb        # Asset nhị phân glTF 2.0 chuẩn PBR (đã chuẩn hóa arms_root) cho tay nhân vật FPP
@@ -91,6 +92,7 @@ python3 -m unittest discover -s model/tests -v
 
 - **Model gốc:** `"fps arms"` của tác giả **DJMaesen**
 - **Giấy phép:** **CC-BY-4.0** (<http://creativecommons.org/licenses/by/4.0/>)
+- **Model súng lục gốc (`model/assets/pistol.glb`):** **"Pistol"** của tác giả **DJMaesen** (<https://sketchfab.com/bumstrum>), cấp phép theo **CC-BY-4.0** (<http://creativecommons.org/licenses/by/4.0/>), nguồn: <https://sketchfab.com/3d-models/pistol-5f6ec54257de449cacc8c872660b40d3> (đã giảm texture PBR về `512x512`, tinh chỉnh nhẹ vành cò theo trục X, chuẩn hóa hệ mét `-Z`, tách pivot cò/khóa trượt/băng đạn & gắn 4 socket IK).
 - **Nguồn:** <https://sketchfab.com/3d-models/fps-arms-08ec4403a47645d8ad80633abf13d39d>
 - **Chỉnh sửa (Modified):** Đã chuyển đổi vật liệu từ `KHR_materials_pbrSpecularGlossiness` sang glTF 2.0 `pbrMetallicRoughness`, giảm kích thước texture từ `2048×2048` xuống `512×512` (mặc định), và bọc node chuẩn hóa `arms_root` (`scale=0.01`, `rotY=π`, `extras=FPS_ARMS_METADATA`) để phù hợp với hệ tọa độ viewmodel Three.js.
 - **Chiến binh 3rd-person (`soldier.glb`)**:

@@ -137,13 +137,14 @@ _(Có thể đổi phím, độ nhạy chuột, độ nhạy ADS, đảo trục 
 
 ## Kiểm thử
 
-- **Python Unit Tests (`python3 -m unittest discover -s model/tests -v`):** **28/28 PASS** (kiểm tra geometry, textures PBR, chuyển đổi Spec-Gloss → Metallic-Roughness `fps_arms.glb` & `awm.glb`, 12 model bản đồ Khu Quân Sự Cũ và chuẩn nhị phân glTF 2.0 `.glb` + `.bundle.js`).
-- **Node.js Server, Arm Rig, Graphics Quality & Loading Tests (`node --test server/tests/test_*.js server/tests/test_*.mjs`):** **25/25 PASS** (gồm LAN server, `arm_rig`, `military_map`, `graphics_quality` và `loading_manager` kèm kiểm tra phục vụ `/assets/loading_bg.webp` & chặn path traversal).
+- **Python Unit Tests (`python3 -m unittest discover -s model/tests -v`):** **30/30 PASS** (kiểm tra geometry, textures PBR, chuyển đổi PBR & chuẩn hóa `-Z`/mét cho `fps_arms.glb`, `awm.glb`, `pistol.glb`, 12 model bản đồ Khu Quân Sự Cũ và chuẩn nhị phân glTF 2.0 `.glb` + `.bundle.js`).
+- **Node.js Tests (`node --test server/tests/test_*.js server/tests/test_*.mjs`):** **63/63 PASS** (gồm LAN server, `arm_rig` với `m416`/`pistol`/`awm` + `fps_arms.glb`, `military_map`, `graphics_quality`, `loading_manager`, `net_utils` và `build_static`).
 - **Trình duyệt Headless (Chrome/Playwright):**
   - `verify_lan_v2_e2e.py` (**PASS**): 3-tab Lobby → Phòng chờ → Mật khẩu → Chat → Kick → Host Cài đặt → `STARTING` → `PLAYING` → Headshot → `ENDING` → `"Về phòng ngay"` → Reconnect tab → Solo Drone (`0` console/pageerror).
   - `verify_lan_v2_1_e2e.py` (**PASS**): Lưu cài đặt & gán phím `localStorage` qua reload, chuyển súng `1/2/3`, đổi súng hủy nạp giữ nguyên mag, `Alt+Tab`/`blur` không kẹt phím, `Shift+R` nạp khi chạy nhưng chặn bắn, phân biệt đội `30m` trong mưa + giả lập mù màu Chromium `protanopia`, nameplate chỉ hiện đồng đội, tư thế ngồi đồng bộ & hoạt ảnh nạp người chơi khác, Radar chấm địch khi bắn, chặn cheat `w.mag=99` trên console, khôi phục đúng `m416.mag = 26` khi reconnect giữa trận, ống ngắm AWM Sniper & tâm ngắm đổi đỏ (`0` console/pageerror).
-  - Kiểm định trực quan viewmodel Chrome headless cho `M416`, `Glock-17` và `AWM Sniper` với tay `SkinnedMesh` + IK 2 xương (`0` console/pageerror).
+  - Kiểm định trực quan viewmodel Chrome headless cho `M416`, `Glock-17` (`pistol.glb` M1911) và `AWM Sniper` với tay `SkinnedMesh` + IK 2 xương trên cả map Khu Quân Sự Cũ & Bến Cảng Mưa (`0` console/pageerror).
 
 ## Ghi công (Attribution)
 
 - Model tay nhân vật FPP **"fps arms"** của tác giả **DJMaesen**, cấp phép theo **CC-BY-4.0** (<http://creativecommons.org/licenses/by/4.0/>), nguồn: <https://sketchfab.com/3d-models/fps-arms-08ec4403a47645d8ad80633abf13d39d> (đã chuyển đổi PBR & chuẩn hóa node gốc `arms_root`).
+- Model súng lục **"Pistol"** của tác giả **DJMaesen**, cấp phép theo **CC-BY-4.0** (<http://creativecommons.org/licenses/by/4.0/>), nguồn: <https://sketchfab.com/3d-models/pistol-5f6ec54257de449cacc8c872660b40d3> (đã giảm texture `512x512`, chuẩn hóa trục `-Z`/mét, phân cấp node `pistol_slide`/`pistol_trigger`/`pistol_mag`/`pistol_muzzle` & socket IK 2 tay).

@@ -720,3 +720,121 @@ test("Real built awm.glb + fps_arms.glb sockets position left forend, right grip
   const rWristBolt = worldTRS(armsRoot.getObjectByName("R_wrist_025")).p;
   assert.ok(rWristBolt.x > 0.04 && Number.isFinite(rWristBolt.x), `Expected right wrist on right bolt handle, got x=${rWristBolt.x}`);
 });
+
+test("arms rig integrates with built model/dist/pistol.glb sockets and two-handed trigger discipline", () => {
+  const pistolPath = path.join(DIST_DIR, "pistol.glb");
+  const armsPath = path.join(DIST_DIR, "fps_arms.glb");
+  if (!fs.existsSync(pistolPath) || !fs.existsSync(armsPath)) {
+    return;
+  }
+
+  const pistolRaw = fs.readFileSync(pistolPath);
+  const armsRaw = fs.readFileSync(armsPath);
+
+  function parseRoot(buf) {
+    const jsonLen = buf.readUInt32LE(12);
+    const gltf = JSON.parse(buf.toString("utf8", 20, 20 + jsonLen));
+    const objs = gltf.nodes.map((n) => {
+      const o = {
+        name: n.name || "",
+        children: [],
+        parent: null,
+        position: new Vec3(...(n.translation || [0, 0, 0])),
+        quaternion: new Quat(...(n.rotation || [0, 0, 0, 1])),
+        scale: new Vec3(...(n.scale || [1, 1, 1])),
+        visible: true,
+        getObjectByName(name) {
+          if (this.name === name) return this;
+          for (const c of this.children) {
+            const hit = c.getObjectByName(name);
+            if (hit) return hit;
+          }
+          return null;
+        },
+        traverse(fn) {
+          fn(this);
+          for (const c of this.children) c.traverse(fn);
+        },
+      };
+      return o;
+    });
+    gltf.nodes.forEach((n, i) =>
+      (n.children || []).forEach((c) => {
+        objs[i].children.push(objs[c]);
+        objs[c].parent = objs[i];
+      }),
+    );
+    return objs[gltf.scenes[0].nodes[0]];
+  }
+
+  function worldTRS(node) {
+    const chain = [];
+    for (let cur = node; cur; cur = cur.parent) chain.push(cur);
+    chain.reverse();
+    const p = new Vec3(0, 0, 0);
+    const q = new Quat(0, 0, 0, 1);
+    let s = 1;
+    for (const n of chain) {
+      p.add(n.position.clone().multiplyScalar(s).applyQuaternion(q));
+      q.multiplyQuaternions(q.clone(), n.quaternion);
+      s *= n.scale.x;
+    }
+    return { p, q };
+  }
+
+  const pistolRoot = parseRoot(pistolRaw);
+  const armsRoot = parseRoot(armsRaw);
+  const ctrl = createSkinnedArmsController(armsRoot, MathApi);
+  assert.equal(ctrl.ready, true);
+
+  const sockHg = worldTRS(pistolRoot.getObjectByName("socket_handguard"));
+  const sockGrip = worldTRS(pistolRoot.getObjectByName("socket_grip"));
+  const sockSlide = worldTRS(pistolRoot.getObjectByName("socket_slide"));
+
+  // Act 1: Two-handed idle pistol stance (index finger extended outside guard, thumbs forward)
+  ctrl.update({
+    weaponId: "pistol",
+    leftSocketPos: sockHg.p,
+    leftSocketQuat: sockHg.q,
+    rightSocketPos: sockGrip.p,
+    rightSocketQuat: sockGrip.q,
+    triggerPull: 0,
+    ads: 0,
+  });
+  const idlePoint3 = worldTRS(armsRoot.getObjectByName("R_point3_032")).p;
+  const idlePoint4 = worldTRS(armsRoot.getObjectByName("R_point4_033")).p;
+  const idleLThumb4 = worldTRS(armsRoot.getObjectByName("L_thumb4_07")).p;
+  assert.ok(idlePoint3.x > 0.014, `Idle index distal knuckle must clear guard (+x > 0.014), got x=${idlePoint3.x}`);
+  assert.ok(idlePoint4.x > 0.012 && idlePoint4.z < -0.05, `Idle fingertip stays along frame, got ${JSON.stringify(idlePoint4)}`);
+  assert.ok(idleLThumb4.x < -0.015 && idleLThumb4.z < -0.02, `Left support thumb rides left frame forward, got ${JSON.stringify(idleLThumb4)}`);
+
+  // Act 2: Firing trigger pull curls R_point3 inside trigger shoe zone
+  ctrl.update({
+    weaponId: "pistol",
+    leftSocketPos: sockHg.p,
+    leftSocketQuat: sockHg.q,
+    rightSocketPos: sockGrip.p,
+    rightSocketQuat: sockGrip.q,
+    triggerPull: 1,
+    ads: 1,
+  });
+  const firePoint3 = worldTRS(armsRoot.getObjectByName("R_point3_032")).p;
+  assert.ok(
+    firePoint3.x < 0.005 && firePoint3.z < -0.02 && firePoint3.z > -0.048,
+    `Fired index joint should engage trigger, got ${JSON.stringify(firePoint3)}`,
+  );
+
+  // Act 3: Left hand slide rack socket stays on rear left slide
+  ctrl.update({
+    weaponId: "pistol",
+    leftSocketPos: sockSlide.p,
+    leftSocketQuat: sockSlide.q,
+    rightSocketPos: sockGrip.p,
+    rightSocketQuat: sockGrip.q,
+    triggerPull: 0,
+    ads: 0,
+    leftAction: "bolt",
+  });
+  const rackWrist = worldTRS(armsRoot.getObjectByName("L_wrist_03")).p;
+  assert.ok(rackWrist.y > 0.0 && Number.isFinite(rackWrist.y), `Expected left wrist raised to slide, got y=${rackWrist.y}`);
+});

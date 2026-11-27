@@ -1,166 +1,210 @@
-"""AAA unit tests (Happy & Unhappy paths) for Tactical Pistol PBR geometry, textures, and GLB export."""
+"""Unit tests for procedural pistol textures and normalized metric pistol.glb export."""
 
 from __future__ import annotations
 
-import base64
 import io
-import json
-from pathlib import Path
-import re
-import struct
-import tempfile
 import unittest
+from pathlib import Path
+from unittest import mock
 
 import numpy as np
 from PIL import Image
 
-from model.build import inspect_glb_stats
-from model.core import (
-    create_pistol_textures,
-    export_glb,
-    export_js_bundle,
-    extrude_hollow_profile,
-    extrude_side_profile,
-    sample_quadratic_bezier,
-)
-from model.weapons import PISTOL_METADATA, build_pistol_nodes
+from model.core import create_pistol_textures, parse_glb
+from model.weapons import PISTOL_METADATA, build_pistol_glb
+import model.weapons.pistol as pistol_mod
 
 
-class TestPistolGeometryAndTextures(unittest.TestCase):
-    def test_sample_quadratic_and_hollow_extrude_produce_valid_manifold_normals(self) -> None:
-        # Arrange
-        outer = [(-0.04, 0.02), (-0.04, -0.01), (0.01, -0.01), (0.01, 0.02)]
-        inner = [(-0.032, 0.014), (-0.032, -0.004), (0.002, -0.004), (0.002, 0.014)]
-        curve = [(0.0, 0.0), *sample_quadratic_bezier((0.0, 0.0), (0.02, 0.01), (0.04, 0.0), segments=8), (0.02, -0.02)]
+def _eval_node_world_mats(gltf: dict) -> dict[int, np.ndarray]:
+    nodes = gltf["nodes"]
+    world: dict[int, np.ndarray] = {}
 
-        # Act
-        hollow = extrude_hollow_profile(outer, inner, depth=0.012, bevel_size=0.001, bevel_thickness=0.001, bevel_segments=3)
-        side = extrude_side_profile(curve, width=0.024, bevel=0.0012, bevel_segments=3)
+    def node_local(node: dict) -> np.ndarray:
+        mat = np.eye(4, dtype=np.float64)
+        if "scale" in node:
+            sx, sy, sz = node["scale"]
+            mat = np.diag([sx, sy, sz, 1.0]) @ mat
+        if "rotation" in node:
+            x, y, z, w = node["rotation"]
+            rot = np.array(
+                [
+                    [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w), 0.0],
+                    [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w), 0.0],
+                    [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y), 0.0],
+                    [0.0, 0.0, 0.0, 1.0],
+                ],
+                dtype=np.float64,
+            )
+            mat = rot @ mat
+        if "translation" in node:
+            tx, ty, tz = node["translation"]
+            tr = np.eye(4, dtype=np.float64)
+            tr[:3, 3] = [tx, ty, tz]
+            mat = tr @ mat
+        return mat
+
+    def walk(node_idx: int, parent: np.ndarray) -> None:
+        mat = parent @ node_local(nodes[node_idx])
+        world[node_idx] = mat
+        for child_idx in nodes[node_idx].get("children", []):
+            walk(int(child_idx), mat)
+
+    for root_idx in gltf["scenes"][gltf["scene"]]["nodes"]:
+        walk(int(root_idx), np.eye(4, dtype=np.float64))
+    return world
+
+
+def _world_bounds_for_node(gltf: dict, bin_bytes: bytes, world_mats: dict[int, np.ndarray], node_name: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    idx_by_name = {n.get("name"): i for i, n in enumerate(gltf["nodes"])}
+    node_idx = idx_by_name[node_name]
+    node = gltf["nodes"][node_idx]
+    prim = gltf["meshes"][node["mesh"]]["primitives"][0]
+    acc = gltf["accessors"][prim["attributes"]["POSITION"]]
+    bv = gltf["bufferViews"][acc["bufferView"]]
+    off = int(bv.get("byteOffset", 0)) + int(acc.get("byteOffset", 0))
+    verts = np.frombuffer(bin_bytes, dtype="<f4", count=acc["count"] * 3, offset=off).reshape(-1, 3)
+    mat = world_mats[node_idx]
+    wverts = (mat[:3, :3] @ verts.T).T + mat[:3, 3]
+    return wverts, wverts.min(axis=0), wverts.max(axis=0)
+
+
+class TestPistolTextures(unittest.TestCase):
+    def test_pistol_textures_generation_is_deterministic_and_valid(self) -> None:
+        # Arrange / Act
+        tex_a = create_pistol_textures(size=128, seed=42)
+        tex_b = create_pistol_textures(size=128, seed=42)
 
         # Assert
-        np.testing.assert_allclose(np.linalg.norm(hollow.normals, axis=1), np.ones(len(hollow.normals)), atol=1e-5)
-        np.testing.assert_allclose(np.linalg.norm(side.normals, axis=1), np.ones(len(side.normals)), atol=1e-5)
-        bmin, bmax = side.positions.min(axis=0), side.positions.max(axis=0)
-        self.assertAlmostEqual(float(bmin[0] + bmax[0]), 0.0, places=5)  # Symmetric across X = 0
-        self.assertEqual(len(hollow.indices) % 3, 0)
-        self.assertLess(int(hollow.indices.max()), len(hollow.positions))
+        self.assertEqual(tex_a.slide_albedo_png, tex_b.slide_albedo_png)
+        self.assertEqual(tex_a.polymer_mr_png, tex_b.polymer_mr_png)
+        for png_bytes in (
+            tex_a.slide_albedo_png,
+            tex_a.slide_mr_png,
+            tex_a.slide_normal_png,
+            tex_a.polymer_albedo_png,
+            tex_a.polymer_mr_png,
+            tex_a.polymer_normal_png,
+            tex_a.stipple_albedo_png,
+            tex_a.stipple_mr_png,
+            tex_a.stipple_normal_png,
+        ):
+            with Image.open(io.BytesIO(png_bytes)) as img:
+                self.assertEqual(img.size, (128, 128))
+                self.assertEqual(img.mode, "RGB")
 
-    def test_hollow_and_side_extrude_invalid_inputs_raise_value_error(self) -> None:
-        # Arrange / Act / Assert (Unhappy Paths)
-        with self.assertRaises(ValueError):
-            sample_quadratic_bezier((0.0, 0.0), (0.1, 0.1), (0.2, 0.0), segments=0)
-        with self.assertRaises(ValueError):
-            extrude_side_profile([(0.0, 0.0), (0.1, 0.0), (0.0, 0.1)], width=0.0)
-        with self.assertRaises(ValueError):
-            # Inner loop larger than outer loop must fail
-            extrude_hollow_profile(
-                outer_pts=[(-0.01, -0.01), (0.01, -0.01), (0.01, 0.01)],
-                inner_pts=[(-0.05, -0.05), (0.05, -0.05), (0.05, 0.05)],
-                depth=0.01,
-            )
-        with self.assertRaises(ValueError):
-            # Mismatched outer/inner vertex counts must fail
-            extrude_hollow_profile(
-                outer_pts=[(-0.05, -0.05), (0.05, -0.05), (0.05, 0.05), (-0.05, 0.05)],
-                inner_pts=[(-0.01, -0.01), (0.01, -0.01), (0.01, 0.01)],
-                depth=0.01,
-            )
-
-    def test_create_pistol_textures_valid_anodized_droplet_and_stipple_maps(self) -> None:
-        # Arrange
-        tex_size = 128
-
-        # Act
-        tex = create_pistol_textures(size=tex_size, scratch_count=20, droplet_count=60, seed=99)
-        slide_mr = np.asarray(Image.open(io.BytesIO(tex.slide_mr_png)))
-        stipple_norm = Image.open(io.BytesIO(tex.stipple_normal_png))
-        poly_norm = Image.open(io.BytesIO(tex.polymer_normal_png))
-        poly_mr = np.asarray(Image.open(io.BytesIO(tex.polymer_mr_png)))
-        stipple_mr = np.asarray(Image.open(io.BytesIO(tex.stipple_mr_png)))
-
-        # Assert
-        self.assertEqual(slide_mr.shape, (tex_size, tex_size, 3))
-        self.assertEqual(stipple_norm.size, (tex_size, tex_size))
-        self.assertEqual(stipple_norm.mode, "RGB")
-        self.assertEqual(poly_norm.size, (tex_size, tex_size))
-        self.assertEqual(poly_norm.mode, "RGB")
-        self.assertTrue(np.all(poly_mr[..., 2] == 0))
-        self.assertGreaterEqual(int(poly_mr[..., 1].min()), 190)
-        self.assertTrue(np.all(stipple_mr[..., 2] == 0))
-        # Rain droplets create glossy low-roughness pixels in G channel
-        self.assertLess(int(slide_mr[..., 1].min()), 30)
-        self.assertGreater(int(slide_mr[..., 1].max()), 90)
-
-        with self.assertRaises(ValueError):
-            create_pistol_textures(size=100)
-        with self.assertRaises(ValueError):
-            create_pistol_textures(size=64, scratch_count=-1)
+    def test_pistol_textures_reject_invalid_size(self) -> None:
+        for bad in (0, -64, 100):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    create_pistol_textures(size=bad)
 
 
-class TestPistolGLBExport(unittest.TestCase):
-    def test_build_pistol_nodes_exports_articulated_groups_and_tritium_sights(self) -> None:
-        # Arrange
-        required_nodes = {
+class TestPistolGLBConverter(unittest.TestCase):
+    def test_build_pistol_glb_contains_expected_hierarchy_bounds_and_sockets(self) -> None:
+        # Arrange / Act
+        glb_bytes = build_pistol_glb(texture_size=512)
+        gltf, bin_bytes = parse_glb(glb_bytes)
+        world_mats = _eval_node_world_mats(gltf)
+
+        # Assert metadata & required hierarchy nodes
+        nodes_by_name = {n["name"]: (i, n) for i, n in enumerate(gltf["nodes"]) if "name" in n}
+        for required_node in (
             "pistol_root",
-            "pistol_slide",
-            "pistol_barrel",
             "pistol_frame",
+            "pistol_slide",
             "pistol_trigger",
+            "pistol_trigger_shoe",
             "pistol_mag",
+            "pistol_mag_body",
+            "pistol_bullet",
+            "pistol_bullet_1",
             "pistol_muzzle",
-            "pistol_tritium_dots",
-            "pistol_sight_rings",
             "socket_handguard",
             "socket_grip",
             "socket_mag",
             "socket_slide",
-        }
+        ):
+            self.assertIn(required_node, nodes_by_name)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            bundle_path = Path(tmpdir) / "pistol.bundle.js"
+        root_extras = nodes_by_name["pistol_root"][1]["extras"]
+        self.assertEqual(root_extras["weapon"], PISTOL_METADATA["weapon"])
+        self.assertEqual(root_extras["license"], "CC-BY-4.0")
+        self.assertEqual(root_extras["sockets"], PISTOL_METADATA["sockets"])
 
-            # Act
-            nodes = build_pistol_nodes(texture_size=128, seed=42)
-            glb_bytes = export_glb(nodes, scene_name="Pistol_PBR_Scene")
-            export_js_bundle(glb_bytes, bundle_path, model_key="pistol")
+        # Assert animated parent-child relationships (mag carries bullets, slide carries socket_slide)
+        mag_children = {gltf["nodes"][c]["name"] for c in nodes_by_name["pistol_mag"][1]["children"]}
+        self.assertTrue({"pistol_mag_body", "pistol_bullet", "pistol_bullet_1", "socket_mag"}.issubset(mag_children))
+        slide_children = {gltf["nodes"][c]["name"] for c in nodes_by_name["pistol_slide"][1]["children"]}
+        self.assertIn("socket_slide", slide_children)
 
-            # Assert
-            stats = inspect_glb_stats(glb_bytes)
-            self.assertGreater(stats["triangles"], 2500)
-            self.assertLessEqual(stats["meshes"], 20)
+        # Assert metric (-Z) firearm bounds and narrowed trigger guard clearance
+        frame_verts, frame_min, frame_max = _world_bounds_for_node(gltf, bin_bytes, world_mats, "pistol_frame")
+        _, slide_min, slide_max = _world_bounds_for_node(gltf, bin_bytes, world_mats, "pistol_slide")
+        _, trig_min, trig_max = _world_bounds_for_node(gltf, bin_bytes, world_mats, "pistol_trigger_shoe")
+        _, mag_min, mag_max = _world_bounds_for_node(gltf, bin_bytes, world_mats, "pistol_mag_body")
 
-            json_len, _ = struct.unpack_from("<II", glb_bytes, 12)
-            gltf = json.loads(glb_bytes[20 : 20 + json_len].decode("utf-8"))
+        self.assertLess(frame_min[2], -0.145)
+        self.assertGreater(frame_max[2], 0.05)
+        self.assertLess(slide_min[2], -0.145)
+        self.assertGreater(slide_max[1], 0.065)
+        self.assertLess(mag_min[1], -0.09)
+        self.assertGreaterEqual(trig_min[0], -0.005)
+        self.assertLessEqual(trig_max[0], 0.005)
 
-            node_names = {n["name"] for n in gltf["nodes"]}
-            self.assertTrue(required_nodes.issubset(node_names))
+        guard_loop = frame_verts[(frame_verts[:, 2] < -0.025) & (frame_verts[:, 2] > -0.067) & (frame_verts[:, 1] < 0.006)]
+        self.assertGreater(len(guard_loop), 10)
+        self.assertLess(float(np.abs(guard_loop[:, 0]).max()), 0.0072)
 
-            root_node = next(n for n in gltf["nodes"] if n["name"] == "pistol_root")
-            self.assertAlmostEqual(root_node["extras"]["slideBlowbackZ"], PISTOL_METADATA["slideBlowbackZ"])
-            self.assertAlmostEqual(root_node["extras"]["slideLockZ"], PISTOL_METADATA["slideLockZ"])
+        # Assert single calibrated PBR material
+        self.assertEqual(len(gltf["materials"]), 1)
+        mat = gltf["materials"][0]
+        self.assertEqual(mat["name"], "Pistol_PBR")
+        self.assertIn("baseColorTexture", mat["pbrMetallicRoughness"])
+        self.assertIn("metallicRoughnessTexture", mat["pbrMetallicRoughness"])
+        self.assertIn("normalTexture", mat)
+        self.assertIn("occlusionTexture", mat)
+        self.assertAlmostEqual(mat["extras"]["pbrPhysical"]["clearcoat"], 0.14)
 
-            mats_by_name = {m["name"]: m for m in gltf["materials"]}
-            slide_mat = mats_by_name["Pistol_Slide"]
-            self.assertAlmostEqual(slide_mat["extras"]["pbrPhysical"]["clearcoat"], 0.18)
+    def test_build_pistol_glb_resizes_textures_and_preserves_alignment(self) -> None:
+        # Arrange / Act
+        glb_512 = build_pistol_glb(texture_size=512)
+        glb_128 = build_pistol_glb(texture_size=128)
+        gltf_128, bin_128 = parse_glb(glb_128)
 
-            poly_mat = mats_by_name["Pistol_Polymer"]
-            stipple_mat = mats_by_name["Pistol_GripStipple"]
-            for mat in (poly_mat, stipple_mat):
-                self.assertEqual(mat["pbrMetallicRoughness"]["metallicFactor"], 0.0)
-                cc = mat.get("extras", {}).get("pbrPhysical", {}).get("clearcoat", 0.0)
-                self.assertLessEqual(cc, 0.04)
-            self.assertNotEqual(poly_mat["normalTexture"]["index"], slide_mat["normalTexture"]["index"])
+        # Assert size reduction & 4-byte aligned non-overlapping bufferViews
+        self.assertLess(len(glb_128), len(glb_512))
+        self.assertLess(len(glb_512), 1_500_000)
 
-            tritium_mat = mats_by_name["Pistol_Tritium"]
-            self.assertTrue(tritium_mat["extras"]["pbrPhysical"]["unlit"])
-            self.assertAlmostEqual(tritium_mat["extras"]["pbrPhysical"]["emissiveIntensity"], 4.5)
+        for bv in gltf_128["bufferViews"]:
+            self.assertEqual(bv.get("byteOffset", 0) % 4, 0)
 
-            bundle_text = bundle_path.read_text(encoding="utf-8")
-            match = re.search(r'FPS_MODELS\["pistol"\]\s*=\s*"([^"]+)"', bundle_text)
-            self.assertIsNotNone(match)
-            self.assertEqual(base64.b64decode(match.group(1)), glb_bytes)
+        for im in gltf_128["images"]:
+            bv = gltf_128["bufferViews"][im["bufferView"]]
+            raw = bin_128[bv["byteOffset"] : bv["byteOffset"] + bv["byteLength"]]
+            with Image.open(io.BytesIO(raw)) as pil:
+                self.assertEqual(pil.size, (128, 128))
+
+    def test_build_pistol_glb_falls_back_to_tracked_asset_when_root_glb_missing(self) -> None:
+        # Arrange
+        missing_root = Path("/tmp/nonexistent-root-pistol-check.glb")
+
+        # Act
+        with mock.patch.object(pistol_mod, "_ROOT_SOURCE_GLB", missing_root):
+            glb_bytes = build_pistol_glb(texture_size=128)
+
+        # Assert
+        gltf, _ = parse_glb(glb_bytes)
+        self.assertEqual(gltf["meshes"][0]["name"], "pistol_frame")
+
+    def test_build_pistol_glb_rejects_invalid_inputs(self) -> None:
+        for bad_size in (0, 32, 300, True):
+            with self.subTest(bad_size=bad_size):
+                with self.assertRaises(ValueError):
+                    build_pistol_glb(texture_size=bad_size)  # type: ignore[arg-type]
+
+        with self.assertRaises(FileNotFoundError):
+            build_pistol_glb(texture_size=128, source_path=Path("/tmp/does-not-exist-pistol.glb"))
 
 
 if __name__ == "__main__":
     unittest.main()
-
