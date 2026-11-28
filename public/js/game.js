@@ -1218,7 +1218,9 @@ export function createGameEngine({
       (isSprinting ? FLAG.SPRINT : 0) |
       (!grounded ? FLAG.AIR : 0) |
       (input.fireHeld ? FLAG.FIRING : 0) |
-      (isReloading ? FLAG.RELOADING : 0);
+      (isReloading ? FLAG.RELOADING : 0) |
+      (f > 0 ? FLAG.MOVE_FWD : f < 0 ? FLAG.MOVE_BACK : 0) |
+      (s < 0 ? FLAG.MOVE_LEFT : s > 0 ? FLAG.MOVE_RIGHT : 0);
 
     if (grounded) lastGroundedAt = nowMs;
     if (jumpHit && !consumedJumpForStand && !prone) {

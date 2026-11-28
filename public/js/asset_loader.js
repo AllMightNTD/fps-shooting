@@ -596,7 +596,7 @@ export function createAssetLoader({
       { key: "pistol", path: "/model/dist/pistol.glb", label: "Glock-17", mount: mountPistolGltf },
       { key: "awm", path: "/model/dist/awm.glb", label: "AWM Sniper", mount: mountAwmGltf },
       { key: "fps_arms", path: "/model/dist/fps_arms.glb", label: "Tay nhân vật FPP", mount: mountFpsArmsGltf },
-      { key: "soldier", path: "/model/dist/soldier.glb", label: "Chiến binh LAN", mount: mountSoldierGltf },
+      { key: "soldier", path: "/model/dist/soldier.glb?v=20261129", label: "Chiến binh LAN", mount: mountSoldierGltf },
     ];
     for (let i = 0; i < specs.length; i++) {
       const sp = specs[i];

@@ -9,6 +9,10 @@ export const SOLDIER_BONE_ALIASES = Object.freeze({
   head: Object.freeze(["mixamorig:Head", "Head", "head", "CC_Base_Head", "head_group"]),
   rightHand: Object.freeze(["weapon_mount", "mixamorig:RightHand", "RightHand", "hand_r", "Hand_R", "CC_Base_R_Hand"]),
   leftHand: Object.freeze(["mixamorig:LeftHand", "LeftHand", "hand_l", "Hand_L", "CC_Base_L_Hand"]),
+  leftArm: Object.freeze(["mixamorig:LeftArm", "LeftArm", "upperarm_l", "CC_Base_L_Upperarm"]),
+  leftForeArm: Object.freeze(["mixamorig:LeftForeArm", "LeftForeArm", "lowerarm_l", "CC_Base_L_Forearm"]),
+  rightArm: Object.freeze(["mixamorig:RightArm", "RightArm", "upperarm_r", "CC_Base_R_Upperarm"]),
+  rightForeArm: Object.freeze(["mixamorig:RightForeArm", "RightForeArm", "lowerarm_r", "CC_Base_R_Forearm"]),
   leftUpLeg: Object.freeze(["mixamorig:LeftUpLeg", "LeftUpLeg", "thigh_l", "CC_Base_L_Thigh"]),
   leftLeg: Object.freeze(["mixamorig:LeftLeg", "LeftLeg", "calf_l", "CC_Base_L_Calf"]),
   rightUpLeg: Object.freeze(["mixamorig:RightUpLeg", "RightUpLeg", "thigh_r", "CC_Base_R_Thigh"]),
@@ -261,11 +265,25 @@ export function stepNormalizedActionWeights(currentWeights, targetWeights, actio
   return normSum;
 }
 
+export function decodeMoveIntentFromFlags(flags = 0, FLAG = {}) {
+  const fBit = typeof FLAG.MOVE_FWD === "number" ? FLAG.MOVE_FWD : 128;
+  const bBit = typeof FLAG.MOVE_BACK === "number" ? FLAG.MOVE_BACK : 256;
+  const lBit = typeof FLAG.MOVE_LEFT === "number" ? FLAG.MOVE_LEFT : 512;
+  const rBit = typeof FLAG.MOVE_RIGHT === "number" ? FLAG.MOVE_RIGHT : 1024;
+  const fwd = (flags & fBit ? 1 : 0) - (flags & bBit ? 1 : 0);
+  const right = (flags & rBit ? 1 : 0) - (flags & lBit ? 1 : 0);
+  return {
+    hasIntent: Boolean(flags & (fBit | bBit | lBit | rBit)),
+    fwd,
+    right,
+  };
+}
+
 export function selectSoldierAnimState({
   alive = true,
   mv = 0,
   flags = 0,
-  FLAG = { CROUCH: 1, AIR: 8, PRONE: 64 },
+  FLAG = { CROUCH: 1, AIR: 8, PRONE: 64, MOVE_FWD: 128, MOVE_BACK: 256, MOVE_LEFT: 512, MOVE_RIGHT: 1024 },
   fwdVel = 0,
   rightVel = 0,
   hasDirectionalCrouch = false,
@@ -275,16 +293,21 @@ export function selectSoldierAnimState({
   const proneBit = FLAG && typeof FLAG.PRONE === "number" ? FLAG.PRONE : 64;
   const crouchBit = FLAG && typeof FLAG.CROUCH === "number" ? FLAG.CROUCH : 1;
   if (flags & airBit) return "jump";
-  if (flags & proneBit) return mv > 0.08 ? "prone_move" : "prone";
+  const intent = decodeMoveIntentFromFlags(flags, FLAG);
+  const isMoving = mv > 0.08 || (intent.hasIntent && (intent.fwd !== 0 || intent.right !== 0));
+  if (flags & proneBit) return isMoving ? "prone_move" : "prone";
   if (flags & crouchBit) {
-    if (mv > 0.08) {
+    if (isMoving) {
       if (hasDirectionalCrouch) {
+        if (intent.hasIntent) {
+          return computeCrouchDirectionalWeights(intent.fwd, intent.right).dominant;
+        }
         return computeCrouchDirectionalWeights(fwdVel, rightVel).dominant;
       }
       return "crouch_move";
     }
     return "crouch";
   }
-  if (mv > 0.08) return "run";
+  if (isMoving) return "run";
   return "idle";
 }

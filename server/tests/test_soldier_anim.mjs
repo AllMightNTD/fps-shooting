@@ -16,6 +16,7 @@ import {
   SOLDIER_BONE_ALIASES,
   cloneSkinnedHierarchy,
   computeCrouchDirectionalWeights,
+  decodeMoveIntentFromFlags,
   findSoldierClip,
   hasSkinnedMesh,
   resolveRigBone,
@@ -661,6 +662,25 @@ test("remote_players manager drives 4-way crouch blendspace with yaw alignment, 
     assert.equal(av.localVelFwd, 0);
     assert.equal(av.localVelRight, 0);
     assertWeightUnity("teleport_reset");
+
+    // Explicit FLAG.MOVE_* intent flips crouch direction immediately even when blocked against a wall (dx=0, dz=0)
+    const intentFwd = decodeMoveIntentFromFlags(FLAG.CROUCH | FLAG.MOVE_FWD, FLAG);
+    assert.deepEqual(intentFwd, { hasIntent: true, fwd: 1, right: 0 });
+    av.snapshots = [{ t: t0 - 10, x: 10, y: 0, z: 10, yaw: 0, pitch: 0, mv: 0.55, flags: FLAG.CROUCH | FLAG.MOVE_FWD, hp: 100, alive: true }];
+    mgr.updateRemotePlayers(0.016);
+    assert.equal(av.rig.activeState, "crouch_forward");
+
+    av.snapshots = [{ t: t0 - 10, x: 10, y: 0, z: 10, yaw: 0, pitch: 0, mv: 0.55, flags: FLAG.CROUCH | FLAG.MOVE_BACK, hp: 100, alive: true }];
+    mgr.updateRemotePlayers(0.016);
+    assert.equal(av.rig.activeState, "crouch_backward");
+
+    av.snapshots = [{ t: t0 - 10, x: 10, y: 0, z: 10, yaw: 0, pitch: 0, mv: 0.55, flags: FLAG.CROUCH | FLAG.MOVE_LEFT, hp: 100, alive: true }];
+    mgr.updateRemotePlayers(0.016);
+    assert.equal(av.rig.activeState, "crouch_left");
+
+    av.snapshots = [{ t: t0 - 10, x: 10, y: 0, z: 10, yaw: 0, pitch: 0, mv: 0.55, flags: FLAG.CROUCH | FLAG.MOVE_RIGHT, hp: 100, alive: true }];
+    mgr.updateRemotePlayers(0.016);
+    assert.equal(av.rig.activeState, "crouch_right");
   } finally {
     globalThis.document = prevDoc;
   }

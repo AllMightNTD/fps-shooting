@@ -764,34 +764,51 @@ def _collect_armature_tree(armature: bpy.types.Object) -> tuple[list[bpy.types.B
 def _sample_idle_arm_targets(
     idle_act: bpy.types.Action,
     armature: bpy.types.Object,
-) -> dict[str, Quaternion]:
-    """Sample character-space (armature-space) arm & hand orientations from frame-1 of idle."""
+) -> tuple[Quaternion, dict[str, Quaternion]]:
+    """Sample Spine2-relative arm & hand orientations from frame-1 of idle.
+
+    Expressing the rifle grip relative to Spine2 lets any forward-leaning stance
+    (run / crouch walk) carry the shoulder pocket, arms, and hands as one unit.
+    """
     _assign_action(armature, idle_act)
     bpy.context.scene.frame_set(int(round(idle_act.frame_range[0])))
     bpy.context.view_layer.update()
+    spine2_name = _resolve_bone_name(armature, ("mixamorig:Spine2", "Spine2"))
+    sp2_r = (
+        armature.pose.bones[spine2_name].matrix.to_3x3().normalized()
+        if spine2_name and spine2_name in armature.pose.bones
+        else Matrix.Identity(3)
+    )
+    sp2_inv = sp2_r.inverted()
     targets: dict[str, Quaternion] = {}
     for pb in armature.pose.bones:
         if _is_arm_rifle_bone(pb.name):
-            targets[pb.name] = pb.matrix.to_3x3().normalized().to_quaternion()
+            arm_r = pb.matrix.to_3x3().normalized()
+            targets[pb.name] = (sp2_inv @ arm_r).to_quaternion().normalized()
     _assign_action(armature, None)
-    return targets
+    return sp2_r.to_quaternion().normalized(), targets
 
 
 def _stabilize_clip_rifle_hold(
     clip_act: bpy.types.Action,
-    idle_arm_targets: dict[str, Quaternion],
+    idle_spine2_q: Quaternion,
+    idle_arm_rel_spine2: dict[str, Quaternion],
     armature: bpy.types.Object,
     blend_weight: float,
     cyclic: bool = True,
+    crouch_torso_lift_rad: float = 0.0,
 ) -> None:
-    """Blend shoulder/arm/hand orientations in armature space toward tactical combat-ready rifle hold.
+    """Apply torso-relative tactical shoulder-welded rifle hold onto moving clips.
 
-    Keeps lower body, hips, and spine torso sway 100% intact while pulling splayed/crossed elbows
-    back into a shoulder-welded two-hand rifle grip pointing straight ahead.
+    Gently lifts over-hunched crouch spines so the helmet clears the receiver, then transforms
+    the idle shoulder-pocket arm posture into each frame's Spine2 frame while keeping chest sway intact.
     """
-    if not clip_act or not idle_arm_targets or blend_weight <= 0.0:
+    if not clip_act or not idle_arm_rel_spine2 or blend_weight <= 0.0:
         return
     ordered_bones, rest_rel = _collect_armature_tree(armature)
+    spine1_name = _resolve_bone_name(armature, ("mixamorig:Spine1", "Spine1"))
+    spine2_name = _resolve_bone_name(armature, ("mixamorig:Spine2", "Spine2"))
+    head_name = _resolve_bone_name(armature, HEAD_BONE_CANDIDATES)
     f_start = int(round(clip_act.frame_range[0]))
     f_end = max(f_start + 1, int(round(clip_act.frame_range[1])))
     _assign_action(armature, clip_act)
@@ -806,23 +823,60 @@ def _stabilize_clip_rifle_hold(
 
     prev_local_q: dict[str, Quaternion] = {}
     first_local_q: dict[str, Quaternion] = {}
+    sp2_lift_q = Euler((-crouch_torso_lift_rad * 0.55, 0.0, 0.0), "XYZ").to_quaternion()
+    sp1_lift_q = Euler((-crouch_torso_lift_rad * 0.45, 0.0, 0.0), "XYZ").to_quaternion()
+    head_counter_q = Euler((crouch_torso_lift_rad * 0.85, 0.0, 0.0), "XYZ").to_quaternion()
 
     for idx, f in enumerate(range(f_start, f_end + 1)):
         src_quats = frame_arm_quats[idx]
         arm_pose_r: dict[str, Matrix] = {}
+        cur_sp2_r: Matrix | None = None
+
         for bone in ordered_bones:
             b_name = bone.name
             p_r = arm_pose_r[bone.parent.name] if bone.parent else Matrix.Identity(3)
             q_orig = src_quats[b_name]
 
-            if b_name not in idle_arm_targets:
-                arm_pose_r[b_name] = q_orig.to_matrix()
+            # Optionally lift over-hunched crouch torso slightly in bone local pitch so helmet clears optics
+            if crouch_torso_lift_rad > 1e-4 and b_name in (spine1_name, spine2_name, head_name):
+                local_orig = ((p_r @ rest_rel[b_name]).inverted() @ q_orig.to_matrix()).to_quaternion().normalized()
+                adj = sp1_lift_q if b_name == spine1_name else sp2_lift_q if b_name == spine2_name else head_counter_q
+                q_loc = (local_orig @ adj).normalized()
+                pq = prev_local_q.get(b_name)
+                if pq is not None and q_loc.dot(pq) < 0.0:
+                    q_loc = -q_loc
+                prev_local_q[b_name] = q_loc.copy()
+                if idx == 0:
+                    first_local_q[b_name] = q_loc.copy()
+                arm_pose_r[b_name] = p_r @ rest_rel[b_name] @ q_loc.to_matrix()
+                if b_name == spine2_name:
+                    cur_sp2_r = arm_pose_r[b_name]
+                pb = armature.pose.bones[b_name]
+                pb.rotation_mode = "QUATERNION"
+                pb.rotation_quaternion = q_loc
+                pb.keyframe_insert(data_path="rotation_quaternion", frame=f)
                 continue
 
-            q_tgt = idle_arm_targets[b_name].copy()
+            if b_name not in idle_arm_rel_spine2:
+                arm_pose_r[b_name] = q_orig.to_matrix()
+                if b_name == spine2_name:
+                    cur_sp2_r = arm_pose_r[b_name]
+                continue
+
+            sp2_r = cur_sp2_r if cur_sp2_r is not None else (
+                src_quats[spine2_name].to_matrix() if spine2_name and spine2_name in src_quats else idle_spine2_q.to_matrix()
+            )
+            # Blend Spine2 orientation slightly toward upright idle pitch for hand leveling while anchoring shoulder to torso
+            q_sp2 = sp2_r.to_quaternion()
+            if q_sp2.dot(idle_spine2_q) < 0.0:
+                q_sp2_ref = -idle_spine2_q
+            else:
+                q_sp2_ref = idle_spine2_q
+            q_frame = q_sp2.slerp(q_sp2_ref, 0.35 if crouch_torso_lift_rad > 1e-4 else 0.15).normalized()
+            q_tgt = (q_frame @ idle_arm_rel_spine2[b_name]).normalized()
+
             if q_orig.dot(q_tgt) < 0.0:
                 q_tgt = -q_tgt
-            # Shoulders blend slightly gentler than forearms/hands so natural stride sway stays organic
             short = b_name.split(":")[-1].lower()
             w = blend_weight * 0.72 if "shoulder" in short else blend_weight
             q_blend = q_orig.slerp(q_tgt, w).normalized()
@@ -860,10 +914,10 @@ def _build_tactical_crouch_idle_from_walk(
     armature: bpy.types.Object,
     scene_fps: int,
 ) -> bpy.types.Action:
-    """Build a height-balanced tactical crouch idle (hipZ ~0.66m, headZ ~1.05m) from crouch walk.
+    """Build a height-balanced tactical crouch idle (hipZ ~0.66m, both knees athletic) from crouch walk.
 
     Matches the 4 directional walk_crouching_* clips (+24cm vs kneeling crouch.fbx) so starting
-    and stopping movement has zero vertical pop and aligns with hitreg crouch head height (1.08m).
+    and stopping movement has zero vertical pop and aligns with hitreg crouch head height.
     """
     import math
 
@@ -872,21 +926,26 @@ def _build_tactical_crouch_idle_from_walk(
     f1 = max(f0 + 1, int(round(walk_fwd_act.frame_range[1])))
     lf_name = _resolve_bone_name(armature, ("mixamorig:LeftFoot", "LeftFoot"))
     rf_name = _resolve_bone_name(armature, ("mixamorig:RightFoot", "RightFoot"))
+    lk_name = _resolve_bone_name(armature, ("mixamorig:LeftLeg", "LeftLeg"))
+    rk_name = _resolve_bone_name(armature, ("mixamorig:RightLeg", "RightLeg"))
     hips_name = _resolve_bone_name(armature, HIPS_BONE_CANDIDATES)
     spine1_name = _resolve_bone_name(armature, ("mixamorig:Spine1", "Spine1"))
     spine2_name = _resolve_bone_name(armature, ("mixamorig:Spine2", "Spine2"))
     head_name = _resolve_bone_name(armature, HEAD_BONE_CANDIDATES)
 
-    # Pick the frame with both feet most squarely planted on the ground
+    # Pick an athletic double-foot crouched stance with BOTH knees raised above the floor
     best_frame = f0
     best_score = 1e9
-    if lf_name and rf_name:
+    if lf_name and rf_name and lk_name and rk_name:
         for f in range(f0, f1 + 1):
             bpy.context.scene.frame_set(f)
             bpy.context.view_layer.update()
             lz = (armature.matrix_world @ armature.pose.bones[lf_name].head).z
             rz = (armature.matrix_world @ armature.pose.bones[rf_name].head).z
-            score = max(lz, rz) + abs(lz - rz) * 0.5
+            lkz = (armature.matrix_world @ armature.pose.bones[lk_name].head).z
+            rkz = (armature.matrix_world @ armature.pose.bones[rk_name].head).z
+            knee_penalty = max(0.0, 0.36 - min(lkz, rkz)) * 5.0
+            score = abs(lz - rz) + (lz + rz) * 0.5 + knee_penalty
             if score < best_score:
                 best_score = score
                 best_frame = f
@@ -1029,21 +1088,37 @@ def main() -> int:
         built_map[clip_name] = act
         print(f"[OK] Built clip '{clip_name}' from {clip_path.name} ({int(act.frame_range[1])} frames)")
 
-    # Stabilize arms/hands in armature space toward tactical combat-ready shoulder weld on moving clips
+    # Stabilize arms/hands in Spine2-relative space toward tactical shoulder-pocket weld on moving clips
     if "idle" in built_map:
-        idle_arm_targets = _sample_idle_arm_targets(built_map["idle"], armature)
+        idle_sp2_q, idle_arm_rel = _sample_idle_arm_targets(built_map["idle"], armature)
         if "run" in built_map:
-            _stabilize_clip_rifle_hold(built_map["run"], idle_arm_targets, armature, blend_weight=0.55, cyclic=True)
-            print("[OK] Stabilized 'run' upper-limb rifle hold toward combat-ready shoulder weld")
-        for c_key, w_blend in (
-            ("crouch_forward", 0.82),
-            ("crouch_backward", 0.72),
-            ("crouch_left", 0.68),
-            ("crouch_right", 0.75),
+            _stabilize_clip_rifle_hold(
+                built_map["run"],
+                idle_sp2_q,
+                idle_arm_rel,
+                armature,
+                blend_weight=0.72,
+                cyclic=True,
+                crouch_torso_lift_rad=0.0,
+            )
+            print("[OK] Stabilized 'run' Spine2-relative rifle hold toward combat-ready shoulder weld")
+        for c_key, w_blend, lift_rad in (
+            ("crouch_forward", 0.88, 0.18),
+            ("crouch_backward", 0.82, 0.14),
+            ("crouch_left", 0.82, 0.18),
+            ("crouch_right", 0.82, 0.18),
         ):
             if c_key in built_map:
-                _stabilize_clip_rifle_hold(built_map[c_key], idle_arm_targets, armature, blend_weight=w_blend, cyclic=True)
-                print(f"[OK] Stabilized '{c_key}' tactical shoulder-welded rifle hold (w={w_blend})")
+                _stabilize_clip_rifle_hold(
+                    built_map[c_key],
+                    idle_sp2_q,
+                    idle_arm_rel,
+                    armature,
+                    blend_weight=w_blend,
+                    cyclic=True,
+                    crouch_torso_lift_rad=lift_rad,
+                )
+                print(f"[OK] Stabilized '{c_key}' tactical shoulder-pocket rifle hold (w={w_blend}, lift={lift_rad:.2f}rad)")
 
     # Build height-balanced tactical crouch idle (+24cm vs kneeling crouch.fbx -> matches 4 crouch walks)
     if "crouch_forward" in built_map:
@@ -1057,8 +1132,10 @@ def main() -> int:
             f"[OK] Built height-balanced tactical 'crouch' idle from 'crouch_forward' ({int(tactical_crouch.frame_range[1])} frames)"
         )
     elif "crouch" in built_map and "idle" in built_map:
-        idle_arm_targets = _sample_idle_arm_targets(built_map["idle"], armature)
-        _stabilize_clip_rifle_hold(built_map["crouch"], idle_arm_targets, armature, blend_weight=0.80, cyclic=True)
+        idle_sp2_q, idle_arm_rel = _sample_idle_arm_targets(built_map["idle"], armature)
+        _stabilize_clip_rifle_hold(
+            built_map["crouch"], idle_sp2_q, idle_arm_rel, armature, blend_weight=0.80, cyclic=True
+        )
         print("[OK] Stabilized fallback 'crouch' rifle hold from 'idle'")
 
     if not built_actions:

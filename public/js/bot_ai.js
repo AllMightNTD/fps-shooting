@@ -869,6 +869,21 @@ export function createBotMatchController({
     if (wantsProne && bot.grounded) wantsCrouch = false;
     if (!bot.grounded) wantsProne = false;
 
+    let moveFlags = 0;
+    if (hasMove) {
+      const nMove = Math.hypot(desiredVx, desiredVz) || 1;
+      const bFx = -Math.sin(bot.yaw);
+      const bFz = -Math.cos(bot.yaw);
+      const bRx = Math.cos(bot.yaw);
+      const bRz = -Math.sin(bot.yaw);
+      const locFwd = (desiredVx * bFx + desiredVz * bFz) / nMove;
+      const locRight = (desiredVx * bRx + desiredVz * bRz) / nMove;
+      if (locFwd > 0.22) moveFlags |= FLAG.MOVE_FWD;
+      else if (locFwd < -0.22) moveFlags |= FLAG.MOVE_BACK;
+      if (locRight > 0.22) moveFlags |= FLAG.MOVE_RIGHT;
+      else if (locRight < -0.22) moveFlags |= FLAG.MOVE_LEFT;
+    }
+
     const adsNow = Boolean(visibleTarget && (bot.activeWeaponId === "sniper" || visibleTarget.dist > 14) && !isReloading && !wantsSprint);
     bot.ads = adsNow;
     bot.flags =
@@ -877,7 +892,8 @@ export function createBotMatchController({
       (adsNow ? FLAG.ADS : 0) |
       (wantsSprint && hasMove ? FLAG.SPRINT : 0) |
       (!bot.grounded ? FLAG.AIR : 0) |
-      (isReloading ? FLAG.RELOADING : 0);
+      (isReloading ? FLAG.RELOADING : 0) |
+      moveFlags;
 
     const moveSpeed = BASE_MOVE_SPEED * getMoveSpeedMultiplier(bot.flags, wCfg) * 0.92;
     const prevX = bot.x;

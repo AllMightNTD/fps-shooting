@@ -12,7 +12,14 @@ export const FLAG = Object.freeze({
   FIRING: 1 << 4,
   RELOADING: 1 << 5,
   PRONE: 1 << 6,
+  MOVE_FWD: 1 << 7,
+  MOVE_BACK: 1 << 8,
+  MOVE_LEFT: 1 << 9,
+  MOVE_RIGHT: 1 << 10,
 });
+
+export const FLAG_MOVE_MASK =
+  FLAG.MOVE_FWD | FLAG.MOVE_BACK | FLAG.MOVE_LEFT | FLAG.MOVE_RIGHT;
 
 export const TEAM_META = Object.freeze({
   A: Object.freeze({

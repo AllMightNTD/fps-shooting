@@ -192,7 +192,7 @@ export class Match {
     const activeW = player.weapons[player.activeWeaponId];
     const isReloadingServer = Boolean(activeW && activeW.reloadEndsAt > 0);
 
-    let incomingFlags = Number.isInteger(msg.flags) ? (msg.flags & 0x7f) : player.flags || 0;
+    let incomingFlags = Number.isInteger(msg.flags) ? (msg.flags & 0x7ff) : player.flags || 0;
     if (incomingFlags & FLAG.PRONE) incomingFlags &= ~(FLAG.SPRINT | FLAG.CROUCH);
     else if (incomingFlags & FLAG.CROUCH) incomingFlags &= ~FLAG.SPRINT;
     if (isReloadingServer) {
@@ -360,7 +360,7 @@ export class Match {
     const w = player.weapons[player.activeWeaponId];
     const cfg = resolveWeaponConfig(player.activeWeaponId);
 
-    const sentFlags = Number.isInteger(msg.flags) ? (msg.flags & 0x7f) : player.flags || 0;
+    const sentFlags = Number.isInteger(msg.flags) ? (msg.flags & 0x7ff) : player.flags || 0;
     if (sentFlags & FLAG.SPRINT) {
       this.room.sendTo(player.id, {
         type: MSG.AMMO,

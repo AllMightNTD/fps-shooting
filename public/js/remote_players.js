@@ -17,6 +17,7 @@ import {
   SOLDIER_CLIP_KEYS,
   cloneSkinnedHierarchy,
   computeCrouchDirectionalWeights,
+  decodeMoveIntentFromFlags,
   findSoldierClip,
   hasSkinnedMesh,
   resolveRigBone,
@@ -61,7 +62,16 @@ export function createRemotePlayersManager({
   const _handDir = new THREE.Vector3();
   const _charFwd = new THREE.Vector3();
   const _charUp = new THREE.Vector3();
+  const _charRight = new THREE.Vector3();
   const _aimDir = new THREE.Vector3();
+  const _armP = new THREE.Vector3();
+  const _elbowP = new THREE.Vector3();
+  const _handP = new THREE.Vector3();
+  const _targetP = new THREE.Vector3();
+  const _targetRightP = new THREE.Vector3();
+  const _fromDir = new THREE.Vector3();
+  const _toDir = new THREE.Vector3();
+  const _pivotLocal = new THREE.Vector3();
   const _poseScratch = {
     x: 0,
     y: 0,
@@ -81,6 +91,9 @@ export function createRemotePlayersManager({
   const _contQuat = typeof THREE.Quaternion === "function" ? new THREE.Quaternion() : null;
   const _parentQuat = typeof THREE.Quaternion === "function" ? new THREE.Quaternion() : null;
   const _desiredWorldQuat = typeof THREE.Quaternion === "function" ? new THREE.Quaternion() : null;
+  const _deltaWorldQuat = typeof THREE.Quaternion === "function" ? new THREE.Quaternion() : null;
+  const _boneParentQuat = typeof THREE.Quaternion === "function" ? new THREE.Quaternion() : null;
+  const _boneLocalQuat = typeof THREE.Quaternion === "function" ? new THREE.Quaternion() : null;
   const _lookMat = typeof THREE.Matrix4 === "function" ? new THREE.Matrix4() : null;
   const _hitboxMat = new THREE.MeshBasicMaterial({ visible: false });
   const _headHitGeo = new THREE.SphereGeometry(0.155, 8, 6);
@@ -305,6 +318,10 @@ export function createRemotePlayersManager({
       const hipsBone = resolveRigBone(root, SOLDIER_BONE_ALIASES.hips);
       const weaponMount = resolveRigBone(root, SOLDIER_BONE_ALIASES.rightHand);
       const leftHandBone = resolveRigBone(root, SOLDIER_BONE_ALIASES.leftHand);
+      const leftArmBone = resolveRigBone(root, SOLDIER_BONE_ALIASES.leftArm);
+      const leftForeArmBone = resolveRigBone(root, SOLDIER_BONE_ALIASES.leftForeArm);
+      const rightArmBone = resolveRigBone(root, SOLDIER_BONE_ALIASES.rightArm);
+      const rightForeArmBone = resolveRigBone(root, SOLDIER_BONE_ALIASES.rightForeArm);
       const rig = {
         root,
         isSkinned: true,
@@ -323,6 +340,10 @@ export function createRemotePlayersManager({
         spineBone,
         weaponMount,
         leftHandBone,
+        leftArmBone,
+        leftForeArmBone,
+        rightArmBone,
+        rightForeArmBone,
         bodyMeshes,
         teamPatchMeshes,
         hitMeshes,
@@ -447,7 +468,26 @@ export function createRemotePlayersManager({
   }
 
   function attachWeaponToRig(av) {
-    if (!av.rig.weaponMount) return;
+    if (!av || !av.rig || !av.rig.weaponMount) return;
+    // Parent actual 3D firearm meshes under un-scaled av.weaponPivot (child of av.container scale 1,1,1)
+    // when full THREE world transforms exist so non-uniform SOLDIER_SCALE_XZ/Y never stretches or shears guns.
+    const canUseUnscaledPivot = Boolean(
+      _contQuat &&
+      av.container &&
+      typeof av.container.worldToLocal === "function" &&
+      typeof av.container.add === "function" &&
+      typeof av.rig.weaponMount.getWorldPosition === "function",
+    );
+    let attachParent = av.rig.weaponMount;
+    if (canUseUnscaledPivot) {
+      if (!av.weaponPivot) {
+        av.weaponPivot = new THREE.Group();
+        av.weaponPivot.name = "weapon_pivot";
+        av.container.add(av.weaponPivot);
+      }
+      attachParent = av.weaponPivot;
+    }
+
     const { m416WorldProto, pistolWorldProto, awmWorldProto } = getPrototypes();
     if (!av.m416Mesh && m416WorldProto) {
       const w = m416WorldProto.clone();
@@ -455,31 +495,130 @@ export function createRemotePlayersManager({
         o.layers.set(0);
         if (o.name === "reticle_group") o.visible = false;
       });
-      w.scale.setScalar(1.06);
-      av.rig.weaponMount.add(w);
+      w.scale.setScalar(0.96);
+      w.position.set(0.0, 0.016, -0.055);
+      attachParent.add(w);
       av.m416Mesh = w;
       av.m416MuzNode = w.getObjectByName("muzzle_anchor") || null;
     }
     if (!av.pistolMesh && pistolWorldProto) {
       const pw = pistolWorldProto.clone();
       pw.traverse((o) => o.layers.set(0));
-      pw.scale.setScalar(1.16);
-      pw.position.set(0.0, -0.015, 0.13);
-      av.rig.weaponMount.add(pw);
+      pw.scale.setScalar(1.06);
+      pw.position.set(0.0, 0.012, -0.062);
+      attachParent.add(pw);
       av.pistolMesh = pw;
       av.pistolMuzNode = pw.getObjectByName("pistol_muzzle") || null;
     }
     if (!av.awmMesh && awmWorldProto) {
       const aw = awmWorldProto.clone();
       aw.traverse((o) => o.layers.set(0));
-      aw.scale.setScalar(1.02);
-      aw.position.set(0.0, -0.006, 0.04);
-      av.rig.weaponMount.add(aw);
+      aw.scale.setScalar(0.94);
+      aw.position.set(0.0, 0.008, -0.055);
+      attachParent.add(aw);
       av.awmMesh = aw;
       av.awmMuzNode = aw.getObjectByName("muzzle_anchor") || null;
     }
     av.weaponAttached = Boolean(av.m416Mesh || av.pistolMesh || av.awmMesh);
     syncRemoteWeaponVisibility(av);
+  }
+
+  function swingBoneTowardWorldPoint(bone, tipObj, targetWorldPos) {
+    if (
+      !bone ||
+      !bone.parent ||
+      !tipObj ||
+      !bone.quaternion ||
+      !_deltaWorldQuat ||
+      !_boneParentQuat ||
+      !_boneLocalQuat ||
+      typeof bone.getWorldPosition !== "function" ||
+      typeof tipObj.getWorldPosition !== "function" ||
+      typeof bone.parent.getWorldQuaternion !== "function"
+    ) {
+      return;
+    }
+    bone.getWorldPosition(_armP);
+    tipObj.getWorldPosition(_handP);
+    _fromDir.subVectors(_handP, _armP);
+    _toDir.subVectors(targetWorldPos, _armP);
+    if (_fromDir.lengthSq() < 1e-6 || _toDir.lengthSq() < 1e-6) return;
+    _fromDir.normalize();
+    _toDir.normalize();
+    _deltaWorldQuat.setFromUnitVectors(_fromDir, _toDir);
+    bone.parent.getWorldQuaternion(_boneParentQuat);
+    _boneLocalQuat
+      .copy(_boneParentQuat)
+      .invert()
+      .multiply(_deltaWorldQuat)
+      .multiply(_boneParentQuat)
+      .multiply(bone.quaternion)
+      .normalize();
+    bone.quaternion.copy(_boneLocalQuat);
+    if (typeof bone.updateMatrixWorld === "function") bone.updateMatrixWorld(true);
+  }
+
+  function applyTwoHandedPistolPose(rig, contQuat, isProne, aimPitch = 0) {
+    if (
+      !rig ||
+      isProne ||
+      !rig.weaponMount ||
+      !rig.leftHandBone ||
+      !rig.leftArmBone ||
+      !_charFwd ||
+      typeof rig.weaponMount.getWorldPosition !== "function"
+    ) {
+      return;
+    }
+    if (typeof rig.root.updateMatrixWorld === "function") {
+      rig.root.updateMatrixWorld(true);
+    }
+    _charFwd.set(0, Math.sin(aimPitch) * 0.65, -1).normalize().applyQuaternion(contQuat);
+    _charUp.set(0, 1, 0).applyQuaternion(contQuat).normalize();
+    _charRight.set(1, 0, 0).applyQuaternion(contQuat).normalize();
+
+    // Extend shooting RightArm forward and down to mid-sternum (Spine2 is collarbone height) so Glock-17 clears chin/goggles
+    if (rig.rightArmBone) {
+      if (rig.spineBone && typeof rig.spineBone.getWorldPosition === "function") {
+        rig.spineBone.getWorldPosition(_targetRightP);
+        _targetRightP
+          .addScaledVector(_charFwd, 0.42)
+          .addScaledVector(_charUp, -0.085)
+          .addScaledVector(_charRight, 0.025);
+      } else {
+        rig.weaponMount.getWorldPosition(_targetRightP);
+        _targetRightP
+          .addScaledVector(_charFwd, 0.15)
+          .addScaledVector(_charUp, -0.14)
+          .addScaledVector(_charRight, -0.04);
+      }
+      swingBoneTowardWorldPoint(rig.rightArmBone, rig.weaponMount, _targetRightP);
+      if (rig.rightForeArmBone) {
+        rig.weaponMount.getWorldPosition(_handP);
+        if (_handP.distanceTo(_targetRightP) > 0.03) {
+          swingBoneTowardWorldPoint(rig.rightForeArmBone, rig.weaponMount, _targetRightP);
+        }
+      }
+      if (typeof rig.root.updateMatrixWorld === "function") {
+        rig.root.updateMatrixWorld(true);
+      }
+    }
+
+    rig.weaponMount.getWorldPosition(_rhWorld);
+
+    // Bring support LeftHand right underneath/around RightHand grip below the slide
+    _targetP
+      .copy(_rhWorld)
+      .addScaledVector(_charFwd, -0.025)
+      .addScaledVector(_charUp, -0.045)
+      .addScaledVector(_charRight, -0.03);
+    swingBoneTowardWorldPoint(rig.leftArmBone, rig.leftHandBone, _targetP);
+    if (rig.leftForeArmBone) {
+      rig.leftHandBone.getWorldPosition(_handP);
+      if (_handP.distanceTo(_targetP) > 0.02) {
+        swingBoneTowardWorldPoint(rig.leftForeArmBone, rig.leftHandBone, _targetP);
+      }
+    }
   }
 
   function createRemoteAvatar(p) {
@@ -511,6 +650,7 @@ export function createRemotePlayersManager({
       shieldBlinkActive: false,
       muzFlash,
       muzNode: null,
+      weaponPivot: null,
       m416Mesh: null,
       pistolMesh: null,
       awmMesh: null,
@@ -570,6 +710,10 @@ export function createRemotePlayersManager({
     av.rig = buildSoldierVisual(team, av.id, relation);
     av.hitMeshes = av.rig.hitMeshes;
     av.weaponAttached = false;
+    if (av.weaponPivot) {
+      av.container.remove(av.weaponPivot);
+      av.weaponPivot = null;
+    }
     av.muzNode = av.m416Mesh = av.pistolMesh = av.awmMesh = av.m416MuzNode = av.pistolMuzNode = av.awmMuzNode = null;
     av.container.add(av.rig.root);
     attachWeaponToRig(av);
@@ -695,6 +839,7 @@ export function createRemotePlayersManager({
         const drop = Math.min(1, av.deathTime * 4.5);
         av.rig.root.rotation.x = -drop * Math.PI * 0.48;
         av.rig.root.position.y = drop * 0.16;
+        if (av.weaponPivot) av.weaponPivot.visible = false;
         av.shieldHitFlash = 0;
         av.shieldBlinkActive = false;
         av.nameplate.visible = false;
@@ -702,6 +847,7 @@ export function createRemotePlayersManager({
       }
 
       av.container.visible = true;
+      if (av.weaponPivot) av.weaponPivot.visible = true;
       av.rig.root.rotation.x = 0;
       const isProne = Boolean(FLAG.PRONE && (pose.flags & FLAG.PRONE));
       const targetCrouch = !isProne && (pose.flags & FLAG.CROUCH) ? 1 : 0;
@@ -820,7 +966,7 @@ export function createRemotePlayersManager({
       if (av.rig.isSkinned) {
         const rig = av.rig;
 
-        // Smooth local horizontal velocity in avatar yaw space (anti-jitter on 20Hz snapshots & bots)
+        // Combine explicit 4-way movement intent (instant LAN & Bot direction) with smoothed delta fallback
         const snY = Math.sin(pose.yaw);
         const csY = Math.cos(pose.yaw);
         const rawHorizStep = Math.hypot(stepWorldDx, stepWorldDz);
@@ -828,13 +974,31 @@ export function createRemotePlayersManager({
         const horizStep = isTeleportStep ? 0 : rawHorizStep;
         const fwdStep = isTeleportStep ? 0 : -snY * stepWorldDx - csY * stepWorldDz;
         const rightStep = isTeleportStep ? 0 : csY * stepWorldDx - snY * stepWorldDz;
+        const intent = decodeMoveIntentFromFlags(pose.flags, FLAG);
+        const isMovingPose = pose.mv > 0.08 || (intent.hasIntent && (intent.fwd !== 0 || intent.right !== 0));
 
         if (isTeleportStep) {
           av.localVelFwd = 0;
           av.localVelRight = 0;
           av.hasLocalVel = false;
           av.gaitYawOffset = 0;
-        } else if (dt > 1e-4 && horizStep > 1e-4) {
+        } else if (intent.hasIntent && (intent.fwd !== 0 || intent.right !== 0)) {
+          const normI = Math.hypot(intent.fwd, intent.right) || 1;
+          const speedEst = Math.max(1.8, (pose.mv || 0.55) * 5.8);
+          const targetFwd = (intent.fwd / normI) * speedEst;
+          const targetRight = (intent.right / normI) * speedEst;
+          if (!av.hasLocalVel) {
+            av.localVelFwd = targetFwd;
+            av.localVelRight = targetRight;
+            av.hasLocalVel = true;
+          } else {
+            const kFast = 1 - Math.exp(-dt * 28);
+            // Snap axis immediately on direct W<->S or A<->D reversal so crouch direction never lags behind
+            av.localVelFwd = targetFwd * av.localVelFwd < -0.05 ? targetFwd : av.localVelFwd + (targetFwd - av.localVelFwd) * kFast;
+            av.localVelRight =
+              targetRight * av.localVelRight < -0.05 ? targetRight : av.localVelRight + (targetRight - av.localVelRight) * kFast;
+          }
+        } else if (dt > 1e-4 && horizStep > 1e-4 && isMovingPose) {
           const instFwd = fwdStep / dt;
           const instRight = rightStep / dt;
           if (!av.hasLocalVel) {
@@ -842,12 +1006,12 @@ export function createRemotePlayersManager({
             av.localVelRight = instRight;
             av.hasLocalVel = true;
           } else {
-            const kVel = 1 - Math.exp(-dt * 16);
+            const kVel = 1 - Math.exp(-dt * 18);
             av.localVelFwd += (instFwd - av.localVelFwd) * kVel;
             av.localVelRight += (instRight - av.localVelRight) * kVel;
           }
-        } else if (pose.mv <= 0.08) {
-          const kDecay = Math.exp(-dt * 18);
+        } else if (!isMovingPose) {
+          const kDecay = Math.exp(-dt * 20);
           av.localVelFwd *= kDecay;
           av.localVelRight *= kDecay;
           if (Math.hypot(av.localVelFwd, av.localVelRight) < 0.05) {
@@ -993,7 +1157,13 @@ export function createRemotePlayersManager({
         if (rig.spineBone) rig.spineBone.rotation.x += pose.pitch * 0.28 * pitchScale;
         if (rig.headBone) rig.headBone.rotation.x += pose.pitch * 0.52 * pitchScale;
 
-        // Align weaponMount toward LeftHand blended with soldier forward (-Z) to keep weapon upright & shoulder-tucked
+        // Pull both arms into chest-forward two-handed pistol hold when Glock-17 is active
+        if (av.weaponId === "pistol" && !isProne && _contQuat) {
+          _contQuat.copy(av.container.quaternion);
+          applyTwoHandedPistolPose(rig, _contQuat, isProne, pose.pitch);
+        }
+
+        // Align un-sheared weaponPivot (plus weaponMount telemetry bone) squarely into palm-to-palm sightline
         if (
           rig.weaponMount &&
           rig.weaponMount.parent &&
@@ -1014,12 +1184,16 @@ export function createRemotePlayersManager({
           _charFwd.set(0, Math.sin(pose.pitch) * (isProne ? 0.2 : 0.65), -1).normalize().applyQuaternion(_contQuat);
           _charUp.set(0, 1, 0).applyQuaternion(_contQuat);
 
+          rig.weaponMount.getWorldPosition(_rhWorld);
           let hasHandAim = false;
-          if (rig.leftHandBone && typeof rig.leftHandBone.getWorldPosition === "function") {
+          if (
+            av.weaponId !== "pistol" &&
+            rig.leftHandBone &&
+            typeof rig.leftHandBone.getWorldPosition === "function"
+          ) {
             if (typeof rig.leftHandBone.updateWorldMatrix === "function") {
               rig.leftHandBone.updateWorldMatrix(true, false);
             }
-            rig.weaponMount.getWorldPosition(_rhWorld);
             rig.leftHandBone.getWorldPosition(_lhWorld);
             _handDir.subVectors(_lhWorld, _rhWorld);
             if (_handDir.lengthSq() > 1e-4) {
@@ -1058,6 +1232,18 @@ export function createRemotePlayersManager({
             rig.weaponMount.parent.getWorldQuaternion(_parentQuat);
             rig.weaponMount.quaternion.copy(_parentQuat).invert().multiply(_desiredWorldQuat);
             rig.weaponMount.updateMatrixWorld(true);
+
+            if (av.weaponPivot && typeof av.container.worldToLocal === "function") {
+              // Anchor pivot cleanly inside RightHand palm (slightly forward/down from wrist joint) in un-scaled container space
+              _pivotLocal
+                .copy(_rhWorld)
+                .addScaledVector(_aimDir, 0.024)
+                .addScaledVector(_charUp, -0.012);
+              av.container.worldToLocal(_pivotLocal);
+              av.weaponPivot.position.copy(_pivotLocal);
+              av.weaponPivot.quaternion.copy(_contQuat).invert().multiply(_desiredWorldQuat);
+              av.weaponPivot.updateMatrixWorld(true);
+            }
           }
         }
       } else {
