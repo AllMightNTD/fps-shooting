@@ -51,7 +51,7 @@ export const MSG = Object.freeze({
   CHAT: "chat",
   STATE: "state",
   FIRE: "fire",
-  HIT: "hit",
+  HIT: "hit", // Deprecated: server computes authoritative hit detection in Match.handleFire
   RELOAD: "reload",
   SWITCH_WEAPON: "switchWeapon",
   SCOPE: "scope",
@@ -95,6 +95,7 @@ export const ERR = Object.freeze({
   MATCH_ENDED: "MATCH_ENDED",
   RATE_LIMITED: "RATE_LIMITED",
   KICKED: "KICKED",
+  CHEAT_DETECTED: "CHEAT_DETECTED",
 });
 
 /**
@@ -153,6 +154,8 @@ export function unpackSnapshot(snap, rosterNames = null) {
       ammo: row[12] ?? 0,
       reloading: Boolean(flags & 32),
       invulnerable: Boolean(st & 2),
+      iFrames: Boolean(st & 8),
+      protectExpiring: Boolean(st & 16),
       respawnMs: row[13] || 0,
       kills: row[14] || 0,
       deaths: row[15] || 0,

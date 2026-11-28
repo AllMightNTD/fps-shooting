@@ -1,22 +1,24 @@
-"""Merge Mixamo / AccuRIG animations onto rigged FSB soldier and export soldier.glb + soldier.bundle.js.
+"""Merge Mixamo / AccuRIG animations onto rigged FSB/SWAT soldier and export soldier.glb + soldier.bundle.js.
 
 Expected workflow:
   1. Run prep_fsb_for_rig.py to produce model/assets/fsb_ready_for_rig.fbx.
-  2. Auto-rig on Mixamo (or AccuRIG) and download 4 animations into model/assets/fsb_anims/:
-       - idle.fbx   (downloaded "With Skin" — serves as base rigged mesh + idle clip,
-                     or provide base.fbx / base_rigged.fbx separately)
-       - run.fbx    ("Rifle Run", In-Place recommended; script also enforces In-Place)
-       - crouch.fbx ("Crouch Idle" / "Crouching Idle")
-       - jump.fbx   ("Jump")
-     (Common Mixamo filenames like "Rifle Idle.fbx", "Rifle Run.fbx", "Crouch Idle.fbx",
-      "Jump.fbx" or .glb equivalents are also auto-detected.)
+  2. Auto-rig on Mixamo (or AccuRIG) and download animations into model/assets/fsb_anims/:
+       - idle.fbx       (downloaded "With Skin" — serves as base rigged mesh + idle clip,
+                         or provide base.fbx / base_rigged.fbx separately)
+       - run.fbx        ("Rifle Run", In-Place recommended; script also enforces In-Place)
+       - crouch.fbx     ("Crouch Idle" / "Crouching Idle")
+       - jump.fbx       ("Jump")
+       - prone.fbx      ("Prone Idle", optional)
+       - prone_move.fbx ("Prone Forward" / "Crawl", optional)
+     (Common Mixamo filenames or .glb equivalents are also auto-detected.)
   3. Run:
-       blender --background --python scripts/blender/build_fsb_anims.py
+       blender --background --python scripts/blender/build_fsb_anims.py -- --tex-size 1024
 
 Output:
-  - model/dist/soldier.glb        (SkinnedMesh + 4 NLA AnimationClips: idle, run, crouch, jump;
-                                   NO Draco compression so Three.js r128 GLTFLoader loads directly;
-                                   includes weapon_mount on RightHand + TeamColor tactical patches)
+  - model/dist/soldier.glb        (SkinnedMesh + NLA AnimationClips: idle, run, crouch, jump,
+                                   prone, prone_move; NO Draco compression so Three.js r128
+                                   GLTFLoader loads directly; includes weapon_mount on RightHand
+                                   + TeamColor tactical patches)
   - model/dist/soldier.bundle.js  (Base64 CORS-free bundle matching model/build.py)
 """
 
@@ -41,7 +43,11 @@ CLIP_ALIASES: dict[str, tuple[str, ...]] = {
     "run": ("run", "rifle_run", "rifle run", "sprint", "jog"),
     "crouch": ("crouch", "crouch_idle", "crouch idle", "crouching_idle", "crouching idle"),
     "jump": ("jump", "rifle_jump", "rifle jump", "jump_up", "jump up"),
+    "prone": ("prone", "prone_idle", "prone idle", "rifle_prone", "rifle prone"),
+    "prone_move": ("prone_move", "prone move", "prone_forward", "prone forward", "crawl", "crawling"),
 }
+
+CYCLIC_CLIPS: tuple[str, ...] = ("idle", "run", "crouch", "prone", "prone_move")
 
 BASE_ALIASES: tuple[str, ...] = (
     "base_rigged",
@@ -77,17 +83,25 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _find_asset_file(anims_dir: Path, aliases: tuple[str, ...]) -> Path | None:
+def _find_asset_file(anims_dir: Path, aliases: tuple[str, ...], exclude_tokens: tuple[str, ...] = ()) -> Path | None:
     if not anims_dir.is_dir():
         return None
     files = [p for p in anims_dir.iterdir() if p.is_file() and p.suffix.lower() in (".fbx", ".glb", ".gltf")]
     by_stem = {p.stem.lower().replace("-", "_"): p for p in files}
-    for alias in aliases:
-        norm = alias.lower().replace("-", "_")
+    norm_aliases = [alias.lower().replace("-", "_").replace(" ", "_") for alias in aliases]
+    # Exact stem match across all aliases first (prevents 'prone' matching 'prone_move')
+    for norm in norm_aliases:
         if norm in by_stem:
             return by_stem[norm]
+        spaced = norm.replace("_", " ")
+        if spaced in by_stem:
+            return by_stem[spaced]
+    # Fallback substring match excluding conflicting tokens
+    for norm in norm_aliases:
         for stem, path in by_stem.items():
-            if norm in stem:
+            if exclude_tokens and any(tok in stem for tok in exclude_tokens):
+                continue
+            if norm in stem or norm.replace("_", " ") in stem:
                 return path
     return None
 
@@ -236,6 +250,28 @@ def _build_box_mesh(name: str, sx: float, sy: float, sz: float, mat: bpy.types.M
     return obj
 
 
+def _build_band_mesh(name: str, radius_top: float, radius_bot: float, height: float, mat: bpy.types.Material) -> bpy.types.Object:
+    mesh = bpy.data.meshes.new(name + "_Mesh")
+    bm = bmesh.new()
+    bmesh.ops.create_cone(
+        bm,
+        cap_ends=True,
+        cap_tris=False,
+        segments=16,
+        radius1=radius_bot,
+        radius2=radius_top,
+        depth=height,
+    )
+    # Align cylinder axis (local Z) along Blender bone axis (+Y)
+    bmesh.ops.rotate(bm, cent=(0.0, 0.0, 0.0), matrix=Euler((1.5707963267948966, 0.0, 0.0), "XYZ").to_matrix(), verts=bm.verts)
+    bm.to_mesh(mesh)
+    bm.free()
+    obj = bpy.data.objects.new(name, mesh)
+    obj.data.materials.append(mat)
+    bpy.context.scene.collection.objects.link(obj)
+    return obj
+
+
 def _attach_socket_and_team_patches(armature: bpy.types.Object, root_empty: bpy.types.Object) -> None:
     right_hand = _resolve_bone_name(armature, RIGHT_HAND_CANDIDATES)
     head_bone = _resolve_bone_name(armature, HEAD_BONE_CANDIDATES)
@@ -251,8 +287,10 @@ def _attach_socket_and_team_patches(armature: bpy.types.Object, root_empty: bpy.
         mount.parent = armature
         mount.parent_type = "BONE"
         mount.parent_bone = right_hand
-        # Place socket at palm grip and point weapon -Z along forward facing
+        # Mixamo RightHand +Y runs toward LeftHand (barrel forward); rotating ~180 deg around Y
+        # plus slight wrist roll aligns mount +Y (glTF -Z) forward and mount +Z (glTF +Y) upright.
         mount.location = (0.0, 0.04, 0.0)
+        mount.rotation_euler = Euler((0.0, 3.141592653589793 - 0.35, 0.0), "XYZ")
     else:
         mount.parent = root_empty
         mount.location = (0.105, 0.115, 1.26)
@@ -262,29 +300,32 @@ def _attach_socket_and_team_patches(armature: bpy.types.Object, root_empty: bpy.
     team_mat.use_nodes = True
     bsdf = next(n for n in team_mat.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
     bsdf.inputs["Base Color"].default_value = (0.184, 0.502, 1.0, 1.0)
-    bsdf.inputs["Roughness"].default_value = 0.38
-    bsdf.inputs["Metallic"].default_value = 0.14
+    bsdf.inputs["Roughness"].default_value = 0.52
+    bsdf.inputs["Metallic"].default_value = 0.08
     if "Emission Color" in bsdf.inputs:
         bsdf.inputs["Emission Color"].default_value = (0.184, 0.502, 1.0, 1.0)
-        bsdf.inputs["Emission Strength"].default_value = 0.35
+        bsdf.inputs["Emission Strength"].default_value = 0.22
 
     if head_bone:
-        crown = _build_box_mesh("head_team_iff", 0.09, 0.21, 0.032, team_mat)
+        crown = _build_box_mesh("head_team_iff", 0.052, 0.014, 0.068, team_mat)
         crown.parent = armature
         crown.parent_type = "BONE"
         crown.parent_bone = head_bone
-        crown.location = (0.0, 0.12, 0.01)
+        # Low-profile IFF strobe strip nestled flush along upper helmet ridge
+        crown.location = (0.0, -0.022, 0.018)
 
-    for patch_name, bone_name, offset in (
-        ("team_armband_L", l_arm_bone, (0.0, 0.12, 0.0)),
-        ("team_armband_R", r_arm_bone, (0.0, 0.12, 0.0)),
+    for patch_name, bone_name in (
+        ("team_armband_L", l_arm_bone),
+        ("team_armband_R", r_arm_bone),
     ):
         if bone_name:
-            band = _build_box_mesh(patch_name, 0.115, 0.055, 0.115, team_mat)
+            bone_len = armature.data.bones[bone_name].length
+            band = _build_band_mesh(patch_name, 0.068, 0.063, 0.044, team_mat)
             band.parent = armature
             band.parent_type = "BONE"
             band.parent_bone = bone_name
-            band.location = offset
+            # Bone parenting anchors at elbow (TAIL); pull up toward mid-bicep sleeve
+            band.location = (0.0, -0.46 * bone_len, -0.014)
 
 
 def _map_bone_name(src_name: str, dst_bones: set[str]) -> str | None:
@@ -334,14 +375,37 @@ def _extract_action_for_clip(
     f_start_i = int(round(f_start))
     f_end_i = max(f_start_i + 1, int(round(f_end)))
 
-    # Retime overly long jump clips so airborne pose stays snappy for FPS gravity
+    # Retime jump clips to start right at liftoff and end before deep post-landing squat
     src_dur_s = (f_end_i - f_start_i) / float(scene_fps)
     sample_start, sample_end = f_start_i, f_end_i
+    src_hips = _resolve_bone_name(src_arm, HIPS_BONE_CANDIDATES)
     if clip_name == "jump" and src_dur_s > MAX_JUMP_DURATION_S:
-        mid = int((f_start_i + f_end_i) * 0.48)
-        half_span = int(MAX_JUMP_DURATION_S * scene_fps * 0.5)
-        sample_start = max(f_start_i, mid - half_span)
-        sample_end = min(f_end_i, sample_start + int(MAX_JUMP_DURATION_S * scene_fps))
+        if src_hips:
+            scene = bpy.context.scene
+            hip_zs: list[tuple[int, float]] = []
+            for jf in range(f_start_i, f_end_i + 1):
+                scene.frame_set(jf)
+                bpy.context.view_layer.update()
+                hz = (src_arm.matrix_world @ src_arm.pose.bones[src_hips].head).z
+                hip_zs.append((jf, hz))
+            rest_z = hip_zs[0][1]
+            peak_idx = max(range(len(hip_zs)), key=lambda idx: hip_zs[idx][1])
+            start_idx = peak_idx
+            while start_idx > 0 and hip_zs[start_idx - 1][1] >= rest_z - 0.04:
+                start_idx -= 1
+            end_idx = peak_idx
+            while end_idx < len(hip_zs) - 1 and hip_zs[end_idx + 1][1] >= rest_z - 0.06:
+                end_idx += 1
+            max_span = max(8, int(round(0.54 * scene_fps)))
+            if end_idx - start_idx > max_span:
+                end_idx = min(len(hip_zs) - 1, start_idx + max_span)
+            sample_start = hip_zs[start_idx][0]
+            sample_end = max(sample_start + 4, hip_zs[end_idx][0])
+        else:
+            mid = int((f_start_i + f_end_i) * 0.48)
+            half_span = int(MAX_JUMP_DURATION_S * scene_fps * 0.5)
+            sample_start = max(f_start_i, mid - half_span)
+            sample_end = min(f_end_i, sample_start + int(MAX_JUMP_DURATION_S * scene_fps))
 
     dst_bones = {b.name for b in target_armature.data.bones}
     bone_map = {}
@@ -364,7 +428,6 @@ def _extract_action_for_clip(
     target_armature.animation_data.action = action
 
     # Compute uniform scale ratio between source clip armature & target armature for hip location
-    src_hips = _resolve_bone_name(src_arm, HIPS_BONE_CANDIDATES)
     hip_scale = 1.0
     if src_hips and hips_name:
         s_h = (src_arm.matrix_world @ src_arm.data.bones[src_hips].head_local).z
@@ -372,15 +435,26 @@ def _extract_action_for_clip(
         if abs(s_h) > 1e-4:
             hip_scale = abs(t_h / s_h)
 
-    base_hip_loc: Vector | None = None
-    first_frame_quats: dict[str, tuple[float, ...]] = {}
-    first_frame_locs: dict[str, tuple[float, ...]] = {}
-
     scene = bpy.context.scene
     scene.render.fps = scene_fps
+    src_frames = list(range(sample_start, sample_end + 1))
+
+    # Pre-sample raw Hips locations so we can cleanly eliminate planar root drift
+    raw_hip_locs: list[Vector] = []
+    if hips_name and src_hips:
+        for src_f in src_frames:
+            scene.frame_set(src_f)
+            bpy.context.view_layer.update()
+            raw_hip_locs.append(Vector(src_arm.pose.bones[src_hips].location) * hip_scale)
+
+    base_hip_loc: Vector | None = raw_hip_locs[0].copy() if raw_hip_locs else None
+    end_hip_loc: Vector | None = raw_hip_locs[-1].copy() if raw_hip_locs else None
+    first_frame_quats: dict[str, tuple[float, ...]] = {}
+    first_frame_locs: dict[str, tuple[float, ...]] = {}
+    total_steps = max(1, len(src_frames) - 1)
     out_frame = 1
 
-    for src_f in range(sample_start, sample_end + 1):
+    for idx, src_f in enumerate(src_frames):
         scene.frame_set(src_f)
         bpy.context.view_layer.update()
 
@@ -398,14 +472,20 @@ def _extract_action_for_clip(
             if out_frame == 1:
                 first_frame_quats[t_name] = q
 
-            if t_name == hips_name:
-                loc = Vector(spb.location) * hip_scale
-                if base_hip_loc is None:
-                    base_hip_loc = loc.copy()
-                # Enforce In-Place: zero horizontal planar drift while keeping vertical bounce
-                for ax in range(3):
-                    if ax != vertical_local_axis:
-                        loc[ax] = base_hip_loc[ax]
+            if t_name == hips_name and base_hip_loc is not None and end_hip_loc is not None:
+                loc = raw_hip_locs[idx].copy()
+                if clip_name == "prone_move":
+                    # Preserve organic crawling body sway while canceling any linear planar travel
+                    alpha = idx / float(total_steps)
+                    for ax in range(3):
+                        if ax != vertical_local_axis:
+                            linear_drift = (end_hip_loc[ax] - base_hip_loc[ax]) * alpha
+                            loc[ax] = loc[ax] - linear_drift
+                else:
+                    # Enforce strict In-Place: zero horizontal planar drift while keeping vertical bounce
+                    for ax in range(3):
+                        if ax != vertical_local_axis:
+                            loc[ax] = base_hip_loc[ax]
                 tpb.location = loc
                 tpb.keyframe_insert(data_path="location", frame=out_frame)
                 if out_frame == 1:
@@ -413,8 +493,8 @@ def _extract_action_for_clip(
 
         out_frame += 1
 
-    # Enforce seamless loop closure on cyclic clips (idle, run, crouch)
-    if clip_name in ("idle", "run", "crouch") and out_frame > 2:
+    # Enforce seamless loop closure on cyclic clips
+    if clip_name in CYCLIC_CLIPS and out_frame > 2:
         last_f = out_frame - 1
         for t_name, q in first_frame_quats.items():
             tpb = target_armature.pose.bones[t_name]
@@ -445,6 +525,8 @@ def _push_actions_to_nla(armature: bpy.types.Object, actions: list[bpy.types.Act
         track.name = act.name
         start_f = int(round(act.frame_range[0]))
         strip = track.strips.new(name=act.name, start=start_f, action=act)
+        if hasattr(strip, "action_slot") and hasattr(act, "slots") and len(act.slots) > 0:
+            strip.action_slot = act.slots[0]
         strip.action_frame_start = act.frame_range[0]
         strip.action_frame_end = act.frame_range[1]
         strip.name = act.name
@@ -522,7 +604,8 @@ def main() -> int:
 
     built_actions: list[bpy.types.Action] = []
     for clip_name, aliases in CLIP_ALIASES.items():
-        clip_path = _find_asset_file(args.anims_dir, aliases)
+        excl = ("move", "crawl", "forward") if clip_name == "prone" else ()
+        clip_path = _find_asset_file(args.anims_dir, aliases, exclude_tokens=excl)
         if clip_path is None:
             print(f"[WARN] Clip '{clip_name}' not found in {args.anims_dir}; skipping.")
             continue

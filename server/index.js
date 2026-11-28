@@ -259,10 +259,7 @@ export function createLanServer(options = {}) {
       case MSG.HIT: {
         const p = room.players.get(session.id);
         if (p) {
-          const res = room.match.handleHit(p, msg, now);
-          if (!res.ok && res.code === ERR.MATCH_ENDED) {
-            sendError(state.ws, res.code, res.message);
-          }
+          room.match.handleDeprecatedClientHit(p, now);
         }
         break;
       }
@@ -576,7 +573,7 @@ export function createLanServer(options = {}) {
 
     const connState = { ws, session: null };
     ws.on("pong", () => {
-      if (connState.session) connState.session.lastSeenAt = nowFn();
+      if (connState.session) roomManager.recordPong(connState.session.id, nowFn());
     });
     ws.on("message", (text) => routeMessage(connState, text));
     ws.on("close", () => {

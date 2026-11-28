@@ -244,6 +244,24 @@ export function createAudioEngine({ THREE, cam, yieldToUI, getActiveMapId }) {
       tone(1850, 920, 0.09, 0.25, "triangle");
       setTimeout(() => tone(2450, 1500, 0.11, 0.18, "sine"), 35);
     },
+    shieldBlock(worldPos = null) {
+      if (worldPos) {
+        const { att, pan } = computeSpatialAudio(worldPos);
+        if (att < 0.04) return;
+        tonePos(1650, 2650, 0.08, 0.20 * att, "triangle", pan);
+        tonePos(2900, 1280, 0.11, 0.12 * att, "sine", pan);
+        return;
+      }
+      tone(1650, 2650, 0.08, 0.20, "triangle");
+      tone(2900, 1280, 0.11, 0.12, "sine");
+    },
+    shieldFade() {
+      tone(780, 390, 0.12, 0.09, "sine");
+    },
+    respawn() {
+      tone(440, 660, 0.09, 0.14, "triangle");
+      setTimeout(() => tone(660, 880, 0.12, 0.12, "sine"), 55);
+    },
     remoteShot(dist, pan = 0, weaponId = "m416") {
       if (weaponAudio.playRemoteShot(weaponId, dist, pan)) return;
       const a = Math.max(0.05, Math.min(0.6, 9 / (dist + 6)));

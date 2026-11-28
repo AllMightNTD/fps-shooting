@@ -1,17 +1,16 @@
-# Hướng dẫn Bước 2: Rig & Tích hợp 4 Cử chỉ (`idle`, `run`, `crouch`, `jump`) cho Đặc nhiệm FSB
+# Hướng dẫn Rig & Tích hợp 6 Cử chỉ (`idle`, `run`, `crouch`, `jump`, `prone`, `prone_move`) cho Đặc nhiệm FSB / SWAT
 
-Tài liệu này lưu lại các bước còn lại để bạn có thể thực hiện bất cứ lúc nào sau này nhằm đưa nhân vật đặc nhiệm 3D **FSB** (`fsbfor_games.glb`) vào game **BEFORE THE BREACH** với đầy đủ 4 cử chỉ **đứng, chạy, ngồi, nhảy**.
+Tài liệu này mô tả pipeline đưa nhân vật đặc nhiệm 3D **FSB / SWAT** (`fsbfor_games.glb`) vào game **BEFORE THE BREACH** với đầy đủ **6 cử chỉ**: **đứng (`idle`), chạy (`run`), ngồi (`crouch`), nhảy (`jump`), nằm (`prone`) và bò (`prone_move`)**.
 
 ---
 
-## Trạng thái đã chuẩn bị sẵn
+## Trạng thái hiện tại (Đã hoàn tất 100%)
 
-Mọi công việc tiền xử lý (Pha 1) và nâng cấp Engine game (Pha 3) đã hoàn tất:
-
-- **File nhẹ sẵn sàng upload Auto-Rig:** `model/assets/fsb_ready_for_rig.fbx` (`3.49 MB`, đã giảm từ `500,000` → `18,000` tris, cao chuẩn `1.76 m`, chân chạm `Y = 0`, 1 `UVMap`).
-- **Bộ 3 texture PBR chuẩn `1024×1024`:** `model/assets/fsb_textures/` (`fsb_basecolor.png`, `fsb_mr.png`, `fsb_normal.png`) — sẽ được tự động gắn lại ở Bước 2.3 kể cả khi Mixamo làm mất Normal/Roughness.
-- **Script Blender gộp animation:** `scripts/blender/build_fsb_anims.py` (đã test pass trên Blender 4.2.22 LTS).
-- **Frontend Three.js r128:** `public/js/skinned_clone.js`, `public/js/asset_loader.js`, `public/js/remote_players.js` đã sẵn sàng nhận `SkinnedMesh` + `THREE.AnimationMixer` + hitbox Head/Body/Limb bám xương + màu đội `TeamColor`.
+- **Pha 1 — Tiền xử lý lưới & PBR:** `model/assets/fsb_ready_for_rig.fbx` (`3.49 MB`, `18,000` tris, cao `1.76 m`, 1 `UVMap`) và bộ 3 texture `1024×1024` tại `model/assets/fsb_textures/`.
+- **Pha 2 — Đóng gói 6 clip Mixamo bằng Blender 5.3 (`scripts/blender/build_fsb_anims.py`):** Đã gộp 6 file trong `model/assets/fsb_anims/` (`idle.fbx`, `run.fbx`, `crouch.fbx`, `jump.fbx`, `prone.fbx`, `prone_move.fbx` — cùng bộ xương `41` joints) và xuất thành công:
+  - `model/dist/soldier.glb` (`5.10 MB`, `1` skin / `41` joints, `6` NLA clips, texture PBR `1024×1024`, `weapon_mount` căn hướng `-Z`, băng đội `TeamColor` gắn mũ + 2 bắp tay, tắt Draco).
+  - `model/dist/soldier.bundle.js` & gói tĩnh `dist-static/` (`75` file, `22.51 MB`).
+- **Pha 3 — Gameplay & Frontend Three.js r128:** Đã tích hợp phím **`Z`** bật/tắt nằm & bò (`FLAG.PRONE`, camera `0.42 m`, tốc độ bò `0.30×`, giảm tán xạ `0.50×`, giảm giật M416 `0.65×`, giảm rung ngắm AWM `0.25×`, hitbox & LoS nằm phía Server, và `THREE.AnimationMixer` 6 trạng thái trong `public/js/skinned_clone.js` & `public/js/remote_players.js`).
 
 ---
 
@@ -29,46 +28,48 @@ Mọi công việc tiền xử lý (Pha 1) và nâng cấp Engine game (Pha 3) �
 
 ---
 
-## Bước 2.2 — Tải 4 file chuyển động vào `model/assets/fsb_anims/`
+## Bước 2.2 — Bộ 6 file chuyển động trong `model/assets/fsb_anims/`
 
-Tìm và tải 4 animation trên Mixamo với thiết lập:
+Tải các animation trên Mixamo với thiết lập:
 - **Format:** `FBX Binary (.fbx)`
 - **Frames per Second:** `30`
 - **Keyframe Reduction:** `none`
 
-Lưu 4 file tải về vào thư mục **`G:\fps-shooting\model\assets\fsb_anims\`** theo bảng sau:
+Lưu vào thư mục **`model/assets/fsb_anims/`**:
 
-| Tên file đề xuất | Từ khóa tìm trên Mixamo | Skin | Lưu ý quan trọng |
+| Tên file | Từ khóa tìm trên Mixamo | Skin | Lưu ý quan trọng |
 | --- | --- | --- | --- |
 | `idle.fbx` | `Rifle Idle` | **With Skin** | File này kiêm luôn bản gốc có lưới + xương (`base rigged`). |
-| `run.fbx` | `Rifle Run` | **Without Skin** | Nên tick ô **In Place** *(script cũng sẽ tự khóa In-Place nếu quên)*. |
+| `run.fbx` | `Rifle Run` | **Without Skin** | Nên tick ô **In Place** *(script cũng tự khóa In-Place)*. |
 | `crouch.fbx` | `Crouch Idle` hoặc `Crouching Idle` | **Without Skin** | Giữ dáng ngồi cầm súng trường. |
-| `jump.fbx` | `Jump` hoặc `Rifle Jump` | **Without Skin** | Script sẽ tự cắt gọn thời lượng ≤ `0.72s` khớp trọng lực game. |
+| `jump.fbx` | `Jump` hoặc `Rifle Jump` | **Without Skin** | Script tự cắt gọn thời lượng ≤ `0.72s` khớp trọng lực game. |
+| `prone.fbx` | `Prone Idle` / `Rifle Prone` | **Without Skin** | Tư thế nằm yên ngắm bắn (`Y ≈ 0.48 m`). |
+| `prone_move.fbx` | `Prone Forward` / `Crawl` | **Without Skin** | Tư thế bò trườn; script triệt tiêu trôi tịnh tiến mà giữ dao động tự nhiên. |
 
-> **Ghi chú:** Script `build_fsb_anims.py` tự nhận diện cả tên gốc của Mixamo (ví dụ `Rifle Idle.fbx`, `Rifle Run.fbx`, `Crouch Idle.fbx`, `Jump.fbx`) hoặc định dạng `.glb`, nhưng đặt gọn đúng `idle.fbx`, `run.fbx`, `crouch.fbx`, `jump.fbx` là sạch và dễ quản lý nhất.
+> **Ghi chú:** Script `build_fsb_anims.py` tự nhận diện cả tên gốc của Mixamo hoặc định dạng `.glb`, ưu tiên khớp chính xác tên để tránh nhầm `prone` với `prone_move`.
 
 ---
 
-## Bước 2.3 — Chạy lệnh Blender Python gộp 4 NLA Track & xuất vào game
+## Bước 2.3 — Chạy lệnh Blender Python gộp 6 NLA Track & xuất vào game
 
-Mở **PowerShell** tại thư mục gốc dự án `G:\fps-shooting` và chạy **1 trong 2 lệnh** sau:
+Mở **PowerShell** tại thư mục gốc dự án và chạy **1 trong 2 lệnh** sau *(tương thích cả Blender 4.2 LTS và Blender 5.3)*:
 
-### Tùy chọn A — Mức Cân bằng (Khuyên dùng, texture `1024×1024`, ~`3.5–4 MB`)
+### Tùy chọn A — Mức Cân bằng (Khuyên dùng, texture `1024×1024`, ~`5.1 MB`)
 ```powershell
-& "C:\Program Files\Blender Foundation\Blender 4.2\blender.exe" --background --python scripts/blender/build_fsb_anims.py -- --tex-size 1024
+& "C:\Program Files\Blender Foundation\Blender 5.3\blender.exe" --background --python scripts/blender/build_fsb_anims.py -- --tex-size 1024
 ```
 
-### Tùy chọn B — Mức Siêu nhẹ cho máy yếu / mạng chậm (texture `512×512`, ~`1.1 MB`)
+### Tùy chọn B — Mức Siêu nhẹ cho máy yếu / mạng chậm (texture `512×512`)
 ```powershell
-& "C:\Program Files\Blender Foundation\Blender 4.2\blender.exe" --background --python scripts/blender/build_fsb_anims.py -- --tex-size 512
+& "C:\Program Files\Blender Foundation\Blender 5.3\blender.exe" --background --python scripts/blender/build_fsb_anims.py -- --tex-size 512
 ```
 
-**Script sẽ tự động làm toàn bộ:**
+**Script tự động thực hiện toàn bộ:**
 - Chuẩn hóa chiều cao nhân vật về `1.76 m`, chân tại `Y = 0`, hướng mặt về `-Z` (khớp trục Three.js & nòng súng).
-- Khóa **In-Place** trên xương `Hips` (triệt tiêu trôi X/Z, giữ nhún Y), lặp kín vòng cho `idle`/`run`/`crouch`, cắt gọn `jump`.
+- Khóa **In-Place** trên xương `Hips`, lặp kín vòng cho `idle`/`run`/`crouch`/`prone`/`prone_move`, cắt gọn `jump`.
 - Khôi phục đủ 3 texture PBR (`BaseColor`, `MetallicRoughness`, `Normal`) từ `model/assets/fsb_textures/`.
-- Gắn socket `weapon_mount` vào xương bàn tay phải (`mixamorig:RightHand`) và gắn dải nhận diện phe `TeamColor` lên mũ + 2 tay áo.
-- Đẩy đủ 4 clip (`idle`, `run`, `crouch`, `jump`) vào 4 NLA Track, xuất thẳng ra:
+- Gắn socket `weapon_mount` vào xương bàn tay phải (`mixamorig:RightHand`, căn góc thẳng hướng `-Z`) và gắn dải nhận diện phe `TeamColor` ôm sát đỉnh mũ + giữa 2 bắp tay.
+- Đẩy đủ 6 clip (`idle`, `run`, `crouch`, `jump`, `prone`, `prone_move`) vào 6 NLA Track (hỗ trợ cả Slotted Actions của Blender 5.x), xuất ra:
   - `model/dist/soldier.glb` *(tắt Draco để tương thích trực tiếp `GLTFLoader` Three.js r128)*
   - `model/dist/soldier.bundle.js`
 
@@ -76,12 +77,13 @@ Mở **PowerShell** tại thư mục gốc dự án `G:\fps-shooting` và chạy
 
 ## Bước 2.4 — Kiểm tra & Chạy game
 
-1. **Kiểm tra dòng log xác minh** cuối lệnh ở Bước 2.3 phải hiển thị tương tự:
+1. **Kiểm tra dòng log xác minh** cuối lệnh ở Bước 2.3:
    ```text
    === EXPORTED SOLDIER GLB VERIFICATION ===
+   GLB size         : 5,345,888 B (5.10 MB)
    Extensions req   : []
-   Skins / Joints   : 1 skins, ... joints
-   Animation clips  : ['idle', 'run', 'crouch', 'jump']
+   Skins / Joints   : 1 skins, 41 joints
+   Animation clips  : ['idle', 'run', 'crouch', 'jump', 'prone', 'prone_move']
    Has weapon_mount : True
    Materials        : ['FSB_Operator_PBR', 'TeamColor']
    ```

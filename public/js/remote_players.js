@@ -1,8 +1,16 @@
 /**
- * Remote LAN Player Avatars, 100ms Snapshot Interpolation & Team Nameplates.
+ * Remote LAN Player Avatars, 100ms Snapshot Interpolation, Competitive IFF (Package A)
+ * & Smart Friendly World-Space Markers (PUBG Crosshair Fade + Valorant Geometric Fresnel).
  * Supports both legacy procedural soldier rigs and Mixamo/AccuRIG SkinnedMesh AnimationMixer rigs.
  */
 
+import {
+  ALLY_IFF_META,
+  computeFriendlyMarkerLayout,
+  getEnemyHighlightPreset,
+  resolvePlayerRelation,
+} from "./iff_system.js";
+import { computeProtectionBlinkState } from "./spawn_rules.js";
 import {
   SOLDIER_BONE_ALIASES,
   cloneSkinnedHierarchy,
@@ -29,16 +37,81 @@ export function createRemotePlayersManager({
   remoteMuzFlashMat,
   getPrototypes,
   getTeamAccentMats,
+  getSoldierBodyMats = () => null,
+  getIffState = () => ({ enemyColor: "red", rimStrength: "strong" }),
   getMatchMeta,
+  getCamera = () => null,
+  getActiveCollision = () => null,
+  getSolidMeshes = () => [],
+  getLocalAds = () => 0,
 }) {
   const remotePlayers = new Map();
   const _muzWorldPos = new THREE.Vector3();
+  const _markerWorldPos = new THREE.Vector3();
+  const _markerNdc = new THREE.Vector3();
+  const _losDir = new THREE.Vector3();
+  const _losRay = typeof THREE.Raycaster === "function" ? new THREE.Raycaster() : null;
+  const _zeroVec = new THREE.Vector3(0, 0, 0);
+  const _rhWorld = new THREE.Vector3();
+  const _lhWorld = new THREE.Vector3();
+  const _handDir = new THREE.Vector3();
+  const _charFwd = new THREE.Vector3();
+  const _charUp = new THREE.Vector3();
+  const _aimDir = new THREE.Vector3();
+  const _contQuat = typeof THREE.Quaternion === "function" ? new THREE.Quaternion() : null;
+  const _parentQuat = typeof THREE.Quaternion === "function" ? new THREE.Quaternion() : null;
+  const _desiredWorldQuat = typeof THREE.Quaternion === "function" ? new THREE.Quaternion() : null;
+  const _lookMat = typeof THREE.Matrix4 === "function" ? new THREE.Matrix4() : null;
   const _hitboxMat = new THREE.MeshBasicMaterial({ visible: false });
   const _headHitGeo = new THREE.SphereGeometry(0.155, 8, 6);
   const _torsoHitGeo = new THREE.BoxGeometry(0.36, 0.44, 0.24);
   const _hipsHitGeo = new THREE.BoxGeometry(0.34, 0.24, 0.22);
   const _thighHitGeo = new THREE.BoxGeometry(0.16, 0.42, 0.16);
   const _calfHitGeo = new THREE.BoxGeometry(0.14, 0.42, 0.16);
+
+  function resolveRelationForTeam(team) {
+    const meta = (typeof getMatchMeta === "function" && getMatchMeta()) || {};
+    return resolvePlayerRelation({
+      currentMode: meta.currentMode || "TDM",
+      meTeam: meta.meTeam || "A",
+      targetTeam: team,
+    });
+  }
+
+  function resolveAccentMaterial(team, relation) {
+    const mats = getTeamAccentMats() || {};
+    if (mats[relation]) return mats[relation];
+    const tKey = team === "A" || team === "B" ? team : "FFA";
+    return mats[tKey] || mats.A || mats.FFA || null;
+  }
+
+  function resolveShieldColorHex(relation) {
+    if (relation === "ally") return ALLY_IFF_META.shieldHex;
+    const iff = (typeof getIffState === "function" && getIffState()) || {};
+    return getEnemyHighlightPreset(iff.enemyColor).shieldHex;
+  }
+
+  function applyRigRelation(rig, team, relation) {
+    if (!rig) return;
+    const bodyMats = typeof getSoldierBodyMats === "function" ? getSoldierBodyMats() : null;
+    const accMat = resolveAccentMaterial(team, relation);
+    // 3B: Blue LED patches on Allies only; completely hidden on real SWAT Enemies for an ultra-clean Valorant silhouette
+    const showTeamPatches = rig.isFallback ? true : relation === "ally";
+
+    if (Array.isArray(rig.bodyMeshes) && bodyMats && bodyMats[relation]) {
+      const targetBodyMat = bodyMats[relation];
+      for (let i = 0; i < rig.bodyMeshes.length; i++) {
+        rig.bodyMeshes[i].material = targetBodyMat;
+      }
+    }
+    if (Array.isArray(rig.teamPatchMeshes)) {
+      for (let i = 0; i < rig.teamPatchMeshes.length; i++) {
+        const pm = rig.teamPatchMeshes[i];
+        if (accMat) pm.material = accMat;
+        pm.visible = showTeamPatches;
+      }
+    }
+  }
 
   function addBoneHitbox(parent, name, geo, pos, part, playerId, hitMeshes) {
     if (!parent) return;
@@ -60,13 +133,13 @@ export function createRemotePlayersManager({
     const rUpLeg = resolveRigBone(root, SOLDIER_BONE_ALIASES.rightUpLeg);
     const rLeg = resolveRigBone(root, SOLDIER_BONE_ALIASES.rightLeg);
 
-    addBoneHitbox(headBone, "hitbox_head", _headHitGeo, [0, 0.08, 0], "head", playerId, hitMeshes);
-    addBoneHitbox(spineBone, "hitbox_torso", _torsoHitGeo, [0, 0.06, 0], "body", playerId, hitMeshes);
+    addBoneHitbox(headBone, "hitbox_head", _headHitGeo, [0, 0.14, 0], "head", playerId, hitMeshes);
+    addBoneHitbox(spineBone, "hitbox_torso", _torsoHitGeo, [0, 0.08, 0], "body", playerId, hitMeshes);
     addBoneHitbox(hipsBone, "hitbox_hips", _hipsHitGeo, [0, 0, 0], "body", playerId, hitMeshes);
-    addBoneHitbox(lUpLeg, "hitbox_thigh_l", _thighHitGeo, [0, -0.2, 0], "limb", playerId, hitMeshes);
-    addBoneHitbox(lLeg, "hitbox_calf_l", _calfHitGeo, [0, -0.2, 0], "limb", playerId, hitMeshes);
-    addBoneHitbox(rUpLeg, "hitbox_thigh_r", _thighHitGeo, [0, -0.2, 0], "limb", playerId, hitMeshes);
-    addBoneHitbox(rLeg, "hitbox_calf_r", _calfHitGeo, [0, -0.2, 0], "limb", playerId, hitMeshes);
+    addBoneHitbox(lUpLeg, "hitbox_thigh_l", _thighHitGeo, [0, 0.2, 0], "limb", playerId, hitMeshes);
+    addBoneHitbox(lLeg, "hitbox_calf_l", _calfHitGeo, [0, 0.2, 0], "limb", playerId, hitMeshes);
+    addBoneHitbox(rUpLeg, "hitbox_thigh_r", _thighHitGeo, [0, 0.2, 0], "limb", playerId, hitMeshes);
+    addBoneHitbox(rLeg, "hitbox_calf_r", _calfHitGeo, [0, 0.2, 0], "limb", playerId, hitMeshes);
 
     if (hitMeshes.length === 0) {
       addBoneHitbox(root, "hitbox_fallback_body", _torsoHitGeo, [0, 1.0, 0], "body", playerId, hitMeshes);
@@ -78,7 +151,7 @@ export function createRemotePlayersManager({
   function buildSoldierActions(mixer, animations) {
     const actions = {};
     if (!mixer || !Array.isArray(animations) || !animations.length) return actions;
-    for (const key of ["idle", "run", "crouch", "jump"]) {
+    for (const key of ["idle", "run", "crouch", "jump", "prone", "prone_move"]) {
       const clip = findSoldierClip(animations, key);
       if (!clip) continue;
       const act = mixer.clipAction(clip);
@@ -113,15 +186,14 @@ export function createRemotePlayersManager({
     return hitMeshes;
   }
 
-  function buildSoldierVisual(team, playerId) {
-    const tKey = team === "A" || team === "B" ? team : "FFA";
-    const teamAccentMats = getTeamAccentMats();
+  function buildSoldierVisual(team, playerId, relationOverride = null) {
+    const relation = relationOverride || resolveRelationForTeam(team);
     const { soldierProto, soldierAnimations } = getPrototypes();
 
     if (!soldierProto) {
       const root = new THREE.Group();
       const uni = new THREE.MeshStandardMaterial({ color: 0x323b42, roughness: 0.75 });
-      const acc = teamAccentMats[tKey];
+      const acc = resolveAccentMaterial(team, relation);
       const upper = new THREE.Group();
       upper.position.set(0, 0.96, 0);
       const torso = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.5, 0.22), uni);
@@ -148,20 +220,35 @@ export function createRemotePlayersManager({
       legR.name = "leg_right";
       legR.position.x = 0.105;
       root.add(upper, legL, legR);
-      return { root, upper, headGroup, legL, legR, weaponMount, hitMeshes: tagHitMeshes(root, playerId), isFallback: true };
+      return {
+        root,
+        upper,
+        headGroup,
+        legL,
+        legR,
+        weaponMount,
+        bodyMeshes: [],
+        teamPatchMeshes: [strip, helm],
+        hitMeshes: tagHitMeshes(root, playerId),
+        isFallback: true,
+      };
     }
 
     const isSkinned = hasSkinnedMesh(soldierProto);
     const root = isSkinned ? cloneSkinnedHierarchy(soldierProto, THREE) : soldierProto.clone();
-    const accMat = teamAccentMats[tKey];
+    const bodyMeshes = [];
+    const teamPatchMeshes = [];
     root.traverse((o) => {
       o.layers.set(0);
       if (o.isSkinnedMesh) o.frustumCulled = false;
-      if (
-        o.isMesh &&
-        (o.name.includes("team") || (o.material && (o.material.name === "TeamColor" || o.material.name === "Soldier_TeamAccent")))
-      ) {
-        o.material = accMat;
+      if (!o.isMesh) return;
+      const isTeamPatch =
+        o.name.includes("team") ||
+        Boolean(o.material && (o.material.name === "TeamColor" || o.material.name === "Soldier_TeamAccent"));
+      if (isTeamPatch) {
+        teamPatchMeshes.push(o);
+      } else if (o.isSkinnedMesh) {
+        bodyMeshes.push(o);
       }
     });
 
@@ -172,7 +259,8 @@ export function createRemotePlayersManager({
       if (initialAct) initialAct.play();
       const { hitMeshes, headBone, spineBone } = buildSkinnedHitboxes(root, playerId);
       const weaponMount = resolveRigBone(root, SOLDIER_BONE_ALIASES.rightHand);
-      return {
+      const leftHandBone = resolveRigBone(root, SOLDIER_BONE_ALIASES.leftHand);
+      const rig = {
         root,
         isSkinned: true,
         isFallback: false,
@@ -183,11 +271,16 @@ export function createRemotePlayersManager({
         headBone,
         spineBone,
         weaponMount,
+        leftHandBone,
+        bodyMeshes,
+        teamPatchMeshes,
         hitMeshes,
       };
+      applyRigRelation(rig, team, relation);
+      return rig;
     }
 
-    return {
+    const rig = {
       root,
       upper: root.getObjectByName("upper_body") || root,
       headGroup: root.getObjectByName("head_group"),
@@ -195,45 +288,97 @@ export function createRemotePlayersManager({
       legL: root.getObjectByName("leg_left"),
       legR: root.getObjectByName("leg_right"),
       weaponMount: root.getObjectByName("weapon_mount"),
+      bodyMeshes,
+      teamPatchMeshes,
       hitMeshes: tagHitMeshes(root, playerId),
       isFallback: false,
     };
+    applyRigRelation(rig, team, relation);
+    return rig;
   }
 
-  function updateNameplateSprite(sp, name, team, hpVal) {
-    const meta = TEAM_META[team] || TEAM_META.FFA;
-    const key = `${name}:${meta.id}:${hpVal | 0}`;
+  function updateNameplateSprite(sp, name, hpVal, { compact = false, distM = 0 } = {}) {
+    const hpBucket = Math.max(0, Math.min(100, Math.round((hpVal || 0) / 2) * 2));
+    const distTag = compact ? Math.max(1, Math.round(distM || 0)) : 0;
+    const key = compact ? `C:${distTag}` : `F:${name}:${hpBucket}`;
     if (sp.userData.lastKey === key) return;
     sp.userData.lastKey = key;
     const c = sp.userData.canvas;
     const g = c.getContext("2d");
     g.clearRect(0, 0, c.width, c.height);
-    g.fillStyle = "rgba(8, 14, 20, 0.78)";
-    g.fillRect(22, 6, 212, 48);
-    g.strokeStyle = meta.hex;
-    g.lineWidth = 2.5;
-    g.strokeRect(22, 6, 212, 48);
-    g.fillStyle = meta.hex;
-    g.font = "bold 19px sans-serif";
-    g.textAlign = "center";
-    g.fillText(`${meta.symbol} ${name}`, 128, 29);
-    g.fillStyle = "#222a30";
-    g.fillRect(46, 39, 164, 7);
-    g.fillStyle = hpVal > 35 ? "#4ec3b0" : "#ff5245";
-    g.fillRect(46, 39, Math.max(0, Math.min(1, hpVal / 100)) * 164, 7);
+
+    const drawChevron = (cx, topY, halfW, h) => {
+      if (typeof g.beginPath === "function") {
+        g.beginPath();
+        g.moveTo(cx - halfW, topY);
+        g.lineTo(cx + halfW, topY);
+        g.lineTo(cx, topY + h);
+        g.closePath();
+        g.fillStyle = ALLY_IFF_META.markerHex;
+        g.fill();
+        g.lineWidth = 2.5;
+        g.strokeStyle = "rgba(4, 10, 18, 0.9)";
+        g.stroke();
+      } else {
+        g.fillStyle = ALLY_IFF_META.markerHex;
+        g.fillRect(cx - halfW, topY, halfW * 2, h);
+      }
+    };
+
+    if (compact) {
+      // Compact PUBG/Valorant wall-through ally indicator: crisp larger cyan chevron + meters
+      drawChevron(128, 18, 22, 24);
+      g.font = "bold 24px sans-serif";
+      g.textAlign = "center";
+      if (typeof g.strokeText === "function") {
+        g.lineWidth = 5;
+        g.strokeStyle = "rgba(4, 10, 18, 0.94)";
+        g.strokeText(`${distTag}m`, 128, 70);
+      }
+      g.fillStyle = "#e6f7ff";
+      g.fillText(`${distTag}m`, 128, 70);
+    } else {
+      // Clean full direct-LoS indicator: crisp name + slim HP bar + chevron (no bulky dark box)
+      g.font = "bold 24px sans-serif";
+      g.textAlign = "center";
+      if (typeof g.strokeText === "function") {
+        g.lineWidth = 5;
+        g.strokeStyle = "rgba(4, 10, 18, 0.94)";
+        g.strokeText(name, 128, 26);
+      }
+      g.fillStyle = "#eef8ff";
+      g.fillText(name, 128, 26);
+
+      g.fillStyle = "rgba(4, 10, 18, 0.80)";
+      g.fillRect(58, 34, 140, 8);
+      g.fillStyle = hpVal > 35 ? ALLY_IFF_META.markerHex : "#ff5245";
+      g.fillRect(60, 36, Math.max(0, Math.min(1, (hpVal || 0) / 100)) * 136, 4);
+
+      drawChevron(128, 50, 16, 15);
+    }
     sp.userData.tex.needsUpdate = true;
   }
 
-  function makeNameplateSprite(name, team, hpVal) {
+  function makeNameplateSprite(name, hpVal) {
     const c = document.createElement("canvas");
     c.width = 256;
-    c.height = 64;
+    c.height = 80;
     const t = new THREE.CanvasTexture(c);
-    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, transparent: true, depthTest: true }));
-    sp.scale.set(1.38, 0.34, 1);
+    const sp = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: t,
+        transparent: true,
+        opacity: 0.94,
+        depthTest: false,
+        depthWrite: false,
+        fog: false,
+      }),
+    );
+    sp.renderOrder = 12;
+    sp.scale.set(1.26, 0.39, 1);
     sp.position.set(0, 2.08, 0);
     sp.userData = { canvas: c, tex: t, lastKey: "" };
-    updateNameplateSprite(sp, name, team, hpVal);
+    updateNameplateSprite(sp, name, hpVal, { compact: false, distM: 10 });
     return sp;
   }
 
@@ -288,26 +433,54 @@ export function createRemotePlayersManager({
 
   function createRemoteAvatar(p) {
     const container = new THREE.Group();
-    const rig = buildSoldierVisual(p.team, p.id);
+    const relation = resolveRelationForTeam(p.team);
+    const rig = buildSoldierVisual(p.team, p.id, relation);
     container.add(rig.root);
 
-    const shieldDome = new THREE.Mesh(
-      new THREE.SphereGeometry(0.95, 16, 12),
-      new THREE.MeshBasicMaterial({
-        color: TEAM_META[p.team]?.colorNum || 0x2f80ff,
-        transparent: true,
-        opacity: 0.16,
-        wireframe: true,
-      }),
-    );
-    shieldDome.position.set(0, 0.92, 0);
+    const shieldMat = new THREE.MeshBasicMaterial({
+      color: 0x5ce1ff,
+      transparent: true,
+      opacity: 0.24,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const shieldGeo =
+      typeof THREE.CylinderGeometry === "function"
+        ? new THREE.CylinderGeometry(0.46, 0.56, 1.76, 20, 1, true)
+        : new THREE.SphereGeometry(0.95, 16, 12);
+    const shieldDome = new THREE.Mesh(shieldGeo, shieldMat);
+    shieldDome.position.set(0, 0.88, 0);
+    shieldDome.visible = false;
     container.add(shieldDome);
+
+    const ringGeo = typeof THREE.RingGeometry === "function" ? new THREE.RingGeometry(0.54, 0.68, 28) : null;
+    const shieldBaseRing = ringGeo
+      ? new THREE.Mesh(
+          ringGeo,
+          new THREE.MeshBasicMaterial({
+            color: 0x64e6ff,
+            transparent: true,
+            opacity: 0.55,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          }),
+        )
+      : null;
+    if (shieldBaseRing) {
+      shieldBaseRing.rotation.x = -Math.PI * 0.5;
+      shieldBaseRing.position.set(0, 0.04, 0);
+      shieldBaseRing.visible = false;
+      container.add(shieldBaseRing);
+    }
 
     const muzFlash = new THREE.Mesh(remoteMuzFlashGeo, remoteMuzFlashMat);
     muzFlash.visible = false;
     container.add(muzFlash);
 
-    const nameplate = makeNameplateSprite(p.name, p.team, p.hp);
+    const nameplate = makeNameplateSprite(p.name, p.hp);
+    nameplate.visible = relation === "ally";
     container.add(nameplate);
     scene.add(container);
 
@@ -315,10 +488,14 @@ export function createRemotePlayersManager({
       id: p.id,
       name: p.name,
       team: p.team,
+      relation,
       container,
       rig,
       hitMeshes: rig.hitMeshes,
       shieldDome,
+      shieldBaseRing,
+      shieldHitFlash: 0,
+      shieldBlinkActive: false,
       muzFlash,
       muzNode: null,
       m416Mesh: null,
@@ -330,6 +507,7 @@ export function createRemotePlayersManager({
       weaponAttached: false,
       nameplate,
       snapshots: [],
+      yaw: p.yaw || 0,
       walkPhase: 0,
       flashTimer: 0,
       shotSeq: 0,
@@ -340,21 +518,49 @@ export function createRemotePlayersManager({
       reloadDurMs: 0,
       radarBlipUntil: 0,
       crouchK: 0,
+      proneK: 0,
+      markerOccluded: false,
+      nextLosCheckMs: 0,
     };
     attachWeaponToRig(av);
     remotePlayers.set(p.id, av);
     return av;
   }
 
+  function applyAvatarRelation(av, relation) {
+    if (!av) return;
+    av.relation = relation;
+    applyRigRelation(av.rig, av.team, relation);
+    if (av.shieldDome && av.shieldDome.material && av.shieldDome.material.color && typeof av.shieldDome.material.color.setHex === "function") {
+      av.shieldDome.material.color.setHex(relation === "ally" ? 0x5ce1ff : 0x72ebff);
+    }
+    if (av.shieldBaseRing && av.shieldBaseRing.material && av.shieldBaseRing.material.color && typeof av.shieldBaseRing.material.color.setHex === "function") {
+      av.shieldBaseRing.material.color.setHex(relation === "ally" ? 0x5ce1ff : 0x72ebff);
+    }
+    if (relation !== "ally") {
+      av.nameplate.visible = false;
+    }
+  }
+
+  function syncAllRelations() {
+    for (const av of remotePlayers.values()) {
+      const nextRel = resolveRelationForTeam(av.team);
+      applyAvatarRelation(av, nextRel);
+    }
+  }
+
   function swapAvatarRig(av, team) {
     av.team = team;
+    const relation = resolveRelationForTeam(team);
+    av.relation = relation;
     av.container.remove(av.rig.root);
-    av.rig = buildSoldierVisual(team, av.id);
+    av.rig = buildSoldierVisual(team, av.id, relation);
     av.hitMeshes = av.rig.hitMeshes;
     av.weaponAttached = false;
     av.muzNode = av.m416Mesh = av.pistolMesh = av.awmMesh = av.m416MuzNode = av.pistolMuzNode = av.awmMuzNode = null;
     av.container.add(av.rig.root);
     attachWeaponToRig(av);
+    applyAvatarRelation(av, relation);
   }
 
   function upgradeRemoteSoldiers() {
@@ -431,6 +637,8 @@ export function createRemotePlayersManager({
           hp: snaps[1].hp,
           alive: snaps[1].alive,
           invulnerable: snaps[1].invulnerable,
+          iFrames: snaps[1].iFrames,
+          protectExpiring: snaps[1].protectExpiring,
         };
       }
 
@@ -448,8 +656,14 @@ export function createRemotePlayersManager({
       }
       av.alive = pose.alive;
       av.flags = pose.flags || 0;
+      av.yaw = pose.yaw;
       av.container.position.set(pose.x, pose.y, pose.z);
       av.container.rotation.y = pose.yaw;
+
+      const expectedRelation = resolvePlayerRelation({ currentMode, meTeam, targetTeam: av.team });
+      if (av.relation !== expectedRelation) {
+        applyAvatarRelation(av, expectedRelation);
+      }
 
       if (!pose.alive) {
         av.deathTime += dt;
@@ -458,47 +672,243 @@ export function createRemotePlayersManager({
         av.rig.root.rotation.x = -drop * Math.PI * 0.48;
         av.rig.root.position.y = drop * 0.16;
         av.shieldDome.visible = false;
+        if (av.shieldBaseRing) av.shieldBaseRing.visible = false;
+        av.shieldHitFlash = 0;
+        av.shieldBlinkActive = false;
         av.nameplate.visible = false;
         continue;
       }
 
       av.container.visible = true;
       av.rig.root.rotation.x = 0;
-      const targetCrouch = pose.flags & FLAG.CROUCH ? 1 : 0;
+      const isProne = Boolean(FLAG.PRONE && (pose.flags & FLAG.PRONE));
+      const targetCrouch = !isProne && (pose.flags & FLAG.CROUCH) ? 1 : 0;
       av.crouchK += (targetCrouch - av.crouchK) * Math.min(1, 14 * dt);
-      av.shieldDome.visible = Boolean(pose.invulnerable);
-      updateNameplateSprite(av.nameplate, av.name, av.team, pose.hp);
+      av.proneK = (av.proneK || 0) + ((isProne ? 1 : 0) - (av.proneK || 0)) * Math.min(1, 12 * dt);
 
-      // Show nameplates only on teammates in TDM (hide enemies & FFA competitors)
-      av.nameplate.visible = currentMode === "TDM" && av.team === meTeam;
+      if (av.shieldHitFlash > 0) av.shieldHitFlash = Math.max(0, av.shieldHitFlash - dt);
+      const isProt = Boolean(pose.invulnerable || pose.iFrames);
+      const blink = computeProtectionBlinkState(nowMs / 1000, {
+        active: isProt,
+        iFrames: Boolean(pose.iFrames),
+        expiring: Boolean(pose.protectExpiring),
+        hitFlash: av.shieldHitFlash,
+      });
+
+      const showShield = (isProt || av.shieldHitFlash > 0) && blink.blinkOn;
+      av.shieldDome.visible = showShield;
+      if (showShield) {
+        const yScale = isProne ? 0.38 : targetCrouch ? 0.68 : 1.0;
+        av.shieldDome.scale.set(isProne ? 1.25 : 1.0, yScale, isProne ? 1.55 : 1.0);
+        av.shieldDome.position.y = 0.88 * yScale;
+        if (av.shieldDome.material) {
+          av.shieldDome.material.opacity = av.shieldHitFlash > 0 ? 0.42 : 0.08 + 0.22 * blink.intensity;
+        }
+      }
+      if (av.shieldBaseRing) {
+        av.shieldBaseRing.visible = isProt || av.shieldHitFlash > 0;
+        if (av.shieldBaseRing.visible) {
+          const rPulse = blink.blinkOn ? 1.04 : 0.92;
+          av.shieldBaseRing.scale.setScalar(isProne ? rPulse * 1.25 : rPulse);
+          if (av.shieldBaseRing.material) {
+            av.shieldBaseRing.material.opacity = blink.blinkOn ? 0.35 + 0.45 * blink.intensity : 0.14;
+          }
+        }
+      }
+
+      // Swap SWAT armor shader material pointer during blink peaks (0 extra WebGL shaders, 0 GC)
+      const bodyMats = typeof getSoldierBodyMats === "function" ? getSoldierBodyMats() : null;
+      if (av.rig && Array.isArray(av.rig.bodyMeshes) && av.rig.bodyMeshes.length && bodyMats) {
+        const targetMat =
+          showShield && bodyMats.protected
+            ? bodyMats.protected
+            : bodyMats[av.relation] || null;
+        if (targetMat && av.rig.bodyMeshes[0].material !== targetMat) {
+          for (let i = 0; i < av.rig.bodyMeshes.length; i++) {
+            av.rig.bodyMeshes[i].material = targetMat;
+          }
+        }
+      }
+
+      const targetPlateY = isProne ? 0.88 : targetCrouch ? 1.56 : 2.06;
+      av.nameplate.position.y += (targetPlateY - av.nameplate.position.y) * Math.min(1, 12 * dt);
+
+      // Show smart wall-through markers ONLY on teammates in TDM (hide on all enemies & FFA)
+      if (av.relation === "ally") {
+        const camObj = typeof getCamera === "function" ? getCamera() : null;
+        if (camObj && camObj.position && typeof _markerNdc.project === "function") {
+          const anchorY = isProne ? 0.42 : targetCrouch ? 1.05 : 1.52;
+          _markerWorldPos.set(pose.x, pose.y + av.nameplate.position.y, pose.z);
+          const dx = pose.x - camObj.position.x;
+          const dy = pose.y + anchorY - camObj.position.y;
+          const dz = pose.z - camObj.position.z;
+          const dist = Math.hypot(dx, dy, dz);
+
+          // 10 Hz throttled LoS check per ally (zero-GC) to switch full vs compact wall-through chevron
+          if (nowMs >= (av.nextLosCheckMs || 0)) {
+            av.nextLosCheckMs = nowMs + 100;
+            let occluded = false;
+            if (dist > 0.6) {
+              const invD = 1 / dist;
+              const col = typeof getActiveCollision === "function" ? getActiveCollision() : null;
+              if (col && typeof col.raycastShot === "function") {
+                const hit = col.raycastShot(
+                  camObj.position.x,
+                  camObj.position.y,
+                  camObj.position.z,
+                  dx * invD,
+                  dy * invD,
+                  dz * invD,
+                  dist - 0.35,
+                );
+                occluded = Boolean(hit);
+              } else if (_losRay) {
+                const solids = typeof getSolidMeshes === "function" ? getSolidMeshes() : [];
+                if (solids && solids.length) {
+                  _losDir.set(dx * invD, dy * invD, dz * invD);
+                  _losRay.set(camObj.position, _losDir);
+                  _losRay.far = Math.max(0.1, dist - 0.35);
+                  occluded = _losRay.intersectObjects(solids, false).length > 0;
+                }
+              }
+            }
+            av.markerOccluded = occluded;
+          }
+
+          _markerNdc.copy(_markerWorldPos).project(camObj);
+          const behindCamera = _markerNdc.z > 1.0;
+          const ndcDist = Math.hypot(_markerNdc.x, _markerNdc.y);
+          const adsVal = typeof getLocalAds === "function" ? getLocalAds() : 0;
+          const layout = computeFriendlyMarkerLayout({
+            dist,
+            occluded: Boolean(av.markerOccluded),
+            ndcDist,
+            ads: adsVal,
+            behindCamera,
+          });
+          av.nameplate.visible = layout.visible;
+          if (layout.visible) {
+            if (av.nameplate.material) av.nameplate.material.opacity = layout.opacity;
+            av.nameplate.scale.set(1.26 * layout.scale, 0.39 * layout.scale, 1);
+            updateNameplateSprite(av.nameplate, av.name, pose.hp, {
+              compact: layout.compact,
+              distM: dist,
+            });
+          }
+        } else {
+          av.nameplate.visible = true;
+          updateNameplateSprite(av.nameplate, av.name, pose.hp, { compact: false, distM: 10 });
+        }
+      } else {
+        av.nameplate.visible = false;
+      }
 
       if (av.rig.isSkinned) {
         const rig = av.rig;
         const desiredState = selectSoldierAnimState({ alive: pose.alive, mv: pose.mv, flags: pose.flags, FLAG });
         const hasDedicatedCrouch = Boolean(rig.actions.crouch);
-        rig.root.position.y = hasDedicatedCrouch ? 0 : -0.44 * av.crouchK;
+        const hasDedicatedProne = Boolean(rig.actions.prone || rig.actions.prone_move);
+        if (isProne && !hasDedicatedProne) {
+          rig.root.rotation.x = -av.proneK * Math.PI * 0.44;
+          rig.root.position.y = av.proneK * 0.22;
+        } else {
+          rig.root.position.y = hasDedicatedCrouch || isProne ? 0 : -0.44 * av.crouchK;
+        }
 
         if (rig.mixer) {
-          const nextAct = rig.actions[desiredState] || rig.actions.idle || Object.values(rig.actions)[0] || null;
+          const nextAct =
+            rig.actions[desiredState] ||
+            (desiredState === "prone_move" ? rig.actions.prone : null) ||
+            rig.actions.idle ||
+            Object.values(rig.actions)[0] ||
+            null;
           if (nextAct && nextAct !== rig.activeAction) {
+            const isJumpTransition = rig.activeState === "jump" || desiredState === "jump";
+            const fadeDur = isJumpTransition ? 0.07 : 0.14;
             nextAct.reset();
             nextAct.setEffectiveWeight(1);
             nextAct.play();
-            if (rig.activeAction) rig.activeAction.crossFadeTo(nextAct, 0.14, true);
+            if (rig.activeAction) rig.activeAction.crossFadeTo(nextAct, fadeDur, true);
             rig.activeAction = nextAct;
             rig.activeState = desiredState;
           }
           if (rig.activeAction && desiredState === "run") {
             rig.activeAction.setEffectiveTimeScale(Math.max(0.75, Math.min(1.45, pose.mv / 1.0)));
+          } else if (rig.activeAction && desiredState === "prone_move") {
+            rig.activeAction.setEffectiveTimeScale(Math.max(0.75, Math.min(1.45, pose.mv / 0.55)));
           } else if (rig.activeAction) {
             rig.activeAction.setEffectiveTimeScale(1.0);
           }
           rig.mixer.update(dt);
         }
-        if (rig.spineBone) rig.spineBone.rotation.x += pose.pitch * 0.28;
-        if (rig.headBone) rig.headBone.rotation.x += pose.pitch * 0.52;
+        const pitchScale = isProne ? 0.3 : 1.0;
+        if (rig.spineBone) rig.spineBone.rotation.x += pose.pitch * 0.28 * pitchScale;
+        if (rig.headBone) rig.headBone.rotation.x += pose.pitch * 0.52 * pitchScale;
+
+        // Align weaponMount toward LeftHand blended with soldier forward (-Z) to keep weapon upright & on-target
+        if (
+          rig.weaponMount &&
+          rig.weaponMount.parent &&
+          _contQuat &&
+          _parentQuat &&
+          _desiredWorldQuat &&
+          _lookMat &&
+          typeof rig.weaponMount.getWorldPosition === "function" &&
+          typeof rig.weaponMount.parent.getWorldQuaternion === "function"
+        ) {
+          av.container.updateMatrixWorld(true);
+          _contQuat.copy(av.container.quaternion);
+          _charFwd.set(0, Math.sin(pose.pitch) * (isProne ? 0.2 : 0.65), -1).normalize().applyQuaternion(_contQuat);
+          _charUp.set(0, 1, 0).applyQuaternion(_contQuat);
+
+          let hasHandAim = false;
+          if (rig.leftHandBone && typeof rig.leftHandBone.getWorldPosition === "function") {
+            rig.weaponMount.getWorldPosition(_rhWorld);
+            rig.leftHandBone.getWorldPosition(_lhWorld);
+            _handDir.subVectors(_lhWorld, _rhWorld);
+            if (_handDir.lengthSq() > 1e-4) {
+              _handDir.normalize();
+              hasHandAim = true;
+            }
+          }
+
+          if (hasHandAim) {
+            const handWeight =
+              desiredState === "prone"
+                ? 0.08
+                : desiredState === "prone_move"
+                  ? 0.12
+                  : desiredState === "crouch"
+                    ? 0.55
+                    : desiredState === "run"
+                      ? 0.62
+                      : 0.85;
+            _aimDir.copy(_charFwd).multiplyScalar(1 - handWeight).addScaledVector(_handDir, handWeight);
+          } else {
+            _aimDir.copy(_charFwd);
+          }
+
+          if (desiredState === "jump") {
+            _aimDir.y = Math.max(-0.35, Math.min(0.16, _aimDir.y));
+          } else if (isProne) {
+            _aimDir.y = Math.max(-0.18, Math.min(0.12, _aimDir.y));
+          }
+          if (_aimDir.lengthSq() > 1e-5) {
+            _aimDir.normalize();
+            _lookMat.lookAt(_zeroVec, _aimDir, _charUp);
+            _desiredWorldQuat.setFromRotationMatrix(_lookMat);
+            rig.weaponMount.parent.getWorldQuaternion(_parentQuat);
+            rig.weaponMount.quaternion.copy(_parentQuat).invert().multiply(_desiredWorldQuat);
+            rig.weaponMount.updateMatrixWorld(true);
+          }
+        }
       } else {
-        av.rig.root.position.y = -0.44 * av.crouchK;
+        if (av.proneK > 0.02) {
+          av.rig.root.rotation.x = -av.proneK * Math.PI * 0.44;
+          av.rig.root.position.y = av.proneK * 0.22;
+        } else {
+          av.rig.root.position.y = -0.44 * av.crouchK;
+        }
         if (av.rig.upper && !av.rig.isFallback) {
           av.rig.upper.rotation.x = pose.pitch * 0.45 + 0.18 * av.crouchK;
         }
@@ -556,6 +966,8 @@ export function createRemotePlayersManager({
     attachWeaponToRig,
     syncRemoteWeaponVisibility,
     createRemoteAvatar,
+    applyAvatarRelation,
+    syncAllRelations,
     swapAvatarRig,
     upgradeRemoteSoldiers,
     upgradeRemoteWeapons,
@@ -563,6 +975,10 @@ export function createRemotePlayersManager({
     clearRemotePlayers,
     applyEnvMap,
     gatherEnemyHitMeshes,
+    triggerShieldHitFlash: (id) => {
+      const av = remotePlayers.get(id);
+      if (av) av.shieldHitFlash = 0.24;
+    },
     updateRemotePlayers,
   };
 }

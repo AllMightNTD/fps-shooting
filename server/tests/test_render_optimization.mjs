@@ -371,6 +371,8 @@ test("buildStaticSite outputs complete Cloudflare Pages bundle without .bundle.j
     assert.equal(fs.existsSync(path.join(tmpOut, "_headers")), true);
     assert.equal(fs.existsSync(path.join(tmpOut, "js", "protocol.js")), true);
     assert.equal(fs.existsSync(path.join(tmpOut, "js", "weapons.js")), true);
+    assert.equal(fs.existsSync(path.join(tmpOut, "js", "spawn_rules.js")), true);
+    assert.equal(fs.existsSync(path.join(tmpOut, "js", "hitreg.js")), true);
     assert.equal(fs.existsSync(path.join(tmpOut, "js", "net_utils.js")), true);
     assert.equal(fs.existsSync(path.join(tmpOut, "js", "game.js")), true);
     assert.equal(fs.existsSync(path.join(tmpOut, "assets", "loading_bg.webp")), true);

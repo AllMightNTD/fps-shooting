@@ -8,6 +8,12 @@ import {
   normalizeQualityChoice,
   resolveQualityPreset,
 } from "/js/graphics_quality.js";
+import {
+  DEFAULT_ENEMY_HIGHLIGHT_COLOR,
+  DEFAULT_ENEMY_RIM_STRENGTH,
+  normalizeEnemyHighlightColor,
+  normalizeEnemyRimStrength,
+} from "/js/iff_system.js";
 
 export const DEFAULT_BIND = Object.freeze({
   forward: ["KeyW"],
@@ -16,6 +22,7 @@ export const DEFAULT_BIND = Object.freeze({
   right: ["KeyD"],
   jump: ["Space"],
   crouch: ["KeyC", "ControlLeft"],
+  prone: ["KeyZ"],
   sprint: ["ShiftLeft"],
   reload: ["KeyR"],
   slot1: ["Digit1"],
@@ -43,6 +50,8 @@ const DEFAULT_SETTINGS = {
   showPerfHud: false,
   lobbyMusicEnabled: true,
   lobbyMusicVolume: 0.45,
+  enemyHighlightColor: DEFAULT_ENEMY_HIGHLIGHT_COLOR,
+  enemyRimStrength: DEFAULT_ENEMY_RIM_STRENGTH,
   bindings: {},
 };
 
@@ -95,6 +104,8 @@ export function createSettingsStore() {
       base.showPerfHud = Boolean(parsed.showPerfHud);
       base.lobbyMusicEnabled = parsed.lobbyMusicEnabled !== false;
       base.lobbyMusicVolume = clampNum(parsed.lobbyMusicVolume, 0, 1, 0.45);
+      base.enemyHighlightColor = normalizeEnemyHighlightColor(parsed.enemyHighlightColor);
+      base.enemyRimStrength = normalizeEnemyRimStrength(parsed.enemyRimStrength);
       if (parsed.bindings && typeof parsed.bindings === "object") {
         for (const action of Object.keys(DEFAULT_BIND)) {
           const list = parsed.bindings[action];
@@ -132,6 +143,12 @@ export function createSettingsStore() {
       if (patch.showPerfHud !== undefined) state.showPerfHud = Boolean(patch.showPerfHud);
       if (patch.lobbyMusicEnabled !== undefined) state.lobbyMusicEnabled = Boolean(patch.lobbyMusicEnabled);
       if (patch.lobbyMusicVolume !== undefined) state.lobbyMusicVolume = clampNum(patch.lobbyMusicVolume, 0, 1, state.lobbyMusicVolume);
+      if (patch.enemyHighlightColor !== undefined) {
+        state.enemyHighlightColor = normalizeEnemyHighlightColor(patch.enemyHighlightColor);
+      }
+      if (patch.enemyRimStrength !== undefined) {
+        state.enemyRimStrength = normalizeEnemyRimStrength(patch.enemyRimStrength);
+      }
       save();
     },
     rebind(action, newCode) {
@@ -157,6 +174,7 @@ const ACTION_LABELS = [
   ["right", "Sang phải"],
   ["jump", "Nhảy"],
   ["crouch", "Ngồi (Tránh Ctrl+W: nên ưu tiên C)"],
+  ["prone", "Nằm / Bò"],
   ["sprint", "Chạy nước rút"],
   ["reload", "Nạp đạn"],
   ["switchPrev", "Về súng trước"],
@@ -184,6 +202,8 @@ export function mountSettingsUI(store, inputCtrl) {
   const lobbyMusicIn = document.getElementById("setLobbyMusic");
   const lobbyMusicVolIn = document.getElementById("setLobbyMusicVol");
   const lobbyMusicVolVal = document.getElementById("setLobbyMusicVolVal");
+  const enemyColorIn = document.getElementById("setEnemyHighlightColor");
+  const enemyRimIn = document.getElementById("setEnemyRimStrength");
   const bindList = document.getElementById("setBindList");
 
   let listeningAction = null;
@@ -218,6 +238,8 @@ export function mountSettingsUI(store, inputCtrl) {
     if (lobbyMusicIn) lobbyMusicIn.checked = Boolean(s.lobbyMusicEnabled);
     if (lobbyMusicVolIn) lobbyMusicVolIn.value = String(s.lobbyMusicVolume);
     if (lobbyMusicVolVal) lobbyMusicVolVal.textContent = `${Math.round(s.lobbyMusicVolume * 100)}%`;
+    if (enemyColorIn) enemyColorIn.value = s.enemyHighlightColor;
+    if (enemyRimIn) enemyRimIn.value = s.enemyRimStrength;
     updateQualityHint();
 
     bindList.textContent = "";
@@ -262,6 +284,12 @@ export function mountSettingsUI(store, inputCtrl) {
   }
   if (lobbyMusicVolIn) {
     lobbyMusicVolIn.oninput = () => store.update({ lobbyMusicVolume: Number(lobbyMusicVolIn.value) });
+  }
+  if (enemyColorIn) {
+    enemyColorIn.onchange = () => store.update({ enemyHighlightColor: enemyColorIn.value });
+  }
+  if (enemyRimIn) {
+    enemyRimIn.onchange = () => store.update({ enemyRimStrength: enemyRimIn.value });
   }
 
   document.getElementById("btnSetReset").onclick = () => {

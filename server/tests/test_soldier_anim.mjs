@@ -20,7 +20,8 @@ import {
   selectSoldierAnimState,
 } from "../../public/js/skinned_clone.js";
 import { createRemotePlayersManager } from "../../public/js/remote_players.js";
-import { FLAG, TEAM_META } from "../weapons.js";
+import { computeRecoilModifiers } from "../../public/js/recoil.js";
+import { FLAG, TEAM_META, computeWeaponSpread, getMoveSpeedMultiplier } from "../weapons.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../..");
@@ -271,10 +272,12 @@ function buildMockSkinnedSoldierProto(THREE) {
   return root;
 }
 
-test("selectSoldierAnimState enforces FPS priority dead > jump > crouch > run > idle", () => {
+test("selectSoldierAnimState enforces FPS priority dead > jump > prone_move/prone > crouch > run > idle", () => {
   // Arrange & Act & Assert
-  assert.equal(selectSoldierAnimState({ alive: false, mv: 1, flags: FLAG.AIR, FLAG }), "dead");
-  assert.equal(selectSoldierAnimState({ alive: true, mv: 1.2, flags: FLAG.AIR | FLAG.CROUCH, FLAG }), "jump");
+  assert.equal(selectSoldierAnimState({ alive: false, mv: 1, flags: FLAG.AIR | FLAG.PRONE, FLAG }), "dead");
+  assert.equal(selectSoldierAnimState({ alive: true, mv: 1.2, flags: FLAG.AIR | FLAG.PRONE | FLAG.CROUCH, FLAG }), "jump");
+  assert.equal(selectSoldierAnimState({ alive: true, mv: 0.5, flags: FLAG.PRONE, FLAG }), "prone_move");
+  assert.equal(selectSoldierAnimState({ alive: true, mv: 0.02, flags: FLAG.PRONE, FLAG }), "prone");
   assert.equal(selectSoldierAnimState({ alive: true, mv: 0.9, flags: FLAG.CROUCH, FLAG }), "crouch");
   assert.equal(selectSoldierAnimState({ alive: true, mv: 0.45, flags: 0, FLAG }), "run");
   assert.equal(selectSoldierAnimState({ alive: true, mv: 0.02, flags: 0, FLAG }), "idle");
@@ -282,16 +285,36 @@ test("selectSoldierAnimState enforces FPS priority dead > jump > crouch > run > 
   assert.equal(selectSoldierAnimState(), "idle");
 });
 
-test("findSoldierClip matches exact, case-insensitive, and Mixamo-style names; returns null on bad input", () => {
+test("FLAG.PRONE lowers move speed, weapon spread, and M416 recoil cleanly", () => {
+  // Arrange & Act & Assert
+  assert.equal(getMoveSpeedMultiplier(FLAG.PRONE), 0.3);
+  assert.ok(computeWeaponSpread("m416", FLAG.PRONE) < computeWeaponSpread("m416", FLAG.CROUCH));
+  const proneMod = computeRecoilModifiers({ prone: true, ads: false, grounded: true });
+  const crouchMod = computeRecoilModifiers({ crouched: true, ads: false, grounded: true });
+  assert.equal(proneMod.vertical, 0.65);
+  assert.ok(proneMod.vertical < crouchMod.vertical);
+});
+
+test("findSoldierClip matches exact, case-insensitive, and Mixamo-style names without confusing prone vs prone_move", () => {
   // Arrange
-  const clips = [{ name: "Rifle_Idle" }, { name: "run" }, { name: "Crouch Idle" }, { name: "Jump_Air" }];
+  const clips = [
+    { name: "Rifle_Idle" },
+    { name: "run" },
+    { name: "Crouch Idle" },
+    { name: "Jump_Air" },
+    { name: "prone_move" },
+    { name: "prone" },
+  ];
 
   // Act & Assert
   assert.equal(findSoldierClip(clips, "run").name, "run");
   assert.equal(findSoldierClip(clips, "idle").name, "Rifle_Idle");
   assert.equal(findSoldierClip(clips, "crouch").name, "Crouch Idle");
   assert.equal(findSoldierClip(clips, "jump").name, "Jump_Air");
-  assert.equal(findSoldierClip(clips, "prone"), null);
+  assert.equal(findSoldierClip(clips, "prone").name, "prone");
+  assert.equal(findSoldierClip(clips, "prone_move").name, "prone_move");
+  // Unhappy path: when only prone_move exists, searching 'prone' must NOT mismatch 'prone_move'
+  assert.equal(findSoldierClip([{ name: "prone_move" }], "prone"), null);
   assert.equal(findSoldierClip(null, "idle"), null);
 });
 
@@ -323,6 +346,25 @@ test("cloneSkinnedHierarchy binds completely independent Skeleton & Bone arrays 
   assert.equal(hasSkinnedMesh(null), false);
 });
 
+test("resolveRigBone handles Three.js r128 GLTFLoader sanitized bone names (colon stripped)", () => {
+  const THREE = createMockThree();
+  const root = new THREE.Group("soldier_root");
+  const hips = new THREE.Bone("mixamorigHips");
+  const spine = new THREE.Bone("mixamorigSpine2");
+  const head = new THREE.Bone("mixamorigHead");
+  const lThigh = new THREE.Bone("mixamorigLeftUpLeg");
+  const rHand = new THREE.Bone("mixamorigRightHand");
+  hips.add(spine, lThigh);
+  spine.add(head, rHand);
+  root.add(hips);
+
+  assert.equal(resolveRigBone(root, SOLDIER_BONE_ALIASES.hips), hips);
+  assert.equal(resolveRigBone(root, SOLDIER_BONE_ALIASES.spine), spine);
+  assert.equal(resolveRigBone(root, SOLDIER_BONE_ALIASES.head), head);
+  assert.equal(resolveRigBone(root, SOLDIER_BONE_ALIASES.leftUpLeg), lThigh);
+  assert.equal(resolveRigBone(root, SOLDIER_BONE_ALIASES.rightHand), rHand);
+});
+
 test("remote_players manager drives AnimationMixer crossfades & bone hitboxes for SkinnedMesh soldiers", () => {
   // Arrange
   const THREE = createMockThree();
@@ -352,6 +394,8 @@ test("remote_players manager drives AnimationMixer crossfades & bone hitboxes fo
       { name: "run" },
       { name: "crouch" },
       { name: "jump" },
+      { name: "prone" },
+      { name: "prone_move" },
     ];
     const teamAccentMats = {
       A: { name: "TeamColor_A" },
@@ -401,15 +445,62 @@ test("remote_players manager drives AnimationMixer crossfades & bone hitboxes fo
     // Dedicated crouch clip owns hip height -> root stays grounded at y=0 (no double sinking)
     assert.equal(av.rig.root.position.y, 0);
 
+    av.snapshots = [{ t: t0 - 10, x: 0, y: 0, z: 0, yaw: 0, pitch: 0, mv: 0, flags: FLAG.PRONE, hp: 100, alive: true }];
+    mgr.updateRemotePlayers(0.016);
+    assert.equal(av.rig.activeState, "prone");
+    assert.equal(av.rig.root.position.y, 0);
+
+    av.snapshots = [{ t: t0 - 10, x: 0, y: 0, z: 0, yaw: 0, pitch: 0, mv: 0.55, flags: FLAG.PRONE, hp: 100, alive: true }];
+    mgr.updateRemotePlayers(0.016);
+    assert.equal(av.rig.activeState, "prone_move");
+
     av.snapshots = [{ t: t0 - 10, x: 0, y: 1.2, z: 0, yaw: 0, pitch: 0, mv: 0.8, flags: FLAG.AIR, hp: 100, alive: true }];
     mgr.updateRemotePlayers(0.016);
     assert.equal(av.rig.activeState, "jump");
     assert.equal(av.rig.actions.jump.loop, THREE.LoopOnce);
     assert.equal(av.rig.actions.jump.clampWhenFinished, true);
-    assert.ok(av.rig.mixer.updatedDt > 0.04);
+    const jumpFade = av.rig.actions.prone_move.crossFadedTo.at(-1);
+    assert.equal(jumpFade.to, "jump");
+    assert.equal(jumpFade.dur, 0.07);
+
+    av.snapshots = [{ t: t0 - 10, x: 0, y: 0, z: 0, yaw: 0, pitch: 0, mv: 0, flags: 0, hp: 100, alive: true }];
+    mgr.updateRemotePlayers(0.016);
+    assert.equal(av.rig.activeState, "idle");
+    const landFade = av.rig.actions.jump.crossFadedTo.at(-1);
+    assert.equal(landFade.to, "idle");
+    assert.equal(landFade.dur, 0.07);
+    assert.ok(av.rig.mixer.updatedDt > 0.08);
   } finally {
     globalThis.document = prevDoc;
   }
+});
+
+test("Exported model/dist/soldier.glb contains 6-clip FSB/SWAT SkinnedMesh, weapon_mount, TeamColor, and no Draco", () => {
+  // Arrange
+  const glbPath = path.join(REPO_ROOT, "model", "dist", "soldier.glb");
+  assert.ok(fs.existsSync(glbPath), "model/dist/soldier.glb must exist");
+
+  // Act
+  const buf = fs.readFileSync(glbPath);
+  const jsonLen = buf.readUInt32LE(12);
+  const gltf = JSON.parse(buf.toString("utf8", 20, 20 + jsonLen));
+  const animNames = (gltf.animations || []).map((a) => a.name);
+  const nodeNames = (gltf.nodes || []).map((n) => n.name);
+  const matNames = (gltf.materials || []).map((m) => m.name);
+
+  // Assert
+  assert.equal((gltf.extensionsRequired || []).includes("KHR_draco_mesh_compression"), false);
+  assert.equal((gltf.skins || []).length, 1);
+  assert.ok(gltf.skins[0].joints.length >= 40, `Expected >=40 joints, got ${gltf.skins[0].joints.length}`);
+  for (const clip of ["idle", "run", "crouch", "jump", "prone", "prone_move"]) {
+    assert.ok(animNames.includes(clip), `Missing animation clip '${clip}' in soldier.glb`);
+  }
+  for (const anim of gltf.animations) {
+    assert.ok(anim.channels.length > 0, `Animation '${anim.name}' must have non-empty channels`);
+  }
+  assert.ok(nodeNames.includes("weapon_mount"), "soldier.glb must include weapon_mount socket");
+  assert.ok(matNames.includes("TeamColor"), "soldier.glb must include TeamColor material");
+  assert.ok(matNames.includes("FSB_Operator_PBR"), "soldier.glb must include FSB_Operator_PBR material");
 });
 
 test("Preprocessed fsb_ready_for_rig.glb meets WebGL budget (<=20k tris, 1.76m, 1024px textures, no Draco)", () => {

@@ -108,13 +108,16 @@ export function smoothDampScalar(current, target, velRef, key, smoothTime, dt) {
 
 /**
  * Compute posture & aiming recoil multipliers for M416.
- * @param {{ crouched?: boolean, ads?: boolean, grounded?: boolean }} opts
+ * @param {{ crouched?: boolean, prone?: boolean, ads?: boolean, grounded?: boolean }} opts
  * @returns {{ vertical: number, horizontal: number }}
  */
-export function computeRecoilModifiers({ crouched = false, ads = false, grounded = true } = {}) {
+export function computeRecoilModifiers({ crouched = false, prone = false, ads = false, grounded = true } = {}) {
   let vertical = 1.0;
   let horizontal = 1.0;
-  if (crouched) {
+  if (prone) {
+    vertical *= 0.65;
+    horizontal *= 0.65;
+  } else if (crouched) {
     vertical *= 0.85;
     horizontal *= 0.85;
   }

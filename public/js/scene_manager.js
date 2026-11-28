@@ -160,6 +160,9 @@ export function createSceneManager({
 
     applyMoonShadowPreset(p, false);
     ballisticsVfx.applyQualityPreset(p);
+    if (assetLoader && typeof assetLoader.applySoldierTextureAnisotropy === "function") {
+      assetLoader.applySoldierTextureAnisotropy(R, p.maxAnisotropy);
+    }
     if (militaryData && militaryData.applyQualityPreset) {
       militaryData.applyQualityPreset(p, cam.position);
       if (activeMapId === "military" && S.fog) {
@@ -248,6 +251,9 @@ export function createSceneManager({
       vmRim.color.setHex(0xffc27a);
       vmRim.intensity = 0.26;
     }
+    if (assetLoader && typeof assetLoader.applySoldierEnvMap === "function") {
+      assetLoader.applySoldierEnvMap(targetEnv);
+    }
     remoteMgr.applyEnvMap(targetEnv);
   }
 
@@ -265,13 +271,35 @@ export function createSceneManager({
     const isMil = targetMapId !== "harbor";
     if (viewMode === "practice") {
       return {
-        radius: isMil ? 25.0 : 21.5,
-        height: isMil ? 8.8 : 6.8,
+        radius: isMil ? 26.5 : 22.0,
+        height: isMil ? 8.2 : 6.4,
+        targetX: 0,
+        targetY: isMil ? 1.5 : 1.5,
+        targetZ: isMil ? -2.0 : 0,
+        fov: 64,
+        angle: angle + 0.25,
+      };
+    }
+    if (viewMode === "survival") {
+      return {
+        radius: isMil ? 24.5 : 21.0,
+        height: isMil ? 9.0 : 6.8,
         targetX: 0,
         targetY: isMil ? 1.4 : 1.5,
         targetZ: isMil ? -2.0 : 0,
-        fov: 62,
+        fov: 61,
         angle,
+      };
+    }
+    if (viewMode === "bot") {
+      return {
+        radius: isMil ? 23.5 : 20.5,
+        height: isMil ? 5.6 : 4.8,
+        targetX: 0,
+        targetY: isMil ? 1.9 : 1.7,
+        targetZ: isMil ? -2.5 : 0,
+        fov: 62,
+        angle: angle - 0.45,
       };
     }
     if (viewMode === "lan") {
@@ -374,6 +402,9 @@ export function createSceneManager({
       S.background = new THREE.Color(0x050a11);
       S.fog = new THREE.FogExp2(0x050a11, 0.025);
       applySceneEnvMap(harborData.envMap, false);
+      if (assetLoader && typeof assetLoader.applyIffSettings === "function") {
+        assetLoader.applyIffSettings({ mapId: "harbor" });
+      }
       applyMoonShadowPreset(activeQuality.preset, false);
       setLobbyBackdropCamera("harbor");
       updateCanvasPostGrade(gt);
@@ -401,6 +432,9 @@ export function createSceneManager({
     S.background = new THREE.Color(militaryData.fogColor);
     S.fog = new THREE.FogExp2(militaryData.fogColor, militaryData.fogDensity);
     applySceneEnvMap(militaryData.envMap, true);
+    if (assetLoader && typeof assetLoader.applyIffSettings === "function") {
+      assetLoader.applyIffSettings({ mapId: "military" });
+    }
     if (militaryData.updateAtmosphere) {
       militaryData.updateAtmosphere(gt, cam.position, activeQuality.preset);
     }
@@ -468,7 +502,8 @@ export function createSceneManager({
 
   function createWarmupSoldierGroup() {
     const container = new THREE.Group();
-    const rig = remoteMgr.buildSoldierVisual("A", "__warmup__");
+    // Warmup enemy variant so shared `soldier_iff_pbr_v1` shader program compiles upfront during Loading
+    const rig = remoteMgr.buildSoldierVisual("B", "__warmup__", "enemy");
     container.add(rig.root);
     const shieldGeo = new THREE.SphereGeometry(0.95, 16, 12);
     const shieldMat = new THREE.MeshBasicMaterial({
@@ -908,7 +943,15 @@ export function createSceneManager({
     updateLobbyCamera,
     setLobbyOrbitLocked: (v) => { lobbyOrbitManualLock = Boolean(v); },
     setLobbyViewState: (viewName) => {
-      if (viewName === "practice" || viewName === "lan" || viewName === "home") lobbyViewMode = viewName;
+      if (
+        viewName === "practice" ||
+        viewName === "survival" ||
+        viewName === "bot" ||
+        viewName === "lan" ||
+        viewName === "home"
+      ) {
+        lobbyViewMode = viewName;
+      }
     },
     getLobbyViewState: () => ({
       viewMode: lobbyViewMode,

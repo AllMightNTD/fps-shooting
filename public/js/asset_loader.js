@@ -3,6 +3,16 @@
  */
 
 import { buildSocketPose, createSkinnedArmsController } from "/js/arm_rig.js";
+import { updateTexturesAnisotropyInPlace } from "/js/graphics_quality.js";
+import {
+  ALLY_IFF_META,
+  DEFAULT_ENEMY_HIGHLIGHT_COLOR,
+  DEFAULT_ENEMY_RIM_STRENGTH,
+  applySoldierIffShader,
+  createSoldierIffUniforms,
+  getEnemyHighlightPreset,
+  syncSoldierIffUniforms,
+} from "/js/iff_system.js";
 
 export function createAssetLoader({
   THREE,
@@ -18,6 +28,8 @@ export function createAssetLoader({
   yieldToUI,
   getActiveEnvMap,
   getActiveSlot,
+  getInitialIffConfig,
+  getInitialAnisotropy,
   onWeaponsUpgraded,
   onSoldiersUpgraded,
   onGunAnimZero,
@@ -125,21 +137,99 @@ export function createAssetLoader({
   pistolPivot.add(weaponSockets.pistol.handguard, weaponSockets.pistol.grip, weaponSockets.pistol.mag, weaponSockets.pistol.bolt);
   gun.add(m416ViewGroup, pistolViewGroup, sniperViewGroup);
 
+  const initialIff =
+    typeof getInitialIffConfig === "function" && getInitialIffConfig()
+      ? getInitialIffConfig()
+      : {
+          enemyColor: DEFAULT_ENEMY_HIGHLIGHT_COLOR,
+          rimStrength: DEFAULT_ENEMY_RIM_STRENGTH,
+          mapId: "military",
+        };
+  let currentIffConfig = {
+    enemyColor: initialIff.enemyColor || DEFAULT_ENEMY_HIGHLIGHT_COLOR,
+    rimStrength: initialIff.rimStrength || DEFAULT_ENEMY_RIM_STRENGTH,
+    mapId: initialIff.mapId || "military",
+  };
+
+  // Both Ally (uIffIntensity = 0) and Enemy share the EXACT same shader cache key (1 WebGL program total)
+  const allyIffUniforms = createSoldierIffUniforms(THREE, {
+    enemyColor: currentIffConfig.enemyColor,
+    rimStrength: "off",
+    mapId: currentIffConfig.mapId,
+  });
+  const enemyIffUniforms = createSoldierIffUniforms(THREE, currentIffConfig);
+  const protectedIffUniforms = createSoldierIffUniforms(THREE, {
+    enemyColor: "red",
+    rimStrength: "strong",
+    mapId: currentIffConfig.mapId,
+  });
+  if (protectedIffUniforms.uIffColor && protectedIffUniforms.uIffColor.value) {
+    protectedIffUniforms.uIffColor.value.setRGB(0.18, 0.78, 1.0);
+  }
+  if (protectedIffUniforms.uIffIntensity) protectedIffUniforms.uIffIntensity.value = 1.18;
+  if (protectedIffUniforms.uIffHdrBoost) protectedIffUniforms.uIffHdrBoost.value = 1.95;
+  if (protectedIffUniforms.uIffEdgeParams && protectedIffUniforms.uIffEdgeParams.value) {
+    protectedIffUniforms.uIffEdgeParams.value.set(0.32, 0.24, 0.72, 0.62);
+  }
+  const soldierBodyMats = { ally: null, enemy: null, protected: null };
+  const soldierTextures = new Set();
+
   const teamAccentMats = {};
   function initTeamMaterials(templateMat) {
-    const emissiveLevels = { A: 0.48, B: 0.50, FFA: 0.16 };
-    for (const key of ["A", "B", "FFA"]) {
+    const enemyPreset = getEnemyHighlightPreset(currentIffConfig.enemyColor);
+    const makeAccent = (name, colorNum, emissiveIntensity) => {
       const m = templateMat
         ? templateMat.clone()
-        : new THREE.MeshStandardMaterial({ roughness: 0.38, metalness: 0.14 });
-      m.name = `TeamColor_${key}`;
-      m.color.setHex(TEAM_META[key].colorNum);
-      m.emissive.setHex(TEAM_META[key].colorNum);
-      m.emissiveIntensity = emissiveLevels[key];
-      teamAccentMats[key] = m;
+        : new THREE.MeshStandardMaterial({ roughness: 0.52, metalness: 0.08 });
+      m.name = name;
+      m.roughness = 0.52;
+      m.metalness = 0.08;
+      m.color.setHex(colorNum);
+      m.emissive.setHex(colorNum);
+      m.emissiveIntensity = emissiveIntensity;
+      return m;
+    };
+
+    const emissiveLevels = { A: 0.22, B: 0.24, FFA: 0.10 };
+    for (const key of ["A", "B", "FFA"]) {
+      teamAccentMats[key] = makeAccent(`TeamColor_${key}`, TEAM_META[key].colorNum, emissiveLevels[key]);
     }
+    teamAccentMats.ally = makeAccent("TeamColor_ally", ALLY_IFF_META.colorNum, 0.34);
+    teamAccentMats.enemy = makeAccent("TeamColor_enemy", enemyPreset.colorNum, 0.42);
   }
   initTeamMaterials(null);
+
+  function applyIffSettings(patch = {}) {
+    if (patch.enemyColor !== undefined) currentIffConfig.enemyColor = patch.enemyColor;
+    if (patch.rimStrength !== undefined) currentIffConfig.rimStrength = patch.rimStrength;
+    if (patch.mapId !== undefined) currentIffConfig.mapId = patch.mapId;
+
+    const vals = syncSoldierIffUniforms(enemyIffUniforms, currentIffConfig);
+    if (vals && teamAccentMats.enemy) {
+      teamAccentMats.enemy.color.setHex(vals.colorPreset.colorNum);
+      teamAccentMats.enemy.emissive.setHex(vals.colorPreset.colorNum);
+    }
+    if (vals && typeof document !== "undefined" && document.documentElement) {
+      document.documentElement.style.setProperty("--enemy-color", vals.colorPreset.hex);
+      document.documentElement.style.setProperty("--ally-color", ALLY_IFF_META.hex);
+    }
+    return vals;
+  }
+
+  function applySoldierTextureAnisotropy(renderer, targetAniso) {
+    const capped = Math.max(1, Math.min(8, Number(targetAniso) || 4));
+    return updateTexturesAnisotropyInPlace(renderer, soldierTextures, capped);
+  }
+
+  function applySoldierEnvMap(targetEnv) {
+    for (const key of ["ally", "enemy", "protected"]) {
+      const mat = soldierBodyMats[key];
+      if (mat && "envMap" in mat && mat.envMap !== targetEnv) {
+        mat.envMap = targetEnv;
+        mat.needsUpdate = true;
+      }
+    }
+  }
 
   function decodeBase64ToArrayBuffer(b64) {
     const bin = atob(b64);
@@ -374,6 +464,13 @@ export function createAssetLoader({
     const root = gltf.scene;
     const matCache = new Map();
     let teamTemplate = null;
+    let primarySkinnedMat = null;
+    soldierTextures.clear();
+    const initialAniso = Math.max(
+      1,
+      Math.min(8, typeof getInitialAnisotropy === "function" ? Number(getInitialAnisotropy()) || 4 : 4),
+    );
+
     root.traverse((obj) => {
       obj.layers.set(0);
       if (!obj.isMesh) return;
@@ -387,11 +484,38 @@ export function createAssetLoader({
       }
       const ck = `${obj.material.uuid}:${obj.isSkinnedMesh ? 1 : 0}`;
       if (!matCache.has(ck)) {
-        matCache.set(ck, hydratePbrMaterial(obj.material, obj.name, 1.1, Boolean(obj.isSkinnedMesh)));
+        const hydrated = hydratePbrMaterial(obj.material, obj.name, 1.1, Boolean(obj.isSkinnedMesh));
+        if (obj.isSkinnedMesh) {
+          // Boost SWAT 1024px texture crispness at grazing/prone angles
+          for (const texKey of ["map", "normalMap", "roughnessMap", "metalnessMap", "aoMap"]) {
+            const t = hydrated[texKey];
+            if (t) {
+              t.anisotropy = initialAniso;
+              soldierTextures.add(t);
+            }
+          }
+          if (!primarySkinnedMat) primarySkinnedMat = hydrated;
+        }
+        matCache.set(ck, hydrated);
       }
       obj.material = matCache.get(ck);
     });
+
+    if (primarySkinnedMat) {
+      applySoldierIffShader(primarySkinnedMat, allyIffUniforms);
+      const enemyMat = primarySkinnedMat.clone();
+      enemyMat.name = `${primarySkinnedMat.name || "FSB_Operator_PBR"}_Enemy`;
+      applySoldierIffShader(enemyMat, enemyIffUniforms);
+      const protectedMat = primarySkinnedMat.clone();
+      protectedMat.name = `${primarySkinnedMat.name || "FSB_Operator_PBR"}_Protected`;
+      applySoldierIffShader(protectedMat, protectedIffUniforms);
+      soldierBodyMats.ally = primarySkinnedMat;
+      soldierBodyMats.enemy = enemyMat;
+      soldierBodyMats.protected = protectedMat;
+    }
+
     if (teamTemplate) initTeamMaterials(hydratePbrMaterial(teamTemplate, "TeamColor", 1.1));
+    applyIffSettings(currentIffConfig);
     soldierProto = root;
     soldierAnimations = Array.isArray(gltf.animations) ? gltf.animations : [];
     if (onSoldiersUpgraded) onSoldiersUpgraded();
@@ -427,6 +551,12 @@ export function createAssetLoader({
 
   return {
     teamAccentMats,
+    soldierBodyMats,
+    allyIffUniforms,
+    enemyIffUniforms,
+    applyIffSettings,
+    applySoldierTextureAnisotropy,
+    applySoldierEnvMap,
     weaponSockets,
     viewGroups: { m416ViewGroup, pistolViewGroup, pistolPivot, sniperViewGroup },
     applyViewmodelWeapon,

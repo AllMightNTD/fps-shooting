@@ -1,6 +1,14 @@
 /**
- * HUD DOM Cache, Killfeed, Chat, Scoreboard, Radar & Pause/Perf Overlays.
+ * HUD DOM Cache, Killfeed, Chat, Scoreboard, Directional Radar & Pause/Perf Overlays.
  */
+
+import {
+  ALLY_IFF_META,
+  getEnemyHighlightPreset,
+  resolvePlayerRelation,
+  resolveTopScoreboardView,
+} from "./iff_system.js";
+import { computeProtectionBlinkState } from "./spawn_rules.js";
 
 export function createHudUi({
   $,
@@ -127,6 +135,11 @@ export function createHudUi({
           "Menu trận đấu (Trận đang chạy)",
           "Esc chỉ thả chuột — Trận PvP vẫn tiếp tục trực tiếp trên LAN.",
         );
+      } else if (engineMode === "bots") {
+        showPauseOverlay(
+          "Tạm dừng — Đấu với Máy",
+          "Bấm Tiếp tục hoặc click màn hình để tiếp tục chiến đấu với Bot SWAT.",
+        );
       } else {
         showPauseOverlay("Tạm dừng (Offline)", "Bấm Tiếp tục để quay lại luyện tập Drone.");
       }
@@ -166,10 +179,15 @@ export function createHudUi({
       activeSlot,
       hp,
       meInvuln,
+      meProtState,
+      deathInfo,
+      respawnTotalMs,
       activeState,
       meAlive,
       isSprinting,
+      isMoving,
       crouched,
+      prone,
       grounded,
       ads,
       engineMode,
@@ -177,17 +195,20 @@ export function createHudUi({
       soloScore,
       respawnMs,
       currentMode,
+      meTeam,
       timeLeftSec,
       killLimit,
       teamScores,
       lastPlayers,
     } = getHudState();
 
+    const isPvpOrBots = engineMode === "lan" || engineMode === "bots";
     const { cfg, st } = activeWeapon();
     const isReloading = st.reloadEndsAt > nowMs;
+    const protActive = Boolean((meProtState && meProtState.active) || meInvuln);
 
     const hpW = Math.max(0, hp) + "%";
-    const hpBg = meInvuln ? "#64c8ff" : hp > 35 ? "#4ec3b0" : "#e85445";
+    const hpBg = protActive ? "#5ce1ff" : hp > 35 ? "#4ec3b0" : "#e85445";
     const hpText = `MÁU ${Math.max(0, Math.round(hp))} / 100`;
     if (_hudCache.hpW !== hpW) { _hudCache.hpW = hpW; $("hpb").style.width = hpW; }
     if (_hudCache.hpBg !== hpBg) { _hudCache.hpBg = hpBg; $("hpb").style.background = hpBg; }
@@ -195,6 +216,40 @@ export function createHudUi({
       _hudCache.hpText = hpText;
       const hpLbl = $("hpLabel");
       if (hpLbl) hpLbl.textContent = hpText;
+    }
+
+    const protBar = $("spawnProtectBar");
+    if (protBar) {
+      const showProt = isPvpOrBots && meAlive && protActive && activeState === "play";
+      const nextProtDisp = showProt ? "flex" : "none";
+      if (_hudCache.protDisp !== nextProtDisp) {
+        _hudCache.protDisp = nextProtDisp;
+        protBar.style.display = nextProtDisp;
+      }
+      if (showProt && meProtState) {
+        const remSec = (Math.max(0, meProtState.remainingMs || 0) / 1000).toFixed(1);
+        const label = meProtState.iFrames
+          ? `⚡ I-FRAMES BẢO VỆ • ${remSec}s`
+          : `🛡 BẢO VỆ HỒI SINH • ${remSec}s`;
+        const pTxt = $("spawnProtectText");
+        const pFill = $("spawnProtectFill");
+        if (pTxt && _hudCache.protTxt !== label) {
+          _hudCache.protTxt = label;
+          pTxt.textContent = label;
+        }
+        if (pFill) {
+          const pct = `${Math.max(0, Math.min(100, (meProtState.progress || 0) * 100)).toFixed(1)}%`;
+          if (_hudCache.protFill !== pct) {
+            _hudCache.protFill = pct;
+            pFill.style.width = pct;
+          }
+        }
+        const expFlag = Boolean(meProtState.expiring);
+        if (_hudCache.protExp !== expFlag) {
+          _hudCache.protExp = expFlag;
+          protBar.classList.toggle("expiring", expFlag);
+        }
+      }
     }
 
     const isLow = st.mag <= Math.ceil(cfg.magSize * 0.3);
@@ -215,13 +270,15 @@ export function createHudUi({
 
     const postureLabel = isSprinting
       ? "Chạy nước rút"
-      : crouched
-        ? "Ngồi"
-        : !grounded
-          ? "Trên không"
-          : ads > 0.3
-            ? "Đang ngắm"
-            : "Đứng";
+      : prone
+        ? (isMoving ? "Bò" : "Nằm")
+        : crouched
+          ? "Ngồi"
+          : !grounded
+            ? "Trên không"
+            : ads > 0.3
+              ? "Đang ngắm"
+              : "Đứng";
     const postureText = `${cfg.name} • ${postureLabel}`;
     if (_hudCache.postureText !== postureText) {
       _hudCache.postureText = postureText;
@@ -231,32 +288,82 @@ export function createHudUi({
     if (_hudCache.engineMode !== engineMode) {
       _hudCache.engineMode = engineMode;
       $("top").style.display = engineMode === "solo" ? "block" : "none";
-      $("pvpTop").style.display = engineMode === "lan" ? "flex" : "none";
-      $("radarCanvas").style.display = engineMode === "lan" ? "block" : "none";
+      $("pvpTop").style.display = isPvpOrBots ? "flex" : "none";
+      $("radarCanvas").style.display = isPvpOrBots ? "block" : "none";
     }
     if (_hudCache.soloWave !== soloWave) { _hudCache.soloWave = soloWave; $("wv").textContent = soloWave; }
     if (_hudCache.soloScore !== soloScore) { _hudCache.soloScore = soloScore; $("sc").textContent = soloScore; }
 
-    if (engineMode === "lan") {
+    if (isPvpOrBots) {
       const showRespawn = !meAlive && activeState === "play";
       const respDisp = showRespawn ? "block" : "none";
       if (_hudCache.respDisp !== respDisp) { _hudCache.respDisp = respDisp; $("respawnBanner").style.display = respDisp; }
       if (showRespawn) {
-        const respText = `Đã bị hạ — Hồi sinh sau ${(respawnMs / 1000).toFixed(1)}s`;
-        if (_hudCache.respText !== respText) { _hudCache.respText = respText; $("respawnBanner").textContent = respText; }
+        const killerLabel = deathInfo && deathInfo.killer ? deathInfo.killer : "Kẻ địch";
+        const weaponLabel = deathInfo && deathInfo.weapon ? deathInfo.weapon : "Vũ khí";
+        const headTag = deathInfo && deathInfo.head ? " • HEADSHOT" : "";
+        const kHpVal = deathInfo && Number.isFinite(deathInfo.killerHp) ? Math.max(0, Math.min(100, deathInfo.killerHp)) : null;
+        const totMs = Math.max(500, respawnTotalMs || (currentMode === "FFA" ? 2000 : 3500));
+        const secLeft = Math.max(0, respawnMs / 1000).toFixed(1);
+        const pct = Math.max(0, Math.min(100, (1 - Math.max(0, respawnMs) / totMs) * 100)).toFixed(1);
+        const cardKey = `${killerLabel}|${weaponLabel}|${headTag}|${kHpVal}|${secLeft}`;
+        if (_hudCache.respKey !== cardKey) {
+          _hudCache.respKey = cardKey;
+          const banner = $("respawnBanner");
+          const kEl = $("respawnKillerMeta");
+          const hpEl = $("respawnKillerHp");
+          const tEl = $("respawnTimerText");
+          const fEl = $("respawnProgressFill");
+          if (kEl && hpEl && tEl && fEl) {
+            kEl.textContent = `BỊ HẠ BỞI ${killerLabel} • ${weaponLabel}${headTag}`;
+            hpEl.textContent = kHpVal !== null ? `Máu địch còn lại: ${kHpVal} / 100 HP` : "";
+            tEl.textContent = `HỒI SINH SAU ${secLeft}s`;
+            fEl.style.width = `${pct}%`;
+          } else {
+            banner.textContent = `Bị hạ bởi ${killerLabel} — Hồi sinh sau ${secLeft}s`;
+          }
+        }
       }
-      if (currentMode === "TDM") {
-        const metaText = `${formatClock(timeLeftSec)} | ${killLimit} Mạng`;
-        if (_hudCache.scA !== teamScores.A) { _hudCache.scA = teamScores.A; $("scA").textContent = teamScores.A; }
-        if (_hudCache.scB !== teamScores.B) { _hudCache.scB = teamScores.B; $("scB").textContent = teamScores.B; }
-        if (_hudCache.pvpMeta !== metaText) { _hudCache.pvpMeta = metaText; $("pvpMeta").textContent = metaText; }
-      } else {
-        const topP = lastPlayers.slice().sort((a, b) => b.kills - a.kills)[0];
-        const aVal = topP ? topP.kills : 0;
-        const metaText = `FFA ${formatClock(timeLeftSec)} | Dẫn đầu: ${topP ? topP.name : "-"}`;
-        if (_hudCache.scA !== aVal) { _hudCache.scA = aVal; $("scA").textContent = aVal; }
-        if (_hudCache.scB !== killLimit) { _hudCache.scB = killLimit; $("scB").textContent = killLimit; }
-        if (_hudCache.pvpMeta !== metaText) { _hudCache.pvpMeta = metaText; $("pvpMeta").textContent = metaText; }
+      const enemyColorId = settings && settings.get ? settings.get().enemyHighlightColor : "red";
+      const topPlayer =
+        currentMode === "TDM"
+          ? null
+          : lastPlayers.slice().sort((a, b) => b.kills - a.kills)[0] || null;
+      const topView = resolveTopScoreboardView({
+        currentMode,
+        meTeam,
+        teamScores,
+        topKills: topPlayer ? topPlayer.kills : 0,
+        topName: topPlayer ? topPlayer.name : "-",
+        killLimit,
+        clockText: formatClock(timeLeftSec),
+        enemyColor: enemyColorId,
+      });
+
+      if (_hudCache.scA !== topView.leftScore) { _hudCache.scA = topView.leftScore; $("scA").textContent = topView.leftScore; }
+      if (_hudCache.scB !== topView.rightScore) { _hudCache.scB = topView.rightScore; $("scB").textContent = topView.rightScore; }
+      if (_hudCache.pvpMeta !== topView.metaText) { _hudCache.pvpMeta = topView.metaText; $("pvpMeta").textContent = topView.metaText; }
+      if (_hudCache.pvpLeftLabel !== topView.leftLabel) {
+        _hudCache.pvpLeftLabel = topView.leftLabel;
+        const lblL = $("pvpLeftLabel");
+        if (lblL) lblL.textContent = topView.leftLabel;
+      }
+      if (_hudCache.pvpRightLabel !== topView.rightLabel) {
+        _hudCache.pvpRightLabel = topView.rightLabel;
+        const lblR = $("pvpRightLabel");
+        if (lblR) lblR.textContent = topView.rightLabel;
+      }
+      if (_hudCache.pvpLeftColor !== topView.leftColor) {
+        _hudCache.pvpLeftColor = topView.leftColor;
+        const wL = $("pvpLeftWrap");
+        if (wL) wL.style.color = topView.leftColor;
+        $("scA").style.color = topView.leftColor;
+      }
+      if (_hudCache.pvpRightColor !== topView.rightColor) {
+        _hudCache.pvpRightColor = topView.rightColor;
+        const wR = $("pvpRightWrap");
+        if (wR) wR.style.color = topView.rightColor;
+        $("scB").style.color = topView.rightColor;
       }
     } else if (_hudCache.respDisp !== "none") {
       _hudCache.respDisp = "none";
@@ -264,10 +371,41 @@ export function createHudUi({
     }
   }
 
-  function setHitmarker(headshot) {
+  function setHitmarker(modeOrHeadshot) {
     hm = 1;
-    $("hm").style.borderColor = headshot ? "#ff3b3b" : "var(--amber)";
-    $("hm").style.borderWidth = headshot ? "3px" : "2px";
+    const node = $("hm");
+    if (!node) return;
+    if (modeOrHeadshot === "shield") {
+      node.style.borderColor = "#5ce1ff";
+      node.style.borderWidth = "3px";
+      node.classList.add("hmShield");
+      return;
+    }
+    node.classList.remove("hmShield");
+    const headshot = modeOrHeadshot === true || modeOrHeadshot === "head";
+    node.style.borderColor = headshot ? "#ff3b3b" : "var(--amber)";
+    node.style.borderWidth = headshot ? "3px" : "2px";
+  }
+
+  function stepShieldVisuals(nowMs) {
+    const { engineMode, activeState, meAlive, meProtState } = getHudState();
+    const isPvpOrBots = engineMode === "lan" || engineMode === "bots";
+    const vig = $("shieldVignette");
+    const pBar = $("spawnProtectBar");
+    const active = isPvpOrBots && activeState === "play" && meAlive && meProtState && meProtState.active;
+    if (!active) {
+      if (vig && vig.style.opacity !== "0") vig.style.opacity = "0";
+      if (pBar) pBar.classList.remove("blinkPhaseOn");
+      return;
+    }
+    const blink = computeProtectionBlinkState(nowMs / 1000, meProtState);
+    if (vig) {
+      const targetOp = blink.blinkOn ? (0.28 + 0.42 * blink.intensity).toFixed(3) : "0.06";
+      if (vig.style.opacity !== targetOp) vig.style.opacity = targetOp;
+    }
+    if (pBar) {
+      pBar.classList.toggle("blinkPhaseOn", blink.blinkOn);
+    }
   }
 
   function showKillAlert(text, color = "#ff4747") {
@@ -293,19 +431,36 @@ export function createHudUi({
     }
   }
 
+  function getActiveEnemyPreset() {
+    const colorId = settings && settings.get ? settings.get().enemyHighlightColor : "red";
+    return getEnemyHighlightPreset(colorId);
+  }
+
+  function getLocalPlayerId() {
+    const st = getHudState();
+    return st && st.localPlayerId ? st.localPlayerId : net.playerId;
+  }
+
+  function resolveRelativeHex(targetTeam, targetId = null) {
+    if (targetId && targetId === getLocalPlayerId()) return "#f0b429";
+    const { currentMode, meTeam } = getHudState();
+    const rel = resolvePlayerRelation({ currentMode, meTeam, targetTeam });
+    return rel === "ally" ? ALLY_IFF_META.markerHex : getActiveEnemyPreset().hex;
+  }
+
   function pushKillfeed(ev) {
     const kf = $("killfeed");
     const row = el("div", "kfRow");
     const kMeta = TEAM_META[ev.killerTeam] || TEAM_META.FFA;
     const vMeta = TEAM_META[ev.victimTeam] || TEAM_META.FFA;
     const kSpan = el("span", "", `${kMeta.symbol} ${ev.killer}`);
-    kSpan.style.color = kMeta.hex;
+    kSpan.style.color = resolveRelativeHex(ev.killerTeam, ev.killerId);
     const wTag = ev.weapon || "M416";
     const mid = el("span", "", ev.head ? ` [HEADSHOT • ${wTag}] ` : ` [${wTag}] `);
-    mid.style.color = ev.head ? "#ff5252" : "#cfd8df";
+    mid.style.color = ev.head ? getActiveEnemyPreset().hex : "#cfd8df";
     mid.style.fontWeight = "700";
     const vSpan = el("span", "", `${vMeta.symbol} ${ev.victim}`);
-    vSpan.style.color = vMeta.hex;
+    vSpan.style.color = resolveRelativeHex(ev.victimTeam, ev.victimId);
     row.append(kSpan, mid, vSpan);
     kf.prepend(row);
     while (kf.children.length > 5) kf.lastChild.remove();
@@ -317,7 +472,7 @@ export function createHudUi({
     const line = el("div", "hudChatRow");
     const meta = TEAM_META[ev.team] || TEAM_META.FFA;
     const who = el("b", "", `${meta.symbol} ${ev.from}: `);
-    who.style.color = meta.hex;
+    who.style.color = resolveRelativeHex(ev.team, ev.playerId || ev.fromId);
     line.append(who, el("span", "", ev.text));
     log.append(line);
     while (log.children.length > 6) log.firstChild.remove();
@@ -325,18 +480,26 @@ export function createHudUi({
   }
 
   function renderScoreboardTable() {
-    const { lastPlayers, currentMode, killLimit, timeLeftSec } = getHudState();
+    const { lastPlayers, currentMode, meTeam, killLimit, timeLeftSec } = getHudState();
     const tbody = $("sbBody");
     tbody.textContent = "";
     const rows = lastPlayers.slice().sort((a, b) => b.kills - a.kills || a.deaths - b.deaths || b.headshots - a.headshots);
+    const enemyHex = getActiveEnemyPreset().hex;
+    const mePid = getLocalPlayerId();
     for (const p of rows) {
       const tr = document.createElement("tr");
-      if (p.id === net.playerId) tr.style.background = "rgba(240, 180, 41, 0.14)";
+      const isMe = p.id === mePid;
+      if (isMe) tr.style.background = "rgba(240, 180, 41, 0.14)";
       const meta = TEAM_META[p.team] || TEAM_META.FFA;
-      const tdTeam = el("td", "", `${meta.symbol} ${meta.name}`);
-      tdTeam.style.color = meta.hex;
+      const rel = resolvePlayerRelation({ currentMode, meTeam, targetTeam: p.team });
+      const teamLabel =
+        currentMode === "TDM"
+          ? `${meta.symbol} ${rel === "ally" ? "Đội bạn" : "Đội địch"}`
+          : `${meta.symbol} ${isMe ? "Bạn" : "Địch"}`;
+      const tdTeam = el("td", "", teamLabel);
+      tdTeam.style.color = isMe ? "#f0b429" : rel === "ally" ? ALLY_IFF_META.markerHex : enemyHex;
       tr.append(
-        el("td", "", p.name + (p.id === net.playerId ? " (Bạn)" : "")),
+        el("td", "", p.name + (isMe ? " (Bạn)" : "")),
         tdTeam,
         el("td", "", String(p.kills)),
         el("td", "", String(p.deaths)),
@@ -361,7 +524,7 @@ export function createHudUi({
       yaw,
     } = getHudState();
 
-    if (engineMode !== "lan") {
+    if (engineMode !== "lan" && engineMode !== "bots") {
       if (_crossEnemyHover) {
         _crossEnemyHover = false;
         $("cross").classList.remove("targetEnemy");
@@ -417,9 +580,10 @@ export function createHudUi({
     g.beginPath(); g.arc(cx, cy, 27, 0, Math.PI * 2); g.stroke();
 
     const sn = Math.sin(yaw), cs = Math.cos(yaw);
+    const enemyHex = getActiveEnemyPreset().hex;
     for (const av of remotePlayers.values()) {
       if (!av.alive) continue;
-      const isTeammate = currentMode === "TDM" && av.team === meTeam;
+      const isTeammate = resolvePlayerRelation({ currentMode, meTeam, targetTeam: av.team }) === "ally";
       if (!isTeammate && nowMs > av.radarBlipUntil) continue;
       const dx = av.container.position.x - P.x;
       const dz = av.container.position.z - P.z;
@@ -432,10 +596,31 @@ export function createHudUi({
         px = cx + ((px - cx) / d) * 54;
         py = cy + ((py - cy) / d) * 54;
       }
-      g.fillStyle = (TEAM_META[av.team] || TEAM_META.FFA).hex;
-      g.beginPath();
-      g.arc(px, py, isTeammate ? 4.2 : 3.6, 0, Math.PI * 2);
-      g.fill();
+      if (isTeammate) {
+        // Directional blue arrow showing exact facing direction of teammate (PUBG/Valorant style)
+        const relAngle = yaw - (Number.isFinite(av.yaw) ? av.yaw : av.container.rotation.y || 0);
+        g.save();
+        g.translate(px, py);
+        g.rotate(relAngle);
+        g.fillStyle = ALLY_IFF_META.markerHex;
+        g.strokeStyle = "rgba(4, 10, 18, 0.9)";
+        g.lineWidth = 1.2;
+        g.beginPath();
+        g.moveTo(0, -5.6);
+        g.lineTo(-4.0, 4.2);
+        g.lineTo(0, 2.2);
+        g.lineTo(4.0, 4.2);
+        g.closePath();
+        g.fill();
+        g.stroke();
+        g.restore();
+      } else {
+        // Enemy gunshot radar blip synced to selected IFF color
+        g.fillStyle = enemyHex;
+        g.beginPath();
+        g.arc(px, py, 3.8, 0, Math.PI * 2);
+        g.fill();
+      }
     }
 
     g.fillStyle = "#f0b429";
@@ -480,6 +665,7 @@ export function createHudUi({
   return {
     hud,
     setHitmarker,
+    stepShieldVisuals,
     triggerDamageVignette: () => { dmgV = 1; },
     showKillAlert,
     stepTransientFeedback,

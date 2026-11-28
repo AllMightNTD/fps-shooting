@@ -187,6 +187,12 @@ def main() -> int:
                 "() => getComputedStyle(document.getElementById('lobbyPracticeView')).opacity === '1' && getComputedStyle(document.getElementById('lobbyHomeView')).opacity === '0'",
                 timeout=10000,
             )
+            assert page.evaluate("() => window.__fpsApp.lobby.getState().activeView") == "practice"
+            page.click("#btnPracticeSurvival")
+            page.wait_for_function(
+                "() => getComputedStyle(document.getElementById('lobbySurvivalView')).opacity === '1' && getComputedStyle(document.getElementById('lobbyPracticeView')).opacity === '0'",
+                timeout=10000,
+            )
             practice_state = page.evaluate(
                 """() => {
                   const imgs = Array.from(document.querySelectorAll("#practiceMapGrid .mapThumbCard img"));
@@ -197,7 +203,7 @@ def main() -> int:
                   };
                 }"""
             )
-            assert practice_state["lobby"]["activeView"] == "practice"
+            assert practice_state["lobby"]["activeView"] == "survival"
             assert practice_state["thumbCount"] == 2 and practice_state["thumbsLoaded"] is True, f"Map thumbnails broken: {practice_state}"
 
             # Hover & select Harbor without flashing full-screen loadingOverlay, then switch back to Military
@@ -886,6 +892,11 @@ def main() -> int:
             page.click("#btnModePractice")
             page.wait_for_function(
                 "() => getComputedStyle(document.getElementById('lobbyPracticeView')).opacity === '1'",
+                timeout=10000,
+            )
+            page.click("#btnPracticeSurvival")
+            page.wait_for_function(
+                "() => getComputedStyle(document.getElementById('lobbySurvivalView')).opacity === '1'",
                 timeout=10000,
             )
             page.click("#btnSoloMode")

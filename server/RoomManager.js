@@ -76,6 +76,7 @@ export class RoomManager {
           const p = room.players.get(session.id);
           p.ws = ws;
           p.connected = true;
+          p.rttMs = session.rttMs || 0;
         } else {
           session.roomId = null;
         }
@@ -118,6 +119,8 @@ export class RoomManager {
       roomId: null,
       lastSeenAt: now,
       disconnectDeadline: 0,
+      rttMs: 0,
+      lastPingSentAt: 0,
     };
     this.sessions.set(playerId, session);
     this.tokens.set(newToken, playerId);
@@ -177,7 +180,21 @@ export class RoomManager {
     }
     this._syncPlayerName(session, msg.playerName);
     const id = `r${this.nextRoomSeq++}`;
-    const room = new Room(id, session, msg, this.arenas, this.now);
+    const room = new Room(
+      id,
+      session,
+      {
+        ...msg,
+        onAutoKick: (kickedRoom, targetId) => {
+          const targetSess = this.sessions.get(targetId);
+          if (targetSess) targetSess.roomId = null;
+          if (kickedRoom.players.size === 0) this.rooms.delete(kickedRoom.id);
+          this.broadcastLobbyList();
+        },
+      },
+      this.arenas,
+      this.now,
+    );
     const joinRes = room.join(session, room.password, msg.team, this.now());
     if (!joinRes.ok) return joinRes;
 
@@ -268,6 +285,22 @@ export class RoomManager {
     }
   }
 
+  recordPong(sessionId, now = this.now()) {
+    const session = this.sessions.get(sessionId);
+    if (!session) return null;
+    if (Number.isFinite(now)) session.lastSeenAt = now;
+    if (!(session.lastPingSentAt > 0) || !Number.isFinite(now)) {
+      return session.rttMs || 0;
+    }
+    const sample = Math.max(0, Math.min(400, Math.round(now - session.lastPingSentAt)));
+    session.rttMs = session.rttMs > 0 ? Math.round(session.rttMs * 0.7 + sample * 0.3) : sample;
+    const room = session.roomId ? this.rooms.get(session.roomId) : null;
+    if (room && room.players.has(session.id)) {
+      room.players.get(session.id).rttMs = session.rttMs;
+    }
+    return session.rttMs;
+  }
+
   stepHeartbeat(now = this.now()) {
     for (const s of this.sessions.values()) {
       if (s.connected && s.ws && !s.ws.closed) {
@@ -275,6 +308,7 @@ export class RoomManager {
           s.ws.close(1001, "Heartbeat timeout");
           this.markDisconnected(s.id, s.ws);
         } else {
+          s.lastPingSentAt = now;
           s.ws.sendPing();
         }
       }

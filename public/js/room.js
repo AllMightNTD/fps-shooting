@@ -43,9 +43,12 @@ export function createRoomController({ net, onNotice }) {
   const endBodyEl = document.getElementById("endScoreBody");
   const endCountdownEl = document.getElementById("endAutoReturn");
   const btnReturnRoom = document.getElementById("btnReturnRoom");
+  const btnEndReturnLobby = document.getElementById("btnEndReturnLobby");
 
   let currentRoom = null;
   let endTimerInterval = null;
+  let customReplayHandler = null;
+  let customLobbyHandler = null;
 
   function makePlayerRow(p, isHostViewer, isTdm) {
     const row = makeEl("div", "rosterRow");
@@ -157,8 +160,30 @@ export function createRoomController({ net, onNotice }) {
     }
   }
 
+  function renderEndScoreRows(rows, localId) {
+    endBodyEl.textContent = "";
+    (rows || []).forEach((p, idx) => {
+      const tr = document.createElement("tr");
+      if (p.id === localId) tr.style.background = "rgba(240, 180, 41, 0.14)";
+      const meta = TEAM_META[p.team] || TEAM_META.FFA;
+      const teamTd = makeEl("td", "", `${meta.symbol} ${meta.name}`);
+      teamTd.style.color = meta.hex;
+      tr.append(
+        makeEl("td", "", String(idx + 1)),
+        makeEl("td", "", p.name + (p.id === localId ? " (Bạn)" : "")),
+        teamTd,
+        makeEl("td", "", String(p.kills)),
+        makeEl("td", "", String(p.deaths)),
+        makeEl("td", "", String(p.headshots)),
+      );
+      endBodyEl.append(tr);
+    });
+  }
+
   function renderMatchEnd(ev) {
     stopEndTimer();
+    customReplayHandler = null;
+    customLobbyHandler = null;
     let sec = ev.returnInSec || 10;
     const isTdm = currentRoom && currentRoom.mode === "TDM";
     if (ev.winner === "DRAW") endTitleEl.textContent = "HÒA TRẬN!";
@@ -171,27 +196,12 @@ export function createRoomController({ net, onNotice }) {
       endTitleEl.textContent = `CHIẾN THẮNG: ${ev.winner}`;
     }
 
-    endBodyEl.textContent = "";
-    const rows = ev.scoreboard || [];
-    rows.forEach((p, idx) => {
-      const tr = document.createElement("tr");
-      if (p.id === net.playerId) tr.style.background = "rgba(240, 180, 41, 0.14)";
-      const meta = TEAM_META[p.team] || TEAM_META.FFA;
-      const teamTd = makeEl("td", "", `${meta.symbol} ${meta.name}`);
-      teamTd.style.color = meta.hex;
-      tr.append(
-        makeEl("td", "", String(idx + 1)),
-        makeEl("td", "", p.name + (p.id === net.playerId ? " (Bạn)" : "")),
-        teamTd,
-        makeEl("td", "", String(p.kills)),
-        makeEl("td", "", String(p.deaths)),
-        makeEl("td", "", String(p.headshots)),
-      );
-      endBodyEl.append(tr);
-    });
+    renderEndScoreRows(ev.scoreboard || [], net.playerId);
 
     const isHost = currentRoom && currentRoom.hostId === net.playerId;
+    btnReturnRoom.textContent = "Về phòng ngay";
     btnReturnRoom.style.display = isHost ? "inline-block" : "none";
+    if (btnEndReturnLobby) btnEndReturnLobby.style.display = "none";
     endCountdownEl.textContent = `Tự động quay về phòng chờ sau ${sec}s...`;
     endTimerInterval = setInterval(() => {
       sec = Math.max(0, sec - 1);
@@ -201,6 +211,30 @@ export function createRoomController({ net, onNotice }) {
         endTimerInterval = null;
       }
     }, 1000);
+  }
+
+  function renderBotMatchEnd(ev, { onReplay, onReturnLobby } = {}) {
+    stopEndTimer();
+    customReplayHandler = typeof onReplay === "function" ? onReplay : null;
+    customLobbyHandler = typeof onReturnLobby === "function" ? onReturnLobby : null;
+    const isTdm = ev && ev.mode === "TDM";
+    if (!ev || ev.winner === "DRAW") endTitleEl.textContent = "HÒA TRẬN ĐẤU MÁY!";
+    else if (isTdm) {
+      endTitleEl.textContent =
+        ev.winner === "A"
+          ? "▲ ĐỘI BẠN CHIẾN THẮNG!"
+          : "● BOT ĐỊCH CHIẾN THẮNG!";
+    } else {
+      endTitleEl.textContent = `CHIẾN THẮNG: ${ev.winner}`;
+    }
+    renderEndScoreRows((ev && ev.scoreboard) || [], "human-local");
+    btnReturnRoom.textContent = "Đấu lại trận mới";
+    btnReturnRoom.style.display = "inline-block";
+    if (btnEndReturnLobby) btnEndReturnLobby.style.display = "inline-block";
+    endCountdownEl.textContent =
+      isTdm && ev && ev.teamScores
+        ? `Tỷ số cuối: Đội Bạn ${ev.teamScores.A} — ${ev.teamScores.B} Bot Địch`
+        : "Tổng kết trận Đấu với Máy";
   }
 
   btnSaveSettings.onclick = () => {
@@ -226,7 +260,15 @@ export function createRoomController({ net, onNotice }) {
     chatLog.textContent = "";
     net.send(MSG.ROOM_LEAVE);
   };
-  btnReturnRoom.onclick = () => net.send(MSG.ROOM_RETURN);
+  btnReturnRoom.onclick = () => {
+    if (customReplayHandler) customReplayHandler();
+    else net.send(MSG.ROOM_RETURN);
+  };
+  if (btnEndReturnLobby) {
+    btnEndReturnLobby.onclick = () => {
+      if (customLobbyHandler) customLobbyHandler();
+    };
+  }
 
   function submitChat() {
     const txt = chatInput.value.trim();
@@ -255,6 +297,7 @@ export function createRoomController({ net, onNotice }) {
     renderRoom,
     appendChat,
     renderMatchEnd,
+    renderBotMatchEnd,
     stopEndTimer,
     clearRoom() {
       currentRoom = null;

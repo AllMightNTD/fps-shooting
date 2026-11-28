@@ -29,6 +29,8 @@
         --amber: #f0b429;
         --hud: #e6f1f6;
         --field: rgba(18, 30, 42, 0.85);
+        --ally-color: #2f80ff;
+        --enemy-color: #ff3535;
       }
       * {
         box-sizing: border-box;
@@ -387,7 +389,10 @@
       .modeCard:focus-visible .tacCorner,
       .mapThumbCard:hover .tacCorner,
       .mapThumbCard.selected .tacCorner,
-      .mapThumbCard:focus-visible .tacCorner {
+      .mapThumbCard:focus-visible .tacCorner,
+      .botModeBtn:hover .tacCorner,
+      .botModeBtn.selected .tacCorner,
+      .botModeBtn:focus-visible .tacCorner {
         width: 15px;
         height: 15px;
       }
@@ -453,6 +458,153 @@
       }
       .modeCard:hover .modeCardArrow {
         transform: translate3d(5px, 0, 0);
+      }
+      .practiceModeGrid {
+        width: min(760px, 94vw);
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: clamp(16px, 2.4vw, 28px);
+        align-items: stretch;
+      }
+      @keyframes lobbyCardEnter {
+        from {
+          opacity: 0;
+          transform: translate3d(0, 16px, 0) scale(0.985);
+        }
+        to {
+          opacity: 1;
+          transform: translate3d(0, 0, 0) scale(1);
+        }
+      }
+      .lobbyView.active .modeCard,
+      .lobbyView.active .mapThumbCard,
+      .lobbyView.active .botModeBtn {
+        animation: lobbyCardEnter 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+      }
+      .lobbyView.active .modeCard:nth-child(2),
+      .lobbyView.active .mapThumbCard:nth-child(2),
+      .lobbyView.active .botModeBtn:nth-child(2) {
+        animation-delay: 0.05s;
+      }
+      .lobbyView.active .modeCard:nth-child(3) {
+        animation-delay: 0.1s;
+      }
+      .botModeGrid {
+        width: min(920px, 94vw);
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+        margin-bottom: 14px;
+      }
+      .botModeBtn {
+        --accent: #3b82f6;
+        --accent-glow: rgba(59, 130, 246, 0.28);
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        padding: 13px 16px;
+        background: rgba(9, 15, 24, 0.88);
+        border: 1.5px solid rgba(148, 163, 184, 0.26);
+        border-radius: 3px;
+        color: #f1f5f9;
+        text-align: left;
+        transition:
+          transform 0.2s cubic-bezier(0.22, 1, 0.36, 1),
+          border-color 0.2s ease,
+          box-shadow 0.22s ease;
+      }
+      .botModeBtn[data-bot-mode="FFA"] {
+        --accent: #f0b429;
+        --accent-glow: rgba(240, 180, 41, 0.28);
+      }
+      .botModeBtn:hover,
+      .botModeBtn.selected {
+        border-color: var(--accent);
+        box-shadow: 0 12px 30px rgba(0, 0, 0, 0.52), 0 0 22px var(--accent-glow);
+        transform: translate3d(0, -2px, 0);
+      }
+      .botModeBtn.selected {
+        background: linear-gradient(145deg, rgba(16, 26, 40, 0.94), rgba(8, 14, 22, 0.96));
+      }
+      .botModeBtnTitle {
+        font-family: "Oswald", "Chakra Petch", sans-serif;
+        font-size: 1.28rem;
+        letter-spacing: 0.08em;
+        color: #fff;
+      }
+      .botModeBtnDesc {
+        font-family: "Be Vietnam Pro", sans-serif;
+        font-size: 12px;
+        color: #9eb3c4;
+      }
+      .botQuickBar {
+        width: min(920px, 94vw);
+        margin-top: 14px;
+        padding: 11px 16px;
+        background: rgba(8, 14, 22, 0.9);
+        border: 1px solid rgba(148, 163, 184, 0.26);
+        border-left: 3px solid var(--amber);
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .botCtrlGroup {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 12px;
+        color: #cbd5e1;
+      }
+      .botSegGroup {
+        display: inline-flex;
+        padding: 2px;
+        background: rgba(4, 9, 15, 0.72);
+        border: 1px solid rgba(148, 163, 184, 0.22);
+        border-radius: 3px;
+        gap: 3px;
+      }
+      .botSegBtn {
+        padding: 5px 10px;
+        font-size: 12px;
+        font-weight: 700;
+        background: transparent;
+        color: #94a3b8;
+        border-radius: 2px;
+      }
+      .botSegBtn.active {
+        background: var(--amber);
+        color: #161004;
+      }
+      .botTeamPill {
+        font-family: "Chakra Petch", sans-serif;
+        font-size: 11.5px;
+        font-weight: 700;
+        color: #7dd3fc;
+        letter-spacing: 0.5px;
+      }
+      #lobbyBotView .practiceHeader {
+        margin-bottom: 10px;
+      }
+      #lobbyBotView .botModeGrid {
+        margin-bottom: 10px;
+        gap: 12px;
+      }
+      #lobbyBotView .botModeBtn {
+        padding: 10px 15px;
+      }
+      #lobbyBotView .mapThumbCard {
+        aspect-ratio: 16 / 7.8;
+        min-height: 185px;
+      }
+      #lobbyBotView .botQuickBar {
+        margin-top: 10px;
+        padding: 9px 14px;
+      }
+      #lobbyBotView .practiceActionBar {
+        margin-top: 12px;
       }
 
       /* View 2: 3D Practice Map Thumbnail Selection */
@@ -764,7 +916,9 @@
         text-shadow: 0 1px 6px rgba(0, 0, 0, 0.9);
       }
       @media (max-width: 780px) {
-        .modeCardGrid {
+        .modeCardGrid,
+        .practiceModeGrid,
+        .botModeGrid {
           grid-template-columns: 1fr;
         }
         .modeCard {
@@ -985,12 +1139,12 @@
         font-size: 15px;
       }
       .scA {
-        color: #2f80ff;
+        color: var(--ally-color);
         font-size: 22px;
         font-weight: 800;
       }
       .scB {
-        color: #ff4d2e;
+        color: var(--enemy-color);
         font-size: 22px;
         font-weight: 800;
       }
@@ -1082,14 +1236,110 @@
       #respawnBanner {
         position: absolute;
         left: 50%;
-        top: 62%;
+        bottom: 15%;
         transform: translateX(-50%);
-        background: rgba(9, 15, 22, 0.86);
-        border: 1px solid rgba(255, 90, 60, 0.55);
-        padding: 10px 20px;
+        width: min(390px, 90vw);
+        background: rgba(7, 13, 21, 0.92);
+        border: 1px solid rgba(255, 92, 74, 0.6);
+        border-left: 4px solid #ff4747;
+        padding: 12px 18px;
         border-radius: 4px;
-        font-size: 16px;
+        text-align: center;
+        box-shadow: 0 18px 42px rgba(0, 0, 0, 0.65);
         display: none;
+      }
+      #respawnKillerMeta {
+        font-family: "Chakra Petch", sans-serif;
+        font-size: 14px;
+        font-weight: 700;
+        letter-spacing: 0.8px;
+        color: #ff8070;
+      }
+      #respawnKillerHp {
+        font-size: 12px;
+        color: #cbd5e1;
+        margin: 4px 0 8px;
+      }
+      #respawnTimerText {
+        font-family: "Chakra Petch", sans-serif;
+        font-size: 15px;
+        font-weight: 700;
+        color: #f8fafc;
+        margin-bottom: 6px;
+      }
+      .respawnTrack {
+        width: 100%;
+        height: 4px;
+        background: rgba(148, 163, 184, 0.22);
+        border-radius: 999px;
+        overflow: hidden;
+      }
+      #respawnProgressFill {
+        height: 100%;
+        width: 0%;
+        background: linear-gradient(90deg, #ff5b4a, #f0b429);
+        transition: width 0.09s linear;
+      }
+      #shieldVignette {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        opacity: 0;
+        background: radial-gradient(
+          ellipse at center,
+          rgba(60, 210, 255, 0) 58%,
+          rgba(70, 215, 255, 0.24) 88%,
+          rgba(92, 225, 255, 0.48) 100%
+        );
+        box-shadow: inset 0 0 90px 14px rgba(92, 225, 255, 0.34);
+        transition: opacity 0.06s linear;
+      }
+      #spawnProtectBar {
+        display: none;
+        flex-direction: column;
+        gap: 3px;
+        width: 210px;
+        padding: 5px 8px;
+        background: rgba(6, 18, 28, 0.82);
+        border: 1px solid rgba(92, 225, 255, 0.55);
+        border-radius: 3px;
+        box-shadow: 0 0 14px rgba(92, 225, 255, 0.2);
+        transition: border-color 0.08s linear, box-shadow 0.08s linear, opacity 0.08s linear;
+      }
+      #spawnProtectBar.blinkPhaseOn {
+        border-color: #9beeff;
+        box-shadow: 0 0 18px rgba(92, 225, 255, 0.55);
+      }
+      #spawnProtectBar.expiring {
+        border-color: #fbbf24;
+      }
+      #spawnProtectBar.expiring.blinkPhaseOn {
+        border-color: #fef08a;
+        box-shadow: 0 0 20px rgba(251, 191, 36, 0.65);
+      }
+      #spawnProtectText {
+        font-family: "Chakra Petch", sans-serif;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.7px;
+        color: #93ecff;
+      }
+      #spawnProtectBar.expiring #spawnProtectText {
+        color: #fde68a;
+      }
+      .spawnProtectTrack {
+        width: 100%;
+        height: 4px;
+        background: rgba(148, 163, 184, 0.22);
+        overflow: hidden;
+      }
+      #spawnProtectFill {
+        width: 100%;
+        height: 100%;
+        background: linear-gradient(90deg, #38bdf8, #80f0ff);
+      }
+      #spawnProtectBar.expiring #spawnProtectFill {
+        background: linear-gradient(90deg, #f59e0b, #fde047);
       }
       #sniperScope {
         position: fixed;
@@ -1181,7 +1431,7 @@
       }
       #cross.targetEnemy::before,
       #cross.targetEnemy::after {
-        background: #ff3838;
+        background: var(--enemy-color);
         opacity: 1;
       }
       #cross::before {
@@ -1247,6 +1497,10 @@
         border: 2px solid var(--amber);
         transform: rotate(45deg);
         opacity: 0;
+      }
+      #hm.hmShield {
+        border-radius: 6px;
+        box-shadow: 0 0 12px rgba(92, 225, 255, 0.9);
       }
       #dmg {
         position: absolute;
@@ -2079,8 +2333,8 @@
             >Đang giải mã tài nguyên — vui lòng chờ trong giây lát...</span
           >
           <span class="loadingTip"
-            >Mẹo: Phím 1 / 2 / 3 đổi súng • Chuột phải ngắm ADS • C / Ctrl
-            ngồi</span
+            >Mẹo: Phím 1 / 2 / 3 đổi súng • Chuột phải ngắm ADS • C / Ctrl ngồi
+            • Z nằm</span
           >
         </div>
       </div>
@@ -2095,18 +2349,26 @@
       <div id="top">Đợt <b id="wv">0</b> &nbsp; Điểm <b id="sc">0</b></div>
       <canvas id="radarCanvas" width="124" height="124"></canvas>
       <div id="pvpTop">
-        <span style="color: #2f80ff"
-          >▲ Đặc Nhiệm <b class="scA" id="scA">0</b></span
+        <span id="pvpLeftWrap" style="color: var(--ally-color)"
+          ><span id="pvpLeftLabel">▲ ĐỘI BẠN</span>
+          <b class="scA" id="scA">0</b></span
         >
         <span id="pvpMeta">10:00 | 30 Mạng</span>
-        <span style="color: #ff4d2e"
-          ><b class="scB" id="scB">0</b> Nổi Loạn ●</span
+        <span id="pvpRightWrap" style="color: var(--enemy-color)"
+          ><b class="scB" id="scB">0</b>
+          <span id="pvpRightLabel">ĐỘI ĐỊCH ●</span></span
         >
       </div>
       <div id="killfeed"></div>
       <div id="hudChatLog"></div>
       <div id="killAlert"></div>
-      <div id="respawnBanner"></div>
+      <div id="respawnBanner">
+        <div id="respawnKillerMeta">BỊ HẠ GỤC</div>
+        <div id="respawnKillerHp"></div>
+        <div id="respawnTimerText">HỒI SINH SAU 3.5s</div>
+        <div class="respawnTrack"><div id="respawnProgressFill"></div></div>
+      </div>
+      <div id="shieldVignette"></div>
       <div id="lowHpOverlay"></div>
       <div id="dmg"></div>
       <div id="sniperScope">
@@ -2220,6 +2482,10 @@
       <div id="hm"></div>
       <div id="bot">
         <div id="hpWrap">
+          <div id="spawnProtectBar">
+            <span id="spawnProtectText">🛡 BẢO VỆ HỒI SINH</span>
+            <div class="spawnProtectTrack"><div id="spawnProtectFill"></div></div>
+          </div>
           <div id="postureBadge">Đứng</div>
           <div id="hpRow">
             <div id="hp"><div id="hpb"></div></div>
@@ -2373,27 +2639,27 @@
                 <div>
                   <div class="modeCardTag">
                     <span class="modeCardDot"></span
-                    ><span>OFFLINE • SINH TỒN DRONE</span>
+                    ><span>OFFLINE • ĐẤU MÁY &amp; SINH TỒN</span>
                   </div>
                   <h2 class="modeCardTitle">LUYỆN TẬP</h2>
                   <p class="modeCardDesc">
-                    Chọn bản đồ trực quan 3D, rèn phản xạ bắn M416 / Glock-17 /
-                    AWM trước các đợt Drone.
+                    Đấu với Máy (Đấu Đơn / Đấu Đội AI SWAT) hoặc thử thách Sinh
+                    tồn qua các đợt Drone 3D.
                   </p>
                 </div>
                 <div class="modeCardFooter">
-                  <span>CHỌN BẢN ĐỒ</span><span class="modeCardArrow">→</span>
+                  <span>CHỌN CHẾ ĐỘ</span><span class="modeCardArrow">→</span>
                 </div>
               </span>
             </button>
           </div>
         </section>
 
-        <!-- View 2: Màn 3D Chọn Map Thu Nhỏ khi click Luyện Tập -->
+        <!-- View 2: Trung tâm Luyện tập — Chọn Đấu với Máy hoặc Sinh tồn -->
         <section
           id="lobbyPracticeView"
           class="lobbyView"
-          aria-label="Chọn bản đồ luyện tập"
+          aria-label="Chọn hình thức luyện tập"
         >
           <div class="practiceHeader">
             <button id="btnPracticeBack" type="button" class="btnLobbyHud">
@@ -2403,9 +2669,219 @@
               <div class="lobbyEyebrow" style="margin-bottom: 2px">
                 CHẾ ĐỘ LUYỆN TẬP OFFLINE
               </div>
-              <h2 class="practiceTitle">CHỌN BẢN ĐỒ TÁC CHIẾN</h2>
+              <h2 class="practiceTitle">CHỌN HÌNH THỨC LUYỆN TẬP</h2>
             </div>
             <div style="width: 140px"></div>
+          </div>
+
+          <div class="practiceModeGrid">
+            <button id="btnPracticeBots" type="button" class="modeCard mode-tdm">
+              <span class="modeCardFace">
+                <span class="tacCorner tl"></span
+                ><span class="tacCorner tr"></span>
+                <span class="tacCorner bl"></span
+                ><span class="tacCorner br"></span>
+                <div>
+                  <div class="modeCardTag">
+                    <span class="modeCardDot"></span
+                    ><span>BOT SWAT AI • ĐẤU ĐƠN / ĐẤU ĐỘI</span>
+                  </div>
+                  <h2 class="modeCardTitle">ĐẤU VỚI MÁY</h2>
+                  <p class="modeCardDesc">
+                    Đối đầu hoặc phối hợp cùng Bot SWAT 6 tư thế (đứng, ngồi,
+                    nhảy, chạy, nằm, bò) với M416, Glock-17 &amp; AWM.
+                  </p>
+                </div>
+                <div class="modeCardFooter">
+                  <span>ĐẤU ĐƠN &amp; ĐẤU ĐỘI</span><span class="modeCardArrow">→</span>
+                </div>
+              </span>
+            </button>
+
+            <button
+              id="btnPracticeSurvival"
+              type="button"
+              class="modeCard mode-practice"
+            >
+              <span class="modeCardFace">
+                <span class="tacCorner tl"></span
+                ><span class="tacCorner tr"></span>
+                <span class="tacCorner bl"></span
+                ><span class="tacCorner br"></span>
+                <div>
+                  <div class="modeCardTag">
+                    <span class="modeCardDot"></span
+                    ><span>OFFLINE • SÓNG DRONE VÔ TẬN</span>
+                  </div>
+                  <h2 class="modeCardTitle">SINH TỒN</h2>
+                  <p class="modeCardDesc">
+                    Rèn phản xạ aim &amp; kiểm soát đạn trước các đợt Drone tấn
+                    công liên hoàn trên bản đồ 3D.
+                  </p>
+                </div>
+                <div class="modeCardFooter">
+                  <span>CHỌN BẢN ĐỒ SINH TỒN</span><span class="modeCardArrow">→</span>
+                </div>
+              </span>
+            </button>
+          </div>
+        </section>
+
+        <!-- View 2A: Màn Thiết lập Đấu với Máy (Đấu Đơn FFA / Đấu Đội TDM + Chọn Map 3D + Cài đặt nhanh) -->
+        <section
+          id="lobbyBotView"
+          class="lobbyView"
+          aria-label="Thiết lập Đấu với Máy"
+        >
+          <div class="practiceHeader">
+            <button id="btnBotBack" type="button" class="btnLobbyHud">
+              ← Quay lại Luyện tập
+            </button>
+            <div class="practiceTitleGroup">
+              <div class="lobbyEyebrow" style="margin-bottom: 2px">
+                OFFLINE AI • SWAT TACTICAL BOTS
+              </div>
+              <h2 class="practiceTitle">ĐẤU VỚI MÁY</h2>
+            </div>
+            <div style="width: 150px"></div>
+          </div>
+
+          <div class="botModeGrid">
+            <button
+              id="btnBotModeFFA"
+              type="button"
+              class="botModeBtn"
+              data-bot-mode="FFA"
+              aria-pressed="false"
+            >
+              <span class="tacCorner tl"></span><span class="tacCorner br"></span>
+              <span class="modeCardTag"
+                ><span class="modeCardDot"></span><span>FFA • SINH TỬ TỰ DO</span></span
+              >
+              <span class="botModeBtnTitle">ĐẤU ĐƠN (FFA)</span>
+              <span class="botModeBtnDesc"
+                >Mọi Bot đều là đối thủ • Hồi sinh nhanh 2.0s toàn map • Bảo vệ nhấp nháy 2.0s.</span
+              >
+            </button>
+
+            <button
+              id="btnBotModeTDM"
+              type="button"
+              class="botModeBtn selected"
+              data-bot-mode="TDM"
+              aria-pressed="true"
+            >
+              <span class="tacCorner tl"></span><span class="tacCorner br"></span>
+              <span class="modeCardTag"
+                ><span class="modeCardDot"></span><span>TDM • TÁC CHIẾN 2 PHE</span></span
+              >
+              <span class="botModeBtnTitle">ĐẤU ĐỘI (TDM)</span>
+              <span class="botModeBtnDesc"
+                >Phối hợp cùng Bot đồng đội • Hồi sinh căn cứ 3.5s + Đảo đầu động • Bảo vệ 3.0s.</span
+              >
+            </button>
+          </div>
+
+          <div id="botMapGrid" class="mapSelectGrid">
+            <button
+              type="button"
+              class="mapThumbCard selected"
+              data-bot-map="military"
+              aria-pressed="true"
+            >
+              <span class="mapThumbFace">
+                <span class="tacCorner tl"></span><span class="tacCorner tr"></span>
+                <span class="tacCorner bl"></span><span class="tacCorner br"></span>
+                <img src="/assets/map_military_thumb.webp" alt="Khu Quân Sự Cũ" />
+                <div class="mapThumbScrim"></div>
+                <div class="mapThumbBody">
+                  <div class="mapThumbBadges">
+                    <span class="mapTag">BAN NGÀY • NÚI ALPINE</span>
+                    <span id="botMilReadyChip" class="mapStatusPill">ĐANG CHỌN • SẴN SÀNG</span>
+                  </div>
+                  <h3 class="mapThumbTitle">KHU QUÂN SỰ CŨ</h3>
+                  <p class="mapThumbDesc">Căn cứ đối xứng 5v5 • Tháp canh 4m, nhà kho &amp; container.</p>
+                </div>
+              </span>
+            </button>
+
+            <button
+              type="button"
+              class="mapThumbCard"
+              data-bot-map="harbor"
+              aria-pressed="false"
+            >
+              <span class="mapThumbFace">
+                <span class="tacCorner tl"></span><span class="tacCorner tr"></span>
+                <span class="tacCorner bl"></span><span class="tacCorner br"></span>
+                <img src="/assets/map_harbor_thumb.webp" alt="Bến Cảng Mưa" />
+                <div class="mapThumbScrim"></div>
+                <div class="mapThumbBody">
+                  <div class="mapThumbBadges">
+                    <span class="mapTag">ĐÊM MƯA • ĐÈN SODIUM</span>
+                    <span id="botHarborReadyChip" class="mapStatusPill">CHỌN ĐỂ NẠP</span>
+                  </div>
+                  <h3 class="mapThumbTitle">BEFORE THE BREACH</h3>
+                  <p class="mapThumbDesc">Bãi container ẩm ướt giữa màn mưa • Góc khuất &amp; phản xạ gần.</p>
+                </div>
+              </span>
+            </button>
+          </div>
+
+          <div class="botQuickBar">
+            <div class="botCtrlGroup">
+              <span>Độ khó:</span>
+              <div class="botSegGroup" role="group" aria-label="Độ khó Bot">
+                <button type="button" class="botSegBtn" data-bot-diff="easy">Dễ</button>
+                <button type="button" class="botSegBtn active" data-bot-diff="medium">Trung bình</button>
+                <button type="button" class="botSegBtn" data-bot-diff="hard">Khó</button>
+              </div>
+            </div>
+            <div class="botCtrlGroup">
+              <label for="botCountSelect">Số Bot:</label>
+              <select id="botCountSelect">
+                <option value="3">3 Bot</option>
+                <option value="5" selected>5 Bot</option>
+                <option value="7">7 Bot</option>
+                <option value="9">9 Bot</option>
+              </select>
+              <span id="botTeamSummary" class="botTeamPill">3v3 • Bạn + 2 Đồng đội vs 3 Bot địch</span>
+            </div>
+            <div class="botCtrlGroup">
+              <label for="botKillsSelect">Mục tiêu:</label>
+              <select id="botKillsSelect">
+                <option value="15">15 Mạng</option>
+                <option value="20">20 Mạng</option>
+                <option value="30" selected>30 Mạng</option>
+                <option value="50">50 Mạng</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="practiceActionBar">
+            <button id="btnBotStart" type="button" class="btnPrimaryLaunch">
+              VÀO TRẬN ĐẤU MÁY
+            </button>
+          </div>
+        </section>
+
+        <!-- View 2B: Màn 3D Chọn Map Thu Nhỏ khi click Sinh tồn -->
+        <section
+          id="lobbySurvivalView"
+          class="lobbyView"
+          aria-label="Chọn bản đồ sinh tồn"
+        >
+          <div class="practiceHeader">
+            <button id="btnSurvivalBack" type="button" class="btnLobbyHud">
+              ← Quay lại Luyện tập
+            </button>
+            <div class="practiceTitleGroup">
+              <div class="lobbyEyebrow" style="margin-bottom: 2px">
+                CHẾ ĐỘ SINH TỒN DRONE
+              </div>
+              <h2 class="practiceTitle">CHỌN BẢN ĐỒ TÁC CHIẾN</h2>
+            </div>
+            <div style="width: 150px"></div>
           </div>
 
           <div id="practiceMapGrid" class="mapSelectGrid">
@@ -2486,7 +2962,7 @@
 
           <div class="practiceActionBar">
             <button id="btnSoloMode" type="button" class="btnPrimaryLaunch">
-              BẮT ĐẦU LUYỆN TẬP
+              BẮT ĐẦU SINH TỒN
             </button>
             <span
               style="
@@ -2846,6 +3322,14 @@
           <tbody id="endScoreBody"></tbody>
         </table>
         <div class="row" style="justify-content: flex-end; margin-top: 12px">
+          <button
+            id="btnEndReturnLobby"
+            type="button"
+            class="sec"
+            style="display: none"
+          >
+            Về sảnh chính
+          </button>
           <button id="btnReturnRoom" type="button">Về phòng ngay</button>
         </div>
       </div>
@@ -2906,10 +3390,10 @@
         <h2 id="pauseTitle" style="margin: 0 0 6px">Menu trận đấu</h2>
         <p id="pauseSub" style="font-size: 13.5px; color: var(--sub)"></p>
         <p style="font-size: 12.5px; color: var(--sub)">
-          WASD di chuyển • C / Ctrl ngồi • Shift chạy (hoặc nín thở khi ngắm
-          AWM) • Space nhảy • Chuột trái bắn • Chuột phải bật/đổi zoom ngắm • [
-          / ] Zeroing AWM • R nạp • 1/2/3/Q/Cuộn đổi súng • L laser • Tab bảng
-          điểm • Enter chat
+          WASD di chuyển • C / Ctrl ngồi • Z nằm/bò • Shift chạy (hoặc nín thở
+          khi ngắm AWM) • Space nhảy • Chuột trái bắn • Chuột phải bật/đổi zoom
+          ngắm • [ / ] Zeroing AWM • R nạp • 1/2/3/Q/Cuộn đổi súng • L laser •
+          Tab bảng điểm • Enter chat
         </p>
         <div class="row">
           <button id="btnPauseResume" type="button">Tiếp tục</button>
@@ -2971,6 +3455,40 @@
               <input id="setShowPerfHud" type="checkbox" /> Hiển thị thông số
               FPS / GPU (phím F3)
             </label>
+          </div>
+          <div
+            style="
+              padding: 8px 10px;
+              background: rgba(128, 150, 168, 0.12);
+              border-radius: 4px;
+              display: grid;
+              gap: 6px;
+            "
+          >
+            <div class="row" style="justify-content: space-between">
+              <label for="setEnemyHighlightColor" style="font-weight: 700"
+                >Màu nhận diện Địch (IFF):</label
+              >
+              <select id="setEnemyHighlightColor">
+                <option value="red">Đỏ (Valorant — Mặc định)</option>
+                <option value="yellow">Vàng (Hỗ trợ mù màu Đỏ-Lục)</option>
+                <option value="purple">Tím (Tương phản cao)</option>
+              </select>
+            </div>
+            <div class="row" style="justify-content: space-between">
+              <label for="setEnemyRimStrength" style="font-weight: 700"
+                >Viền sáng silhouette Địch:</label
+              >
+              <select id="setEnemyRimStrength">
+                <option value="strong">Rõ kiểu Valorant (Mặc định)</option>
+                <option value="crisp">Mảnh sắc nét</option>
+                <option value="off">Tắt viền (Chỉ HUD & Radar)</option>
+              </select>
+            </div>
+            <div style="font-size: 11.5px; color: var(--sub)">
+              Đồng đội luôn màu Xanh (chỉ TDM) kèm mũi tên xuyên tường tự mờ gần
+              tâm ngắm. Kẻ địch giữ nguyên 100% độ sắc nét giáp PBR bên trong.
+            </div>
           </div>
           <div class="row" style="justify-content: space-between">
             <label style="display: flex; align-items: center; gap: 6px"
@@ -3216,6 +3734,27 @@
         }
       });
 
+      function launchBotSession(botCfg) {
+        defeatScreen.hideImmediate();
+        lobbyMusic.setInMatch(true);
+        const safeMap = botCfg && botCfg.mapId ? botCfg.mapId : "military";
+        if (game.isMapCached(safeMap)) {
+          showScreen("none");
+          game.startBotMatch(botCfg);
+          return;
+        }
+        game
+          .prepareMap(safeMap, { showOverlay: true })
+          .then(() => {
+            showScreen("none");
+            game.startBotMatch(botCfg);
+          })
+          .catch((err) => {
+            console.error("Failed to prepare bot map:", err);
+            showErrorBanner("Không thể tải bản đồ đã chọn, vui lòng thử lại.");
+          });
+      }
+
       const lobby = createLobbyController({
         net,
         getNickFn: getNick,
@@ -3232,6 +3771,7 @@
           if (!game) return Promise.resolve();
           return game.prepareMap(mapId, { showOverlay: false });
         },
+        onEnterBots: launchBotSession,
         onEnterSolo: (mapId) => {
           defeatScreen.hideImmediate();
           lobbyMusic.setInMatch(true);
@@ -3280,6 +3820,17 @@
         },
         onSoloDefeated: () => {
           defeatScreen.trigger();
+        },
+        onBotMatchEnd: (res, lastCfg) => {
+          game.stopEngine();
+          roomCtrl.renderBotMatchEnd(res, {
+            onReplay: () => launchBotSession(lastCfg),
+            onReturnLobby: () => {
+              lobby.setLobbyView("bot");
+              showScreen("lobby");
+            },
+          });
+          showScreen("ending");
         },
         onRequestExitToRoom: () => {
           defeatScreen.hideImmediate();
@@ -3367,8 +3918,15 @@
         showErrorBanner(msg.reason || "Bạn đã bị mời khỏi phòng");
       });
       net.on(MSG.ROOM_LIST, () => {
-        if (!roomCtrl.getRoom() && game.getState().engineMode !== "solo")
+        const mode = game && game.getState ? game.getState().engineMode : "idle";
+        if (
+          !roomCtrl.getRoom() &&
+          mode !== "solo" &&
+          mode !== "bots" &&
+          screenEnding.style.display !== "grid"
+        ) {
           showScreen("lobby");
+        }
       });
       net.on(MSG.CHAT, (msg) => {
         if (

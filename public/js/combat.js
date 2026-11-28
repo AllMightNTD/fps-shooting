@@ -2,6 +2,8 @@
  * Combat System: Weapons, Firing, M416 Recoil, AWM Ballistic Scope & Projectiles, Solo Drones.
  */
 
+import { ALLY_IFF_META, getEnemyHighlightPreset } from "/js/iff_system.js";
+
 export function createCombatSystem({
   THREE,
   DEG2RAD,
@@ -42,6 +44,9 @@ export function createCombatSystem({
   settings,
   net,
   MSG,
+  INTERP_DELAY_MS = 100,
+  flushStateBeforeFire = null,
+  onBotFire = null,
   onSoloDefeated,
   $,
   getPlayState,
@@ -101,6 +106,7 @@ export function createCombatSystem({
   let shake = 0;
   let testAimHeld = false;
   let testHoldBreath = false;
+  let requireFreshFireAfterRespawn = false;
 
   // Shared drone geometries/material (avoid Wave-1 allocation & GPU leaks)
   const drones = [];
@@ -134,6 +140,7 @@ export function createCombatSystem({
         slot,
         mag: cfg.magSize,
         nextFireAt: 0,
+        equipEndsAt: 0,
         reloadStartAt: 0,
         reloadEndsAt: 0,
         reloadDuration: cfg.reloadTime,
@@ -326,7 +333,7 @@ export function createCombatSystem({
 
   function switchWeapon(targetSlot) {
     const ps = getPlayState();
-    if (ps.activeState !== "play" || (ps.engineMode === "lan" && !ps.meAlive)) return false;
+    if (ps.activeState !== "play" || ((ps.engineMode === "lan" || ps.engineMode === "bots") && !ps.meAlive)) return false;
     const wid = SLOT_TO_WEAPON_ID[targetSlot];
     if (!wid || !WEAPONS[wid] || targetSlot === activeSlot) return false;
 
@@ -343,6 +350,10 @@ export function createCombatSystem({
 
     prevSlot = activeSlot;
     activeSlot = targetSlot;
+    const nextCfg = WEAPONS[wid];
+    if (weapons[wid]) {
+      weapons[wid].equipEndsAt = performance.now() + (nextCfg.equipTimeMs || 0);
+    }
     m416WasFiring = false;
     m416Recoil.resetAll();
     vmAnim.onWeaponSwitched(wid);
@@ -357,7 +368,7 @@ export function createCombatSystem({
 
   function reload() {
     const ps = getPlayState();
-    if (ps.activeState !== "play" || (ps.engineMode === "lan" && !ps.meAlive)) return false;
+    if (ps.activeState !== "play" || ((ps.engineMode === "lan" || ps.engineMode === "bots") && !ps.meAlive)) return false;
     const nowMs = performance.now();
     const { cfg, st } = activeWeapon();
     if (st.reloadEndsAt > nowMs || st.mag >= cfg.magSize) return false;
@@ -466,11 +477,8 @@ export function createCombatSystem({
   function applyShotImpact({ hitEntity, hitWorld, dir, shotSeed, weaponId }) {
     const { engineMode } = getPlayState();
     if (engineMode === "lan") {
-      if (hitEntity && hitEntity.object.userData.hitTarget) {
-        const tgt = hitEntity.object.userData.hitTarget;
-        net.send(MSG.HIT, { targetId: tgt.id, part: tgt.part });
-        burst(hitEntity.point, 10, 3.2);
-      } else if (hitWorld) {
+      // Server computes hit detection authoritatively in Match.handleFire; client only renders local surface impacts
+      if (!hitEntity && hitWorld) {
         const imp = ballisticsVfx.spawnSurfaceImpact({
           point: hitWorld.point,
           normal: hitWorld.normal,
@@ -556,13 +564,33 @@ export function createCombatSystem({
     }
   }
 
+  function buildLanFirePayload(weaponId, originVec, dirVec, shotSeed) {
+    const ps = getPlayState();
+    return {
+      weapon: weaponId,
+      flags: ps.curFlags,
+      origin: { x: originVec.x, y: originVec.y, z: originVec.z },
+      dir: { x: dirVec.x, y: dirVec.y, z: dirVec.z },
+      yaw: +ps.yaw.toFixed(4),
+      pitch: +(ps.pitch + kick).toFixed(4),
+      clientTime: Math.round(Date.now() + (net.clockOffsetMs || 0) - INTERP_DELAY_MS),
+      seed: shotSeed,
+      seq: localShotSeq,
+    };
+  }
+
   function shoot() {
     const ps = getPlayState();
-    if (ps.activeState !== "play" || (ps.engineMode === "lan" && !ps.meAlive)) return false;
+    if (ps.activeState !== "play" || ((ps.engineMode === "lan" || ps.engineMode === "bots") && !ps.meAlive)) return false;
+    if (requireFreshFireAfterRespawn && !input.fireJustPressed) {
+      if (!input.fireHeld) requireFreshFireAfterRespawn = false;
+      else return false;
+    }
+    requireFreshFireAfterRespawn = false;
     const nowMs = performance.now();
     const { cfg, st } = activeWeapon();
 
-    if (st.reloadEndsAt > nowMs || ps.isSprinting) return false;
+    if (st.reloadEndsAt > nowMs || nowMs < (st.equipEndsAt || 0) || ps.isSprinting) return false;
     if (st.mag <= 0) {
       if (cfg.id === "m416" && m416WasFiring) {
         m416WasFiring = false;
@@ -584,7 +612,7 @@ export function createCombatSystem({
     if (cfg.id === "m416") {
       m416Recoil.onShotFired(
         nowMs / 1000,
-        computeRecoilModifiers({ crouched: ps.crouched, ads: adsNow > 0.5, grounded: ps.grounded }),
+        computeRecoilModifiers({ crouched: ps.crouched, prone: ps.prone, ads: adsNow > 0.5, grounded: ps.grounded }),
       );
       m416WasFiring = true;
     } else {
@@ -648,13 +676,23 @@ export function createCombatSystem({
         });
       }
       if (ps.engineMode === "lan") {
-        net.send(MSG.FIRE, {
-          weapon: cfg.id,
-          flags: ps.curFlags,
-          origin: { x: ray.ray.origin.x, y: ray.ray.origin.y, z: ray.ray.origin.z },
-          dir: { x: _launchDir.x, y: _launchDir.y, z: _launchDir.z },
-          seed: shotSeed,
-        });
+        if (typeof flushStateBeforeFire === "function") flushStateBeforeFire();
+        net.send(MSG.FIRE, buildLanFirePayload(cfg.id, ray.ray.origin, _launchDir, shotSeed));
+      } else if (ps.engineMode === "bots" && typeof onBotFire === "function") {
+        const botShotRes = onBotFire(cfg.id, ray.ray.origin, _launchDir, shotSeed);
+        if (!botShotRes || !botShotRes.hit) {
+          awmProjectiles.push({
+            pos: ray.ray.origin.clone(),
+            vel: _launchDir.clone().multiplyScalar(AWM_SCOPE_PROFILE.muzzleVelocity),
+            traveled: 0,
+            maxRange: cfg.maxRange || 180,
+            seed: shotSeed,
+            weaponId: "sniper",
+          });
+          stepAwmProjectiles(0.012);
+        }
+        if (st.mag === 0) reload();
+        return true;
       }
       awmProjectiles.push({
         pos: ray.ray.origin.clone(),
@@ -701,13 +739,21 @@ export function createCombatSystem({
     }
 
     if (ps.engineMode === "lan") {
-      net.send(MSG.FIRE, {
-        weapon: cfg.id,
-        flags: ps.curFlags,
-        origin: { x: ray.ray.origin.x, y: ray.ray.origin.y, z: ray.ray.origin.z },
-        dir: { x: ray.ray.direction.x, y: ray.ray.direction.y, z: ray.ray.direction.z },
-        seed: shotSeed,
-      });
+      if (typeof flushStateBeforeFire === "function") flushStateBeforeFire();
+      net.send(MSG.FIRE, buildLanFirePayload(cfg.id, ray.ray.origin, ray.ray.direction, shotSeed));
+    } else if (ps.engineMode === "bots" && typeof onBotFire === "function") {
+      const botShotRes = onBotFire(cfg.id, ray.ray.origin, ray.ray.direction, shotSeed);
+      if ((!botShotRes || !botShotRes.hit) && hitWorld) {
+        applyShotImpact({
+          hitEntity: null,
+          hitWorld,
+          dir: ray.ray.direction,
+          shotSeed,
+          weaponId: cfg.id,
+        });
+      }
+      if (st.mag === 0) reload();
+      return true;
     }
     applyShotImpact({
       hitEntity,
@@ -752,13 +798,24 @@ export function createCombatSystem({
 
     ballisticsVfx.spawnMuzzleSmokeAndSparks(muzzleV, _remDir, weaponId);
     if (shouldSpawnTracer({ weaponId, shotIndex: shotIdx, isRemote: true })) {
+      const isAllyShot = Boolean(av && av.relation === "ally");
+      const enemyColorId = settings && settings.get ? settings.get().enemyHighlightColor : "red";
+      const enemyTracerHex = getEnemyHighlightPreset(enemyColorId).tracerHex;
+      const tracerColor =
+        weaponId === "sniper"
+          ? isAllyShot
+            ? 0xdcf2ff
+            : 0xffd2b8
+          : isAllyShot
+            ? ALLY_IFF_META.tracerHex
+            : enemyTracerHex;
       ballisticsVfx.spawnTracer(muzzleV, endV, {
         speed: weaponId === "sniper" ? 410 : weaponId === "pistol" ? 260 : 310,
         length: weaponId === "sniper" ? 8.2 : weaponId === "pistol" ? 4.4 : 6.0,
         width: weaponId === "sniper" ? 1.2 : 1.0,
         opacity: weaponId === "sniper" ? 0.92 : 0.78,
         fadeNearEnd: 0.45,
-        colorHex: weaponId === "sniper" ? 0xfff5d4 : 0xffe4a8,
+        colorHex: tracerColor,
       });
     }
 
@@ -785,13 +842,15 @@ export function createCombatSystem({
     return { worldHit, impactRes, whiz };
   }
 
-  function stepWeaponUpdate(dt, nowMs, canAct, activeControl, chatOpen, isSprinting, crouched, grounded, velX, velZ, lookState) {
+  function stepWeaponUpdate(dt, nowMs, canAct, activeControl, chatOpen, isSprinting, crouched, grounded, velX, velZ, lookState, prone = false) {
     const isM416Active = SLOT_TO_WEAPON_ID[activeSlot] === "m416";
     const sCfg = settings ? settings.get() : { sens: 1, adsSens: 0.58, invertY: false, adsMode: "toggle", fov: 75 };
 
     if (canAct && activeControl && !chatOpen) {
       const { cfg, st } = activeWeapon();
       const wantsFire = cfg.auto ? input.fireHeld : input.fireJustPressed;
+      if (input.fireJustPressed) requireFreshFireAfterRespawn = false;
+      if (!input.fireHeld) requireFreshFireAfterRespawn = false;
       if (wantsFire && !isSprinting && st.reloadEndsAt <= nowMs) {
         shoot();
       } else if (isM416Active && m416WasFiring && (!wantsFire || isSprinting)) {
@@ -829,7 +888,7 @@ export function createCombatSystem({
         nowSec: nowMs / 1000,
         adsActive: canAct && !isSprinting && curW.st.reloadEndsAt <= nowMs,
         holdBreath,
-        stance: crouched ? STANCE.CROUCH : STANCE.STAND,
+        stance: prone ? STANCE.PRONE : crouched ? STANCE.CROUCH : STANCE.STAND,
         horizSpeed: Math.hypot(velX, velZ),
         grounded,
         baseVFovDeg: sCfg.fov || 75,
@@ -872,6 +931,14 @@ export function createCombatSystem({
     switchWeapon,
     reload,
     shoot,
+    spawnHitSparks: (pt, colorHex = 0xffb85c) => {
+      if (pt && Number.isFinite(pt.x) && Number.isFinite(pt.y) && Number.isFinite(pt.z)) {
+        burst(new Vec(pt.x, pt.y, pt.z), 10, 3.2, colorHex);
+      }
+    },
+    armFreshFireGate: () => {
+      requireFreshFireAfterRespawn = Boolean(input && input.fireHeld);
+    },
     stepWeaponUpdate,
     handleRemoteFireVisuals,
     emitScopeAudioCue,
@@ -952,6 +1019,15 @@ export function createCombatSystem({
           weapons[msg.id].reloadEndsAt = performance.now() + msg.reloadingMs;
         } else {
           weapons[msg.id].reloadEndsAt = 0;
+        }
+        if (Number.isFinite(msg.equipMs) && msg.equipMs > 0) {
+          const nowMs = performance.now();
+          const serverEquipEnd = nowMs + msg.equipMs;
+          const curEquipEnd = weapons[msg.id].equipEndsAt || 0;
+          weapons[msg.id].equipEndsAt =
+            curEquipEnd > nowMs ? Math.min(curEquipEnd, serverEquipEnd) : serverEquipEnd;
+        } else if (msg.equipMs === 0) {
+          weapons[msg.id].equipEndsAt = 0;
         }
       }
     },

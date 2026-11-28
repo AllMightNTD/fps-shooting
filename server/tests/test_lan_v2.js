@@ -15,9 +15,10 @@ import test from "node:test";
 
 import { ENDING_DURATION_MS } from "../Room.js";
 import { RECONNECT_GRACE_MS, RoomManager } from "../RoomManager.js";
-import { DEFAULT_ROOT, createLanServer } from "../index.js";
+import { createLanServer, DEFAULT_ROOT } from "../index.js";
 import { ERR, GAME_MODE, MSG, ROOM_STATE } from "../protocol.js";
 import { buildHarborMap, generateSpawnPoints, hasLineOfSight, pickFfaSpawn } from "../spawn.js";
+import { SPAWN_RULES } from "../spawn_rules.js";
 import { FLAG, WEAPONS } from "../weapons.js";
 import { OP_CLOSE, OP_TEXT, computeAcceptKey, decodeWsFrame } from "../ws.js";
 
@@ -228,25 +229,43 @@ test("Room lifecycle WAITING -> STARTING -> PLAYING -> ENDING -> WAITING & host/
   const pG1 = room.players.get(sG1.id);
   assert.equal(pHost.alive, true);
 
-  // Firing cancels invulnerability; hit head when target shield expired wins match (killLimit=2)
-  now += 2600;
+  // Firing cancels invulnerability; M416 head (90) + follow-up head/body kills & wins match (killLimit=2)
+  now += SPAWN_RULES.TDM.protectMs + 100;
   Object.assign(pHost, { x: 6, y: 0, z: 0, yaw: 0, pitch: 0, lastStateAt: now });
   Object.assign(pG1, { x: 6, y: 0, z: -5, yaw: Math.PI, pitch: 0, lastStateAt: now });
-  room.match.handleFire(pHost, { origin: { x: 6, y: 1.7, z: 0 }, dir: { x: 0, y: 0, z: -1 } }, now);
+  room.match.poseHistory.record(pG1, now);
+  const hit1 = room.match.handleFire(
+    pHost,
+    { origin: { x: 6, y: 1.62, z: 0 }, dir: { x: 0, y: 0, z: -1 }, yaw: 0, pitch: 0, clientTime: now },
+    now,
+  );
   assert.equal(pHost.invulnerableUntil, 0);
-  const hit1 = room.match.handleHit(pHost, { targetId: pG1.id, part: "head" }, now);
-  assert.equal(hit1.damage, 100);
+  assert.equal(hit1.damage, 90);
+  now += WEAPONS.m416.fireInterval + 5;
+  const hit1Follow = room.match.handleFire(
+    pHost,
+    { origin: { x: 6, y: 1.16, z: 0 }, dir: { x: 0, y: 0, z: -1 }, yaw: 0, pitch: 0, clientTime: now },
+    now,
+  );
+  assert.equal(hit1Follow.damage, 27);
   assert.equal(room.teamScores.A, 1);
 
-  // Respawn pG1 after 4000ms, wait past 2500ms shield, score winning kill #2
-  now += 4000;
+  // Respawn pG1 after TDM respawnDelayMs, wait past TDM protectMs, score winning kill #2 with AWM body (115 dmg)
+  now += SPAWN_RULES.TDM.respawnDelayMs + 50;
   mgr.stepAll(now);
   assert.equal(pG1.alive, true);
-  now += 2600;
+  now += SPAWN_RULES.TDM.protectMs + 100;
   Object.assign(pHost, { x: 6, y: 0, z: 0, yaw: 0, pitch: 0, lastStateAt: now });
   Object.assign(pG1, { x: 6, y: 0, z: -5, yaw: Math.PI, pitch: 0, lastStateAt: now });
-  room.match.handleFire(pHost, { origin: { x: 6, y: 1.7, z: 0 }, dir: { x: 0, y: 0, z: -1 } }, now);
-  room.match.handleHit(pHost, { targetId: pG1.id, part: "head" }, now);
+  room.match.poseHistory.record(pG1, now);
+  room.match.handleSwitchWeapon(pHost, { slot: 3 }, now);
+  now += WEAPONS.sniper.equipTimeMs + 10;
+  room.match.poseHistory.record(pG1, now);
+  room.match.handleFire(
+    pHost,
+    { origin: { x: 6, y: 1.16, z: 0 }, dir: { x: 0, y: 0, z: -1 }, yaw: 0, pitch: 0, clientTime: now },
+    now,
+  );
 
   assert.equal(room.state, ROOM_STATE.ENDING);
   assert.equal(room.lastWinner, "A");
@@ -296,17 +315,29 @@ test("Edge cases Mục 10: last slot race, host leave in STARTING, mutual fire, 
     mgr.stepAll(now);
   }
   assert.equal(r1.state, ROOM_STATE.PLAYING);
-  now += 2600;
+  now += SPAWN_RULES.FFA.protectMs + 100;
   const p2 = r1.players.get(s2.id);
   const p3 = r1.players.get(s3.id);
-  Object.assign(p2, { x: 6, y: 0, z: 0, lastStateAt: now });
-  Object.assign(p3, { x: 6, y: 0, z: -4, lastStateAt: now });
-  r1.match.handleFire(p2, { origin: { x: 6, y: 1.7, z: 0 }, dir: { x: 0, y: 0, z: -1 } }, now);
-  r1.match.handleFire(p3, { origin: { x: 6, y: 1.7, z: -4 }, dir: { x: 0, y: 0, z: 1 } }, now);
-  assert.equal(r1.match.handleHit(p2, { targetId: p3.id, part: "head" }, now).ok, true);
+  Object.assign(p2, { x: 6, y: 0, z: 0, yaw: 0, pitch: 0, lastStateAt: now });
+  Object.assign(p3, { x: 6, y: 0, z: -4, yaw: Math.PI, pitch: 0, lastStateAt: now });
+  r1.match.poseHistory.record(p3, now);
+  r1.match.handleSwitchWeapon(p2, { slot: 3 }, now);
+  now += WEAPONS.sniper.equipTimeMs + 10;
+  r1.match.poseHistory.record(p3, now);
+  const winFire = r1.match.handleFire(
+    p2,
+    { origin: { x: 6, y: 1.62, z: 0 }, dir: { x: 0, y: 0, z: -1 }, yaw: 0, pitch: 0, clientTime: now },
+    now,
+  );
+  assert.equal(winFire.ok, true);
+  assert.equal(winFire.hit, true);
   assert.equal(r1.state, ROOM_STATE.ENDING);
-  const lateHit = r1.match.handleHit(p3, { targetId: p2.id, part: "head" }, now);
-  assert.equal(lateHit.code, ERR.MATCH_ENDED);
+  const lateFire = r1.match.handleFire(
+    p3,
+    { origin: { x: 6, y: 1.62, z: -4 }, dir: { x: 0, y: 0, z: 1 }, yaw: Math.PI, pitch: 0, clientTime: now },
+    now,
+  );
+  assert.equal(lateFire.code, ERR.MATCH_ENDED);
 
   // 10.3 & 10.5 Disconnect & reconnect via token within 30s preserves score/seat; >30s removes & frees host
   now += ENDING_DURATION_MS;
@@ -464,9 +495,11 @@ test("Server weapon reload/switch/TOL-80ms, sprint block, crouch hitbox & mid-ma
 
   // Switch back to slot 1 (m416) -> still at 25 and not magically reloaded
   assert.equal(room.match.handleSwitchWeapon(pA, { slot: 1 }, now + 600), true);
+  assert.equal(pA.activeWeaponId, "m416");
   assert.equal(pA.weapons.m416.mag, 25);
 
-  // Empty m416 completely -> auto-reload with full reloadTime (2400ms), then test TOL = 80ms
+  // Advance clock past m416 equip delay (520ms) and empty m416 completely -> full reloadTime (2400ms), then test TOL = 80ms
+  now += 600 + WEAPONS.m416.equipTimeMs;
   for (let i = 0; i < 25; i++) {
     now += WEAPONS.m416.fireInterval + 5;
     assert.equal(room.match.handleFire(pA, {}, now).ok, true);
@@ -492,7 +525,7 @@ test("Server weapon reload/switch/TOL-80ms, sprint block, crouch hitbox & mid-ma
   assert.equal(ammoSync.weapons.pistol, WEAPONS.pistol.magSize);
 
   // Crouch posture: test crouch speed clamp and 1.45m chest-high cover LoS protection
-  now += 3000; // Wait past spawn shield
+  now += SPAWN_RULES.TDM.protectMs + 100; // Wait past spawn shield
   Object.assign(pB, { x: 6, y: 0, z: 0, flags: FLAG.CROUCH, prevFlags: FLAG.CROUCH, lastStateAt: now });
   Object.assign(pA, { x: 6, y: 0, z: -5, lastStateAt: now });
   // Attempt to warp 15m over 1s while crouched -> server clamps move strictly below standing/sprint speeds
@@ -500,28 +533,41 @@ test("Server weapon reload/switch/TOL-80ms, sprint block, crouch hitbox & mid-ma
   assert.ok(pB.x < 11.5, `Expected crouch speed clamp, got x=${pB.x}`);
   Object.assign(pB, { x: 6, y: 0, z: 0, flags: FLAG.CROUCH, prevFlags: FLAG.CROUCH, lastStateAt: now });
 
-  // Cover height 1.45m: standing head (1.63m) exposes above it, crouched head (1.08m) hides cleanly!
+  // Cover height 1.45m: crouched head (1.08m) hides cleanly behind 1.45m box & high shot passes overhead!
   room.arena.boxes.push({ x0: 4, x1: 8, y0: 0, y1: 1.45, z0: -3, z1: -2 });
-  assert.equal(room.match.handleFire(pA, { origin: { x: 6, y: 1.7, z: -5 }, dir: { x: 0, y: 0, z: 1 } }, now).ok, true);
-  const blockedCrouchHit = room.match.handleHit(pA, { targetId: pB.id, part: "head" }, now);
-  assert.equal(blockedCrouchHit.ok, false); // Crouched head behind 1.45m cover cannot be hit!
+  Object.assign(pA, { x: 6, y: 0, z: -5, yaw: Math.PI, pitch: 0, lastStateAt: now });
+  room.match.poseHistory.record(pB, now);
+  const blockedCrouchShot = room.match.handleFire(
+    pA,
+    { origin: { x: 6, y: 1.1, z: -5 }, dir: { x: 0, y: 0, z: 1 }, yaw: Math.PI, pitch: 0, clientTime: now },
+    now,
+  );
+  assert.equal(blockedCrouchShot.ok, true);
+  assert.equal(blockedCrouchShot.hit, false); // Crouched head behind 1.45m cover cannot be hit!
   room.arena.boxes.pop();
 
-  // Standing pB without cover takes sniper headshot (160 dmg -> kills even while pB reloading!)
+  // Standing pB without cover takes sniper headshot (180 dmg -> kills even while pB reloading!)
   now += WEAPONS.sniper.fireInterval + 50;
   Object.assign(pB, { flags: 0, prevFlags: 0, lastStateAt: now });
+  room.match.poseHistory.record(pB, now);
   room.match.handleFire(pB, {}, now + 50);
   room.match.handleReload(pB, now + 50);
   assert.ok(pB.weapons.m416.reloadEndsAt > 0);
   room.match.handleSwitchWeapon(pA, { slot: 3 }, now + 100);
-  assert.equal(room.match.handleFire(pA, {}, now + 200).ok, true);
-  const sniperHead = room.match.handleHit(pA, { targetId: pB.id, part: "head" }, now + 200);
+  const sniperFireAt = now + 100 + WEAPONS.sniper.equipTimeMs + 20;
+  room.match.poseHistory.record(pB, sniperFireAt);
+  const sniperHead = room.match.handleFire(
+    pA,
+    { origin: { x: 6, y: 1.62, z: -5 }, dir: { x: 0, y: 0, z: 1 }, yaw: Math.PI, pitch: 0, clientTime: sniperFireAt },
+    sniperFireAt,
+  );
+  assert.equal(sniperHead.ok, true);
   assert.equal(sniperHead.damage, WEAPONS.sniper.damage.head);
   assert.equal(pB.alive, false);
   assert.equal(pB.weapons.m416.reloadEndsAt, 0); // Death cancelled reload!
 
   // Respawn restores full mag on all weapons
-  now += 4300;
+  now = sniperFireAt + 4300;
   mgr.stepAll(now);
   assert.equal(pB.alive, true);
   assert.equal(pB.weapons.m416.mag, WEAPONS.m416.magSize);

@@ -488,7 +488,9 @@ def wait_frames(page: Page, count: int = 3) -> None:
 def start_solo_session(page: Page, url: str) -> None:
     wait_fps_ready(page, url)
     page.click("#btnModePractice")
-    page.wait_for_timeout(450)
+    page.wait_for_timeout(320)
+    page.click("#btnPracticeSurvival")
+    page.wait_for_timeout(320)
     page.click("#btnSoloMode")
     page.wait_for_function(
         """() => {
@@ -1382,6 +1384,7 @@ def run_tier3(browser: Browser, url: str, tracker: ErrorTracker, out_dir: str) -
         switch_weapon_and_wait(page_s, "Digit2", 2, "pistol")
         switch_weapon_and_wait(page_s, "Digit3", 3, "sniper")
         switch_weapon_and_wait(page_s, "KeyQ", 2, "pistol")
+        time.sleep(0.26)
         fire_semi_once(page_s, 15)
         reload_and_wait(page_s, 15)
 

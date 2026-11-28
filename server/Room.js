@@ -53,6 +53,7 @@ export class Room {
       this.maxPlayers = Math.max(2, this.maxPlayers - 1);
     }
     this.allowSoloTest = Boolean(options.allowSoloTest);
+    this.onAutoKick = typeof options.onAutoKick === "function" ? options.onAutoKick : null;
 
     this.state = ROOM_STATE.WAITING;
     this.players = new Map();
@@ -61,6 +62,7 @@ export class Room {
     this.nextCountdownTickAt = 0;
     this.endingEndsAt = 0;
     this.lastWinner = null;
+    this.kickedCheatIds = new Set();
     this.match = new Match(this);
   }
 
@@ -141,6 +143,13 @@ export class Room {
     if (this.state === ROOM_STATE.STARTING) {
       return { ok: false, code: ERR.INVALID_STATE, message: "Phòng đang đếm ngược, chờ trận bắt đầu để vào giữa trận" };
     }
+    if (this.kickedCheatIds.has(session.id)) {
+      return {
+        ok: false,
+        code: ERR.CHEAT_DETECTED,
+        message: "Bạn đã bị chặn vào lại trận đấu này do vi phạm Anti-Cheat",
+      };
+    }
     if (this.players.has(session.id)) {
       return { ok: true, player: this.players.get(session.id) };
     }
@@ -164,7 +173,7 @@ export class Room {
       alive: false,
       hp: 100,
       activeWeaponId: "m416",
-      lastFiredWeaponId: "m416",
+      prevWeaponId: "m416",
       weapons: createDefaultWeaponsState(),
       x: 0,
       y: 0,
@@ -177,10 +186,18 @@ export class Room {
       flags: 0,
       prevFlags: 0,
       respawnAt: 0,
+      spawnEpoch: 0,
+      spawnedAt: 0,
+      iFramesUntil: 0,
       invulnerableUntil: 0,
+      spawnOrigin: null,
+      adsProtectStartAt: 0,
+      lastDeathPos: null,
+      lastSpawnReason: "normal",
       lastStateAt: now,
       lastShotAt: 0,
-      pendingHitCredit: 0,
+      moveAllowance: 1.2,
+      rttMs: session.rttMs || 0,
       lastChatAt: 0,
       connected: session.connected,
       ws: session.ws,
@@ -201,6 +218,9 @@ export class Room {
     const existing = this.players.get(playerId);
     if (!existing) return false;
     this.players.delete(playerId);
+    if (this.match && this.match.poseHistory) {
+      this.match.poseHistory.clear(playerId);
+    }
 
     if (this.players.size === 0) {
       this.state = ROOM_STATE.WAITING;
@@ -348,6 +368,23 @@ export class Room {
     return { ok: true, kickedPlayer: target };
   }
 
+  kickForCheat(targetId, reason = "Phát hiện hành vi bất thường (Anti-Cheat)") {
+    const target = this.players.get(targetId);
+    if (!target) return { ok: false };
+    this.kickedCheatIds.add(targetId);
+    this.sendTo(targetId, {
+      type: MSG.ROOM_KICKED,
+      roomId: this.id,
+      code: ERR.CHEAT_DETECTED,
+      reason,
+    });
+    this.leave(targetId);
+    if (this.onAutoKick) {
+      this.onAutoKick(this, targetId, reason);
+    }
+    return { ok: true };
+  }
+
   startMatch(requesterId, now = this.now()) {
     if (requesterId !== this.hostId) {
       return { ok: false, code: ERR.NOT_HOST, message: "Chỉ chủ phòng mới bắt đầu trận được" };
@@ -410,17 +447,28 @@ export class Room {
     this.countdownSec = 0;
     this.endingEndsAt = 0;
     this.teamScores = { A: 0, B: 0 };
+    this.kickedCheatIds.clear();
     for (const p of this.players.values()) {
       p.ready = false;
       p.alive = false;
       p.hp = 100;
       p.flags = 0;
       p.prevFlags = 0;
+      p.iFramesUntil = 0;
+      p.invulnerableUntil = 0;
+      p.spawnOrigin = null;
+      p.adsProtectStartAt = 0;
+      p.lastDeathPos = null;
       p.activeWeaponId = "m416";
+      p.prevWeaponId = "m416";
       p.weapons = createDefaultWeaponsState();
+      p.moveAllowance = 1.2;
       p.kills = 0;
       p.deaths = 0;
       p.headshots = 0;
+    }
+    if (typeof this.match.resetAntiCheatAndHistory === "function") {
+      this.match.resetAntiCheatAndHistory();
     }
     this.broadcastRoomUpdate();
   }

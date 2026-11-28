@@ -117,24 +117,49 @@ test("Server military arena blocks spawn LoS, allows warehouse window shots, and
   assert.ok(pA.z < -38 && pB.z > 38);
   assert.equal(hasLineOfSight(pA.x, 1.65, pA.z, pB.x, 1.65, pB.z, room.arena), false);
 
-  // Verify shooting through warehouse #1 window (-17 wall at z = -18.1, y = 1.65) succeeds on server
+  // Verify shooting through warehouse #1 window (-17 wall at z = -18.1, y = 1.62) succeeds on server
   now += 3000;
-  Object.assign(pA, { x: -20.0, y: 0, z: -18.1, flags: 0, prevFlags: 0, lastStateAt: now });
-  Object.assign(pB, { x: -13.0, y: 0, z: -18.1, flags: 0, prevFlags: 0, lastStateAt: now });
-  assert.equal(room.match.handleFire(pA, {}, now).ok, true);
-  const windowHit = room.match.handleHit(pA, { targetId: pB.id, part: "head" }, now);
+  Object.assign(pA, { x: -20.0, y: 0, z: -18.1, yaw: -Math.PI / 2, pitch: 0, flags: 0, prevFlags: 0, lastStateAt: now });
+  Object.assign(pB, { x: -13.0, y: 0, z: -18.1, yaw: Math.PI / 2, pitch: 0, flags: 0, prevFlags: 0, lastStateAt: now });
+  room.match.poseHistory.record(pB, now);
+  const windowHit = room.match.handleFire(
+    pA,
+    { origin: { x: -20.0, y: 1.62, z: -18.1 }, dir: { x: 1, y: 0, z: 0 }, yaw: -Math.PI / 2, pitch: 0, clientTime: now },
+    now,
+  );
   assert.equal(windowHit.ok, true);
+  assert.equal(windowHit.hit, true);
 
-  // Verify shooting through truck glassless cab window (-6, 0, -12) at y=1.80 succeeds (moveOnly skipped by LoS)
+  // Verify shooting through truck glassless cab window (-6, 0, -12) at y=1.68 (inside [1.46, 2.16] moveOnly window) succeeds
   now += 200;
   Object.assign(pA, { x: -8.5, y: 0, z: -11.5, flags: 0, prevFlags: 0, lastStateAt: now });
   Object.assign(pB, { x: -3.5, y: 0, z: -13.5, flags: 0, prevFlags: 0, lastStateAt: now });
   pB.hp = 100;
   pB.alive = true;
   pB.invulnerableUntil = 0;
-  assert.equal(room.match.handleFire(pA, {}, now).ok, true);
-  const cabHit = room.match.handleHit(pA, { targetId: pB.id, part: "body" }, now);
+  const cabDx = pB.x - pA.x;
+  const cabDy = 1.62 - 1.68;
+  const cabDz = pB.z - pA.z;
+  const cabLen = Math.hypot(cabDx, cabDy, cabDz);
+  const cabHoriz = Math.hypot(cabDx, cabDz);
+  const cabYaw = Math.atan2(-cabDx, -cabDz);
+  const cabPitch = Math.atan2(cabDy, cabHoriz);
+  pA.yaw = cabYaw;
+  pA.pitch = cabPitch;
+  room.match.poseHistory.record(pB, now);
+  const cabHit = room.match.handleFire(
+    pA,
+    {
+      origin: { x: -8.5, y: 1.68, z: -11.5 },
+      dir: { x: cabDx / cabLen, y: cabDy / cabLen, z: cabDz / cabLen },
+      yaw: cabYaw,
+      pitch: cabPitch,
+      clientTime: now,
+    },
+    now,
+  );
   assert.equal(cabHit.ok, true);
+  assert.equal(cabHit.hit, true);
 
   // Verify watchtower elevated state clamp (climb ladder -> walk onto 4.0m deck)
   Object.assign(pA, { x: 2.44, y: 0.0, z: 0.0, lastStateAt: now });

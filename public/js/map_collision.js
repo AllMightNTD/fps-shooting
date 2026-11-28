@@ -315,8 +315,8 @@ export function createMapCollision({
     return null;
   }
 
-  function resolveHorizontal(pos, crouched, radius = 0.45) {
-    const pHeight = crouched ? 1.22 : 1.78;
+  function resolveHorizontal(pos, crouched, radius = 0.45, prone = false) {
+    const pHeight = prone ? 0.58 : crouched ? 1.22 : 1.78;
     const minFootClear = pos.y + 0.36;
     const maxHeadY = pos.y + pHeight;
 
@@ -382,13 +382,14 @@ export function createMapCollision({
     pos.z = Math.max(bounds.minZ + radius, Math.min(bounds.maxZ - radius, pos.z));
   }
 
-  function canStandUp(x, y, z, radius = 0.42) {
+  function canStandUp(x, y, z, radius = 0.42, targetHeight = 1.85) {
+    const minCheckY = targetHeight < 1.5 ? 0.52 : 1.05;
     for (let i = 0; i < boxes.length; i++) {
       const b = boxes[i];
       if (b.bulletOnly) continue;
       if (x >= b.x0 - radius && x <= b.x1 + radius && z >= b.z0 - radius && z <= b.z1 + radius) {
         const baseY = b.y0 ?? 0;
-        if (baseY > y + 1.05 && baseY < y + 1.85) return false;
+        if (baseY > y + minCheckY && baseY < y + targetHeight) return false;
       }
     }
     return true;
@@ -397,8 +398,8 @@ export function createMapCollision({
   /**
    * Step vertical motion, walkable slab landings, ladder climb, and wall sliding.
    */
-  function stepPlayerMovement(state, { moveForward = 0, jumpHeld = false, crouched = false, radius = 0.45 }, dt) {
-    const ladder = findLadder(state.x, state.y, state.z);
+  function stepPlayerMovement(state, { moveForward = 0, jumpHeld = false, crouched = false, prone = false, radius = 0.45 }, dt) {
+    const ladder = prone ? null : findLadder(state.x, state.y, state.z);
     if (ladder && (state.onLadder || (moveForward > 0.1 || jumpHeld) || (state.y > 0.2 && moveForward < -0.1))) {
       state.onLadder = true;
       const climbInput = jumpHeld ? 1 : moveForward;
@@ -438,7 +439,7 @@ export function createMapCollision({
       state.grounded = false;
     }
 
-    resolveHorizontal(state, crouched, radius);
+    resolveHorizontal(state, crouched, radius, prone);
   }
 
   /**

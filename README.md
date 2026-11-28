@@ -9,39 +9,49 @@ Trò chơi bắn súng góc nhìn thứ nhất (FPS) trên nền WebGL sử dụ
 ├── server/                 # Máy chủ PvP Mạng LAN Node.js 22+ thuần (0 thư viện ngoài)
 │   ├── package.json        # Đánh dấu ES Module cục bộ cho server/
 │   ├── index.js            # HTTP static allowlist (/js/weapons.js, /js/protocol.js, ...) + WebSocket /ws (0.0.0.0:8090)
-│   ├── weapons.js          # Nguồn cấu hình vũ khí, FLAG tư thế & luật tốc độ/spread dùng chung Client/Server
-│   ├── protocol.js         # Hằng số message (reload, switchWeapon, event.reload, ammo, ...) & sanitizeText
+│   ├── weapons.js          # Nguồn cấu hình vũ khí, falloff cự ly, moveSpeedMult, equipTimeMs & FLAG dùng chung Client/Server
+│   ├── protocol.js         # Hằng số message (reload, switchWeapon, event.reload, ammo, CHEAT_DETECTED...) & sanitizeText
 │   ├── ws.js               # RFC 6455 WebSocket codec, heartbeat ping/pong & chống flood 160 msg/s
-│   ├── spawn.js            # Sinh map bến cảng tất định (MAP_SEED=11042026), va chạm AABB & LoS spawn
-│   ├── RoomManager.js      # Session token reconnect 30s (khôi phục cả số đạn từng súng), quickJoin & dọn phòng
+│   ├── spawn.js            # Sinh map bến cảng tất định (MAP_SEED=11042026), va chạm AABB/OBB & raycastArenaDistance
+│   ├── hitreg.js           # Re-export từ public/js/hitreg.js (Hitbox Stand/Crouch/Prone & đạn đạo AWM)
+│   ├── spawn_rules.js      # Re-export từ public/js/spawn_rules.js (Spawn Protection, i-frames & Smart Spawn TDM/FFA)
+│   ├── lag_comp.js         # Bộ đệm lịch sử tư thế 450ms, chốt spawnEpoch & Lag Compensation Rewind (tối đa 250ms)
+│   ├── anti_cheat.js       # Chống cheat 5 lớp (MSG.HIT spoof, origin/wall-peek, silent aim, rapid-fire, speedhack) & auto-kick
+│   ├── RoomManager.js      # Session token reconnect 30s (khôi phục cả số đạn từng súng), đo RTT qua WS pong & auto-kick
 │   ├── Room.js             # Vòng đời phòng WAITING → STARTING (5s) → PLAYING → ENDING (10s) → WAITING
-│   ├── Match.js            # Tick 20Hz: tickWeapon (TOL 80ms), nạp chiến thuật/rỗng, hitbox ngồi, khiên 2.5s
+│   ├── Match.js            # Tick 20Hz: server-authoritative handleFire, equipTime, leaky fire/move budget, i-frames & Spawn Protection
 │   ├── modes/
-│   │   ├── TDM.js          # Đấu Đội (▲ Đặc Nhiệm #2F80FF vs ● Nổi Loạn #FF4D2E): khóa lệch >=2, cấm bắn đồng đội
-│   │   └── FFA.js          # Đấu Đơn (màu trung tính #8A8F98): xếp theo killLimit/hết giờ, spawn khuất LoS
+│   │   ├── TDM.js          # Đấu Đội (▲ Đặc Nhiệm #2F80FF vs ● Nổi Loạn #FF4D2E): hồi sinh 3.5s, Dynamic Flip 8s, bảo vệ 3.0s
+│   │   └── FFA.js          # Đấu Đơn (màu trung tính #8A8F98): hồi sinh 2.0s Golden-Distance LoS, bảo vệ 2.0s
 │   ├── tests/
-│   │   ├── test_lan_v2.js           # Bộ kiểm thử Node.js (5 test, gồm 6 edge case + reload/switch/TOL/posture hitbox)
-│   │   ├── test_arm_rig.mjs         # Unit test AAA cho IK 2 xương & controller tay SkinnedMesh (6 test, gồm m416 + awm sockets)
+│   │   ├── test_lan_v2.js           # Bộ kiểm thử Node.js (gồm 6 edge case + reload/switch/TOL/posture hitbox)
+│   │   ├── test_spawn_protection.mjs # Unit & integration test Spawn Protection nhấp nháy, i-frames, Smart Spawn & Bot AI
+│   │   ├── test_arm_rig.mjs         # Unit test AAA cho IK 2 xương & controller tay SkinnedMesh (m416 + pistol + awm sockets)
 │   │   ├── test_military_map.mjs    # Unit & integration test cho Triangle-BVH, thang tháp canh 4m & đồng bộ map Khu Quân Sự Cũ
 │   │   ├── test_graphics_quality.mjs # Unit test AAA cho 3 mức đồ họa Thấp/Vừa/Cao & tự động nhận diện máy yếu
 │   │   └── test_loading_manager.mjs # Unit test AAA cho yieldToUI, tracker tiến độ, nạp VRAM theo lô & cache chuyển map 0ms
 ├── shared/
-│   └── maps/               # military_layout.json & military_colliders.json dùng chung Client/Server
+│   └── maps/               # military_layout.json & military_colliders.json dùng chung Client/Server (A:9, B:9, FFA:16 spawns)
 ├── public/                 # Giao diện & Engine phía Client (ES Modules)
-│   ├── FPS.html            # Màn hình Loading 4 bước (ảnh đội đặc nhiệm 3D + thanh tiến độ đáy), HUD vô hạn đạn, chọn map, Radar & Cài đặt
-│   ├── assets/             # Tài nguyên hình ảnh tối ưu (loading_bg.webp ~152KB nén từ 3d_screen_loading.png)
+│   ├── FPS.html            # Loading 4 bước, Lobby Luyện tập (Đấu với Máy TDM/FFA & Sinh tồn Drone), HUD bảo vệ hồi sinh & Cài đặt
+│   ├── assets/             # Tài nguyên hình ảnh tối ưu (loading_bg.webp ~152KB, thumbnail bản đồ WebP)
 │   └── js/
 │       ├── net.js          # Tự suy ra ws(s)://${location.host}/ws, tự nối lại & sessionStorage 30s
-│       ├── lobby.js        # Danh sách phòng thời gian thực, tiền tải & cache map ngay khi đổi dropdown Solo, Vào nhanh, Mật khẩu
-│       ├── room.js         # Phòng chờ 2 cột TDM / FFA, Sẵn sàng, Đổi phe, Kick, Chat & Cài đặt Host (có đổi map)
-│       ├── settings.js     # Lưu cấu hình chuột, FOV, Hold/Toggle, chất lượng đồ họa & gán phím BIND qua localStorage
+│       ├── lobby.js        # Sảnh 5 view (Home, Practice Hub, Đấu với Máy, Sinh tồn, LAN), tiền tải & cache map 0ms
+│       ├── lobby_utils.js  # Chuẩn hóa cấu hình Bot & lọc chế độ sảnh LAN
+│       ├── bot_ai.js       # Bộ máy Đấu với Máy Offline (TDM & FFA, 3 độ khó, SWAT 6 tư thế, M416/Glock-17/AWM)
+│       ├── spawn_rules.js  # Luật Spawn Protection (3.0s TDM / 2.0s FFA), i-frames 400ms, nhấp nháy đa tần số & Smart Spawn
+│       ├── hitreg.js       # Hitbox đa vùng 3 tư thế & đạn đạo AWM dùng chung Server & Offline Bots
+│       ├── room.js         # Phòng chờ 2 cột TDM / FFA, bảng tổng kết LAN & Đấu với Máy
+│       ├── settings.js     # Lưu cấu hình chuột, FOV, Hold/Toggle, chất lượng đồ họa, IFF (màu/viền địch) & phím BIND qua localStorage
+│       ├── iff_system.js   # Hệ thống IFF Gói A: màu tương đối TDM/FFA, shader Geometric-Normal Fresnel giữ 100% PBR & marker đồng đội thông minh
 │       ├── graphics_quality.js # Preset Thấp/Vừa/Cao + detectHardwareTier() tự tối ưu cho máy yếu
 │       ├── loading_manager.js  # yieldToUI(), tracker tiến độ 0–100%, nạp VRAM theo lô initTexture, biên dịch shader & guard đổi map 0ms
 │       ├── input.js        # Input 3 lớp dùng e.code, Alt+Tab reset(), chặn cuộn trang & click khóa chuột đầu
 │       ├── arm_rig.js      # Bộ giải IK 2 xương giải tích, SKINNED_ARM_POSES (M416/Pistol/Sniper+Bolt) & gập ngón bóp cò
 │       ├── map_collision.js # Triangle-BVH raycast, trượt tường AABB/OBB, sàn nâng 4m & leo thang tháp canh
 │       ├── map_loader.js   # Nạp bất đồng bộ map Khu Quân Sự Cũ (yieldToUI, Sky Dome, vũng nước PBR, InstancedMesh, cây/núi & FogExp2)
-│       └── game.js         # Engine Three.js r128 hỗ trợ đa bản đồ cache theo ID, warmup Shader/VRAM ẩn, vật lý 60Hz & vũ khí PBR
+│       └── game.js         # Engine Three.js r128 hỗ trợ LAN PvP, Đấu với Máy (TDM/FFA), Sinh tồn Drone, Death Cam & VFX nhấp nháy bảo vệ
 ├── FPS.html                # Trang chuyển hướng trỏ về public/FPS.html
 ├── GEMINI.md               # Quy chuẩn kỹ thuật và quy trình làm việc của dự án
 ├── README.md               # Tài liệu hướng dẫn dự án
@@ -125,21 +135,34 @@ _(Có thể đổi phím, độ nhạy chuột, độ nhạy ADS, đảo trục 
 
 ## Điểm nổi bật kỹ thuật
 
-- **Server Authority toàn phần (`server/weapons.js`, `server/Match.js`):**
-  - Nguồn cấu hình vũ khí duy nhất (`M416`, `Glock-17`, `AWM Sniper`) chia sẻ giữa server và client. Server chỉ dùng `Date.now()` phía server, kiểm tra lười `tickWeapon` với `RELOAD_TOLERANCE_MS = 80ms`, chặn bắn khi đang nạp / chạy nước rút / hết đạn, tự nạp khi bắn viên cuối, gửi `AMMO` chỉnh lệch nếu console client bị sửa, hủy nạp khi chết hoặc đổi súng, và nạp đầy mọi súng khi hồi sinh.
-  - Bắn dùng **client raycast + server validate**: kiểm tra tốc độ di chuyển theo tư thế (`flags` bitmask), tầm bắn từng súng, đường ngắm `hasLineOfSight` tính cả độ cao cúi ngồi trên `MAP_SEED = 11042026`.
+- **Server Authority & Chống Cheat 5 Lớp (`server/weapons.js`, `hitreg.js`, `lag_comp.js`, `anti_cheat.js`, `Match.js`):**
+  - **Bảng sát thương cân bằng kiểu Truy Kích / CS (100 HP — dùng chung cho Đấu Đơn FFA & Đấu Đội TDM):**
+    - `M416` (`86ms`, `moveMult 0.95×`, `equip 520ms`): `90 / 27 / 21` (head/body/limb), giảm dần `30m → 95m` xuống `0.78×` (tối đa `120m`; không 1-tap đầu, 4 viên thân gần / 5 viên xa).
+    - `Glock-17` (`150ms`, `moveMult 1.05×`, `equip 240ms`): `72 / 24 / 18`, giảm dần `20m → 65m` xuống `0.65×` (tối đa `85m`; cơ động nhất, kết liễu mục tiêu dính chân AWM đến `44m`).
+    - `AWM Sniper` (`1300ms`, `moveMult 0.84×`, `equip 780ms`): `180 / 115 / 80`, giảm dần `65m → 160m` xuống `0.92×` (tối đa `180m`; đạn đạo có trọng lực + drag, 1-hit đầu & thân trên toàn bản đồ, bắn chân để lại `20–26 HP`).
+  - **Server-Authoritative Hitreg & Lag Compensation:** Client không còn gửi `MSG.HIT`; server tự raycast trên hitbox 3 tư thế (**Đứng / Ngồi / Nằm**, ưu tiên `head > body > limb`) và tua ngược lịch sử tư thế (`<= 250ms` neo theo RTT đo qua WS `OP_PONG`), bỏ qua `moveOnly` (bắn xuyên cửa sổ nhà kho & kính cabin xe).
+  - **Chống cheat 5 lớp:** từ chối `MSG.HIT` giả (`+15`), chặn fake `origin`/wall-peek (`+20`), chặn Silent Aim lệch nón `yaw/pitch` (`+25`), chặn Rapid-Fire bằng leaky fire debt (`+10`) và Speedhack bằng leaky movement budget (`+10`); suy giảm `-5/10s` chơi sạch, cảnh báo tại `40` và tự động kick tại `100` (`ERR.CHEAT_DETECTED`).
 - **Màn hình Loading 4 bước & Khởi động không khựng (`public/js/loading_manager.js`, `map_loader.js`, `game.js`, `lobby.js`, `FPS.html`):**
   - Toàn bộ tác vụ nặng lúc mở trang (dựng bản đồ mặc định, nạp 5 model GLB, tiền tạo bộ đệm `AudioContext`/Convolver, upload VRAM theo lô `renderer.initTexture(tex)`, biên dịch shader tách pha cho world + 3 súng + tay `SkinnedMesh` + Drone + Soldier + chớp lửa và render nháp 1 frame ẩn) đều chạy sau `#loadingOverlay` xen kẽ `yieldToUI()` (`requestAnimationFrame` kèm fallback cho tab nền) giúp thanh tiến độ mượt và không treo trình duyệt.
   - Cache bản đồ theo ID (`currentActiveMapId` + `mapGuard`): bấm **Luyện tập Offline (Drone)** khi trùng map đang hiển thị vào trận ngay lập tức (gọi `requestPointerLock()` đồng bộ trong sự kiện click). Đổi dropdown `#soloMapSelect` (hoặc vào phòng LAN có map khác) sẽ tải, làm nóng GPU và cache ngay lúc chọn; lần đổi lại bản đồ đã cache đạt `0ms`.
-- **Phân biệt Hai Đội thân thiện Mù Màu (`model/characters/soldier.py` & `public/js/game.js`):**
-  - Vật liệu `TeamColor` phủ lên mảng mũ FAST, giáp vai rộng, ngực và lưng dùng đúng 3 material dùng chung (`▲ Đặc Nhiệm #2F80FF`, `● Nổi Loạn #FF4D2E`, `◆ Đấu Đơn #8A8F98`) kèm `emissiveIntensity` nổi rõ từ `30m` trong mưa và an toàn dưới `protanopia`/`deuteranopia`.
-  - Bổ sung nhận diện đa tầng: nameplate chỉ hiện cho đồng đội TDM, tâm ngắm đổi đỏ khi trỏ vào hitbox kẻ địch, killfeed/bảng điểm đồng bộ màu + ký hiệu hình học, và Radar góc trên-trái lộ chấm địch trong `2s` khi nổ súng.
+- **Phân biệt Địch – Ta Gói A (Competitive Valorant + CoD, `public/js/iff_system.js`, `asset_loader.js`, `remote_players.js`, `hud_ui.js`):**
+  - **Quy ước màu tương đối (1A) & hỗ trợ Mù màu:** Đồng đội luôn Xanh (`#2F80FF` / `#42B8FF`) và luôn đứng bên trái thanh tỷ số `#pvpTop` trong TDM (kể cả khi bạn ở Đội B). Kẻ địch trong TDM và toàn bộ đối thủ trong FFA nhận màu thống nhất theo Cài đặt (**Đỏ `#FF3535`**, **Vàng mù màu `#FFE135`**, hoặc **Tím `#C84BFF`**), đồng bộ cả tâm ngắm `.targetEnemy`, Radar, Killfeed, Scoreboard và vệt đạn tracer.
+  - **Viền Geometric-Normal Fresnel giữ nguyên 100% độ sắc nét SWAT (`2B + 3B`):** Chiết xuất pháp tuyến hình học gốc trước `normalMap` trong shader `MeshPhysicalMaterial` (`soldier_iff_pbr_v1`, chung `1` WebGL program cho Ta & Địch, tăng `anisotropy` texture 1024px và hiệu chỉnh tuyến tính/sRGB theo map `military`/`harbor`). Toàn bộ phần áo giáp, mặt nạ, túi đạn bên trong giữ nguyên PBR sắc nét tuyệt đối; chỉ kẻ địch hiện viền sáng gọn theo rìa (không xuyên tường, tắt 3 hộp LED giả trên địch). Cho phép chọn **Rõ kiểu Valorant** (mặc định) / **Mảnh sắc nét** / **Tắt viền** đổi live trong `0ms` (`0` recompile).
+  - **Marker Đồng đội Xuyên tường Thông minh (PUBG + Valorant):** Đồng đội sau tường hiện mũi tên Cyan + mét khoảng cách (`depthTest: false`), tự mờ xuống `~0.15` khi tâm ngắm đi sát (`Crosshair Proximity Fade`) hoặc khi ngắm `ADS/AWM` để không che kẻ địch đứng phía trước; nhìn trực tiếp mới hiện tên + thanh máu mảnh. Radar 2D hiển thị đồng đội dạng mũi tên xoay đúng hướng nhìn.
+
+- **Luyện tập Offline — Đấu với Máy (TDM & FFA) & Sinh tồn Drone (`public/js/bot_ai.js`, `lobby.js`, `FPS.html`):**
+  - Từ Sảnh chính bấm **Luyện tập** để chọn **Đấu với Máy** (chọn chế độ **Đấu Đơn FFA** hoặc **Đấu Đội TDM**, bản đồ 3D `Khu Quân Sự Cũ` / `Bến Cảng Mưa`, 3 mức độ khó `Dễ` / `Trung bình` / `Khó`, số Bot `3/5/7/9`, mục tiêu mạng `15–50`) hoặc **Sinh tồn (Drone)**. Bot dùng chung nhân vật SWAT 6 tư thế (`idle/run/crouch/jump/prone/prone_move`) và 3 vũ khí (`M416`, `Glock-17`, `AWM`).
+- **Spawn Protection nhấp nháy, Invulnerability Frames & Hồi sinh TDM/FFA (`public/js/spawn_rules.js`, `server/lag_comp.js`, `server/Match.js`, `public/js/remote_players.js`, `public/js/hud_ui.js`):**
+  - **Invulnerability Frames (`400ms`) & `spawnEpoch`:** Khóa bất tử khung hình đầu ngay khi xuất hiện kèm kiểm tra `spawnEpoch` trong Lag Compensation để đạn trước lúc bị hạ không xuyên sang mạng mới; bắn đạn sẽ hủy bảo vệ ngay lập tức (kèm cổng `requireFreshFireAfterRespawn` chống cướp cò khi đang giữ chuột).
+  - **Nhấp nháy miễn nhiễm sát thương (Spawn Protection):** Kéo dài **3.0s / bán kính 9.0m** ở **TDM** (hồi sinh `3.5s`) và **2.0s / bán kính 6.0m** ở **FFA** (hồi sinh `2.0s`); tự hủy khi bắn, rời khỏi vùng an toàn hoặc giữ ngắm `ADS > 600ms`. Nhấp nháy theo nhịp `12Hz` (`i-frames`) → `4.5Hz` (ổn định) → `10Hz` (sắp hết) và chớp `14Hz` khi trúng đạn trên giáp cyan SWAT, mái vòm + vòng đế, thanh `#spawnProtectBar`, viền `#shieldVignette` và hitmarker cyan `hmShield`.
+  - **Hồi sinh thông minh & Death Cam:** TDM hỗ trợ 3 tầng điểm + **Dynamic Spawn Flip** (cooldown `8s`, đổi sang căn cứ an toàn kèm cảnh báo HUD khi bị ép spawn); FFA chấm điểm đa tiêu chí né `lastDeathPos < 12m`, giữ khoảng cách vàng `18–42m` và ưu tiên điểm khuất LoS, kết hợp Death Cam & thẻ thông tin hồi sinh `#respawnBanner`.
 
 ## Kiểm thử
 
 - **Python Unit Tests (`python3 -m unittest discover -s model/tests -v`):** **30/30 PASS** (kiểm tra geometry, textures PBR, chuyển đổi PBR & chuẩn hóa `-Z`/mét cho `fps_arms.glb`, `awm.glb`, `pistol.glb`, 12 model bản đồ Khu Quân Sự Cũ và chuẩn nhị phân glTF 2.0 `.glb` + `.bundle.js`).
-- **Node.js Tests (`node --test server/tests/test_*.js server/tests/test_*.mjs`):** **68/68 PASS** (gồm LAN server, `arm_rig` với `m416`/`pistol`/`awm` + `fps_arms.glb`, `soldier_anim` SkinnedMesh clone + `AnimationMixer` 4 cử chỉ `idle/run/crouch/jump` + hitbox bám xương, `weapon_audio` WAV bank cho `M416`/`Pistol`/`AWM` + HTTP `/sound/*`, `military_map`, `graphics_quality`, `loading_manager`, `net_utils` và `build_static`).
+- **Node.js Tests (`node --test server/tests/test_*.js server/tests/test_*.mjs`):** **98/98 PASS** (gồm Spawn Protection nhấp nháy/i-frames/Smart Spawn/Bot AI `test_spawn_protection.mjs`, bảng sát thương & sweep 0–200m `damage_model`, hitbox đa vùng/AWM ballistics/lag compensation/chống cheat 5 lớp `server_hitreg_anticheat`, hệ thống IFF Gói A `iff_system`, LAN server `lan_v2`, `arm_rig`, `soldier_anim`, `weapon_audio`, `military_map`, `graphics_quality`, `loading_manager`, `net_utils` và `build_static`).
 - **Trình duyệt Headless (Chrome/Playwright):**
+  - `verify_practice_bots_protection_e2e.py` (**PASS**): Điều hướng Lobby `home → practice → survival/bot` (TDM & FFA), kiểm chứng 5 Bot SWAT `soldier.glb`, nhấp nháy Spawn Protection (`#spawnProtectBar` + `#shieldVignette` + mái vòm/vòng đế), bắn trúng khiên (`0` damage + `hmShield`), hủy khiên khi bắn, Death Cam / `#respawnBanner` và hồi sinh lại với `i-frames` + giáp mới (`0` console/pageerror/HTTP>=400).
   - `verify_lan_v2_e2e.py` (**PASS**): 3-tab Lobby → Phòng chờ → Mật khẩu → Chat → Kick → Host Cài đặt → `STARTING` → `PLAYING` → Headshot → `ENDING` → `"Về phòng ngay"` → Reconnect tab → Solo Drone (`0` console/pageerror).
   - `verify_lan_v2_1_e2e.py` (**PASS**): Lưu cài đặt & gán phím `localStorage` qua reload, chuyển súng `1/2/3`, đổi súng hủy nạp giữ nguyên mag, `Alt+Tab`/`blur` không kẹt phím, `Shift+R` nạp khi chạy nhưng chặn bắn, phân biệt đội `30m` trong mưa + giả lập mù màu Chromium `protanopia`, nameplate chỉ hiện đồng đội, tư thế ngồi đồng bộ & hoạt ảnh nạp người chơi khác, Radar chấm địch khi bắn, chặn cheat `w.mag=99` trên console, khôi phục đúng `m416.mag = 26` khi reconnect giữa trận, ống ngắm AWM Sniper & tâm ngắm đổi đỏ (`0` console/pageerror).
   - Kiểm định trực quan viewmodel Chrome headless cho `M416`, `Glock-17` (`pistol.glb` M1911) và `AWM Sniper` với tay `SkinnedMesh` + IK 2 xương trên cả map Khu Quân Sự Cũ & Bến Cảng Mưa (`0` console/pageerror).

@@ -40,8 +40,8 @@ export const FFAMode = {
     return shooter.id !== victim.id;
   },
 
-  pickSpawn(room, player) {
-    return pickFfaSpawn(room.arena, room.players, player.id);
+  pickSpawn(room, player, now = 0, tracker = null) {
+    return pickFfaSpawn(room.arena, room.players, player.id, now, tracker, player);
   },
 
   onKill(room, killer) {

@@ -86,8 +86,8 @@ export const TDMMode = {
     return shooter.id !== victim.id && shooter.team !== victim.team;
   },
 
-  pickSpawn(room, player) {
-    return pickTeamSpawn(room.arena, player.team, room.players, player.id);
+  pickSpawn(room, player, now = 0, tracker = null) {
+    return pickTeamSpawn(room.arena, player.team, room.players, player.id, now, tracker);
   },
 
   onKill(room, killer) {

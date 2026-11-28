@@ -1,24 +1,42 @@
 /**
- * Authoritative active-match engine: posture-aware movement clamping,
- * multi-weapon reload/switch state machine, crouch hitbox LoS, respawn, and scoring.
+ * Authoritative active-match engine: posture-aware movement clamping (leaky bucket),
+ * multi-weapon equip/reload/switch state machine, server-side hitbox raycast + AWM ballistics,
+ * RTT-bounded lag compensation, and 5-layer anti-cheat enforcement.
  */
 
+import { AntiCheatTracker, validateShotDirection, validateShotOrigin } from "./anti_cheat.js";
+import { getEyeHeight, resolveAuthoritativeShot } from "./hitreg.js";
+import { clampRewindTimestamp, createPoseHistoryStore } from "./lag_comp.js";
 import { ERR, MSG, ROOM_STATE, SNAPSHOT_WEAPON_CODE } from "./protocol.js";
-import { clampAndResolvePlayerPos, hasLineOfSight } from "./spawn.js";
+import {
+  SPAWN_RULES,
+  activateSpawnProtection,
+  cancelProtectionOnFire,
+  clampAndResolvePlayerPos,
+  createSpawnTracker,
+  evaluateProtectionTick,
+  getSpawnRuleForMode,
+  isPlayerProtected,
+} from "./spawn_rules.js";
 import {
   BASE_MOVE_SPEED,
   FLAG,
   WEAPONS,
+  computeWeaponDamage,
   createDefaultWeaponsState,
   getMoveSpeedMultiplier,
   getReloadDurationMs,
   resolveWeaponConfig,
 } from "./weapons.js";
 
-export const RESPAWN_DELAY_MS = 4000;
-export const INVULNERABLE_MS = 2500;
+export const RESPAWN_DELAY_MS = SPAWN_RULES.TDM.respawnDelayMs;
+export const INVULNERABLE_MS = SPAWN_RULES.TDM.protectMs;
+export const IFRAMES_MS = SPAWN_RULES.TDM.iFramesMs;
+export { SPAWN_RULES, getSpawnRuleForMode };
 export const RELOAD_TOLERANCE_MS = 80;
-export const FIRE_JITTER_MS = 30;
+export const FIRE_JITTER_MS = 25;
+export const EQUIP_TOLERANCE_MS = 30;
+export const MOVE_ALLOWANCE_MAX = 1.2;
 
 function finiteVec3(v) {
   return (
@@ -34,22 +52,59 @@ export class Match {
   constructor(room) {
     this.room = room;
     this.matchEndsAt = 0;
+    this.poseHistory = createPoseHistoryStore();
+    this.antiCheat = new AntiCheatTracker();
+    this.spawnTracker = createSpawnTracker();
+  }
+
+  resetAntiCheatAndHistory() {
+    this.poseHistory.clear();
+    this.antiCheat.reset();
+    this.spawnTracker = createSpawnTracker();
+  }
+
+  _applyAntiCheatAction(player, res) {
+    if (!player || !res || res.action === "none") return "none";
+    if (res.action === "warn") {
+      console.warn(`[AntiCheat] Warn room=${this.room.id} player=${player.id} code=${res.code} score=${res.score}`);
+      if (typeof this.room.sendTo === "function") {
+        this.room.sendTo(player.id, {
+          type: MSG.ERROR,
+          code: ERR.CHEAT_DETECTED,
+          message: "Cảnh báo: phát hiện gói tin bắn hoặc di chuyển bất thường",
+        });
+      }
+      return "warn";
+    }
+    if (res.action === "kick") {
+      console.warn(`[AntiCheat] Kick room=${this.room.id} player=${player.id} code=${res.code} score=${res.score}`);
+      if (typeof this.room.kickForCheat === "function") {
+        this.room.kickForCheat(player.id);
+      }
+      return "kick";
+    }
+    return "none";
   }
 
   start(now) {
     this.matchEndsAt = now + this.room.timeLimit * 1000;
     this.room.teamScores = { A: 0, B: 0 };
+    this.resetAntiCheatAndHistory();
     for (const p of this.room.players.values()) {
       p.kills = 0;
       p.deaths = 0;
       p.headshots = 0;
+      p.spawnEpoch = 0;
+      p.lastDeathPos = null;
       p.activeWeaponId = "m416";
+      p.prevWeaponId = "m416";
+      p.moveAllowance = MOVE_ALLOWANCE_MAX;
       this.spawnPlayer(p, now);
     }
   }
 
   spawnPlayer(player, now) {
-    const sp = this.room.modeImpl.pickSpawn(this.room, player);
+    const sp = this.room.modeImpl.pickSpawn(this.room, player, now, this.spawnTracker);
     player.x = sp.x;
     player.y = sp.y;
     player.z = sp.z;
@@ -63,13 +118,16 @@ export class Match {
     player.hp = 100;
     player.alive = true;
     player.activeWeaponId = player.activeWeaponId && WEAPONS[player.activeWeaponId] ? player.activeWeaponId : "m416";
+    player.prevWeaponId = player.activeWeaponId;
     player.lastFiredWeaponId = player.activeWeaponId;
     player.weapons = createDefaultWeaponsState();
     player.respawnAt = 0;
-    player.invulnerableUntil = now + INVULNERABLE_MS;
+    player.lastSpawnReason = sp.reason || "normal";
+    activateSpawnProtection(player, this.room.mode, sp, now);
     player.lastStateAt = now;
     player.lastShotAt = 0;
-    player.pendingHitCredit = 0;
+    player.moveAllowance = MOVE_ALLOWANCE_MAX;
+    this.poseHistory.record(player, now);
     this.syncPlayerWeapons(player, now);
   }
 
@@ -82,12 +140,15 @@ export class Match {
     const activeW = player.weapons[player.activeWeaponId];
     const reloadingMs =
       activeW && activeW.reloadEndsAt > now ? activeW.reloadEndsAt - now : 0;
+    const equipMs =
+      activeW && activeW.equipEndsAt > now ? activeW.equipEndsAt - now : 0;
     this.room.sendTo(player.id, {
       type: MSG.AMMO,
       id: player.activeWeaponId,
       mag: activeW ? activeW.mag : 0,
       activeWeaponId: player.activeWeaponId,
       reloadingMs,
+      equipMs,
       weapons: summary,
     });
   }
@@ -131,30 +192,39 @@ export class Match {
     const activeW = player.weapons[player.activeWeaponId];
     const isReloadingServer = Boolean(activeW && activeW.reloadEndsAt > 0);
 
-    let incomingFlags = Number.isInteger(msg.flags) ? (msg.flags & 0x3f) : player.flags || 0;
-    if (incomingFlags & FLAG.CROUCH) incomingFlags &= ~FLAG.SPRINT;
+    let incomingFlags = Number.isInteger(msg.flags) ? (msg.flags & 0x7f) : player.flags || 0;
+    if (incomingFlags & FLAG.PRONE) incomingFlags &= ~(FLAG.SPRINT | FLAG.CROUCH);
+    else if (incomingFlags & FLAG.CROUCH) incomingFlags &= ~FLAG.SPRINT;
     if (isReloadingServer) {
       incomingFlags = (incomingFlags | FLAG.RELOADING) & ~FLAG.ADS;
     } else {
       incomingFlags &= ~FLAG.RELOADING;
     }
 
-    const prevMult = getMoveSpeedMultiplier(player.prevFlags || 0);
-    const curMult = getMoveSpeedMultiplier(incomingFlags);
+    const prevMult = getMoveSpeedMultiplier(player.prevFlags || 0, player.prevWeaponId || player.activeWeaponId);
+    const curMult = getMoveSpeedMultiplier(incomingFlags, player.activeWeaponId);
     const allowedSpeed = BASE_MOVE_SPEED * Math.max(prevMult, curMult);
 
     const pos = msg.pos;
     if (finiteVec3(pos)) {
       const clamped = clampAndResolvePlayerPos(pos, this.room.arena, 0.45, incomingFlags);
-      const dtSec = Math.max(0.05, (now - (player.lastStateAt || now)) / 1000);
-      const maxDist = allowedSpeed * dtSec + 1.35;
+      const dtSec = Math.min(1.2, Math.max(0, (now - (player.lastStateAt || now)) / 1000));
+      const baseMax = allowedSpeed * dtSec * 1.15;
+      const allowance = Number.isFinite(player.moveAllowance) ? player.moveAllowance : MOVE_ALLOWANCE_MAX;
+      const maxDist = baseMax + allowance;
       const d = Math.hypot(clamped.x - player.x, clamped.z - player.z);
-      if (d <= maxDist) {
+      if (d <= baseMax) {
         player.x = clamped.x;
         player.y = clamped.y;
         player.z = clamped.z;
+        player.moveAllowance = Math.min(MOVE_ALLOWANCE_MAX, allowance + Math.max(0, baseMax - d) * 0.5);
+      } else if (d <= maxDist) {
+        player.x = clamped.x;
+        player.y = clamped.y;
+        player.z = clamped.z;
+        player.moveAllowance = Math.max(0, allowance - (d - baseMax));
       } else {
-        const k = maxDist / d;
+        const k = d > 0 ? maxDist / d : 0;
         const stepPos = clampAndResolvePlayerPos(
           {
             x: player.x + (clamped.x - player.x) * k,
@@ -168,6 +238,12 @@ export class Match {
         player.x = stepPos.x;
         player.y = stepPos.y;
         player.z = stepPos.z;
+        player.moveAllowance = 0;
+        const tamperMargin = dtSec > 0 ? 0.45 : 0.05;
+        if (d > maxDist + tamperMargin) {
+          const ac = this.antiCheat.recordViolation(player.id, "SPEED_TAMPER", now);
+          this._applyAntiCheatAction(player, ac);
+        }
       }
       player.lastStateAt = now;
     }
@@ -178,6 +254,7 @@ export class Match {
     }
     player.prevFlags = player.flags;
     player.flags = incomingFlags;
+    player.prevWeaponId = player.activeWeaponId;
     player.ads = Boolean(incomingFlags & FLAG.ADS);
 
     const anim = msg.anim;
@@ -185,6 +262,8 @@ export class Match {
       if (Number.isFinite(anim.mv)) player.mv = Math.max(0, Math.min(2, Number(anim.mv)));
       if (typeof anim.laser === "boolean") player.laser = anim.laser;
     }
+
+    this.poseHistory.record(player, now);
   }
 
   handleSwitchWeapon(player, msg = {}, now) {
@@ -202,7 +281,9 @@ export class Match {
     this._cancelReload(player);
     player.flags &= ~FLAG.ADS;
     player.ads = false;
+    player.prevWeaponId = player.activeWeaponId;
     player.activeWeaponId = targetCfg.id;
+    player.weapons[targetCfg.id].equipEndsAt = now + (targetCfg.equipTimeMs || 0);
 
     this.syncPlayerWeapons(player, now);
     this.room.broadcast({
@@ -252,6 +333,18 @@ export class Match {
     return true;
   }
 
+  handleDeprecatedClientHit(player, now) {
+    if (player && player.id) {
+      const ac = this.antiCheat.recordViolation(player.id, "LEGACY_HIT_SPOOF", now);
+      this._applyAntiCheatAction(player, ac);
+    }
+    return {
+      ok: false,
+      code: ERR.INVALID_STATE,
+      message: "Hit detection do máy chủ quyết định",
+    };
+  }
+
   handleFire(player, msg = {}, now) {
     if (this.room.state !== ROOM_STATE.PLAYING) {
       return { ok: false, code: ERR.MATCH_ENDED, message: "Trận đấu đã kết thúc" };
@@ -259,12 +352,15 @@ export class Match {
     if (!player.alive) {
       return { ok: false, code: ERR.INVALID_STATE, message: "Đang chờ hồi sinh" };
     }
+    if (this.room.players && !this.room.players.has(player.id)) {
+      return { ok: false, code: ERR.NOT_IN_ROOM, message: "Bạn không còn ở trong phòng" };
+    }
 
     this.tickWeapon(player, now);
     const w = player.weapons[player.activeWeaponId];
     const cfg = resolveWeaponConfig(player.activeWeaponId);
 
-    const sentFlags = Number.isInteger(msg.flags) ? (msg.flags & 0x3f) : player.flags || 0;
+    const sentFlags = Number.isInteger(msg.flags) ? (msg.flags & 0x7f) : player.flags || 0;
     if (sentFlags & FLAG.SPRINT) {
       this.room.sendTo(player.id, {
         type: MSG.AMMO,
@@ -287,22 +383,63 @@ export class Match {
       return { ok: false, code: ERR.INVALID_STATE, message: "Đang nạp đạn hoặc hết đạn" };
     }
 
+    if (now < (w.equipEndsAt || 0) - EQUIP_TOLERANCE_MS) {
+      this.room.sendTo(player.id, {
+        type: MSG.AMMO,
+        id: w.id,
+        mag: w.mag,
+        activeWeaponId: player.activeWeaponId,
+        equipMs: Math.max(0, w.equipEndsAt - now),
+      });
+      return { ok: false, code: ERR.INVALID_STATE, message: "Đang rút súng" };
+    }
+
     if (now < w.nextFireAt - FIRE_JITTER_MS) {
+      const ac = this.antiCheat.recordViolation(player.id, "RAPID_FIRE", now);
+      this._applyAntiCheatAction(player, ac);
       return { ok: false, code: ERR.RATE_LIMITED, message: "Bắn quá nhanh" };
     }
 
-    // Firing cancels spawn invulnerability immediately per Truy Kích rules
-    player.invulnerableUntil = 0;
+    if (Number.isFinite(msg.yaw)) player.yaw = Number(msg.yaw);
+    if (Number.isFinite(msg.pitch)) {
+      player.pitch = Math.max(-1.48, Math.min(1.48, Number(msg.pitch)));
+    }
+
+    // Firing cancels both i-frames & spawn protection immediately (zero-abuse rule)
+    cancelProtectionOnFire(player);
     w.mag--;
-    w.nextFireAt = now + cfg.fireInterval;
+    w.nextFireAt = Math.max(now, w.nextFireAt || 0) + cfg.fireInterval;
     player.lastShotAt = now;
     player.lastFiredWeaponId = w.id;
-    player.pendingHitCredit = 1;
 
-    const origin = finiteVec3(msg.origin)
-      ? msg.origin
-      : { x: player.x, y: player.y + (player.flags & FLAG.CROUCH ? 1.12 : 1.7), z: player.z };
-    const dir = finiteVec3(msg.dir) ? msg.dir : { x: 0, y: 0, z: -1 };
+    const arena = this.room && this.room.arena ? this.room.arena : null;
+    const authEye = {
+      x: player.x || 0,
+      y: (player.y || 0) + getEyeHeight(player.flags || 0),
+      z: player.z || 0,
+    };
+    const originCheck = validateShotOrigin(authEye, msg.origin, arena);
+    if (originCheck.tampered) {
+      const ac = this.antiCheat.recordViolation(player.id, "ORIGIN_TAMPER", now);
+      if (this._applyAntiCheatAction(player, ac) === "kick") {
+        return { ok: false, code: ERR.CHEAT_DETECTED, message: "Phát hiện gian lận" };
+      }
+    }
+
+    const dirCheck = validateShotDirection(
+      player.yaw || 0,
+      player.pitch || 0,
+      msg.dir,
+      cfg,
+      sentFlags,
+    );
+    if (dirCheck.tampered) {
+      const ac = this.antiCheat.recordViolation(player.id, "AIM_DIR_TAMPER", now);
+      if (this._applyAntiCheatAction(player, ac) === "kick") {
+        return { ok: false, code: ERR.CHEAT_DETECTED, message: "Phát hiện gian lận" };
+      }
+    }
+
     const seed = Number.isInteger(msg.seed)
       ? (msg.seed >>> 0) % 1000000
       : ((now ^ Math.imul(player.id.length + 1, 2654435761)) >>> 0) % 1000000;
@@ -318,122 +455,158 @@ export class Match {
       type: MSG.EVENT_FIRE,
       playerId: player.id,
       weapon: w.id,
-      origin,
-      dir,
+      origin: originCheck.origin,
+      dir: dirCheck.dir,
       seed,
     });
+
+    let hitOutcome = { hit: false };
+    if (!dirCheck.tampered) {
+      const evalTime = clampRewindTimestamp(msg.clientTime, now, player.rttMs || 0);
+      const modeImpl = this.room && this.room.modeImpl;
+      const targets = [];
+      for (const v of this.room.players.values()) {
+        if (v.id === player.id || !v.alive) continue;
+        if (modeImpl && !modeImpl.canDamage(player, v)) continue;
+        if (evalTime < (v.spawnedAt || 0)) continue;
+        const sampled = this.poseHistory.sample(v.id, evalTime, v);
+        if (!sampled || sampled.alive === false) continue;
+        if ((sampled.spawnEpoch || 0) !== (v.spawnEpoch || 0)) continue;
+        targets.push({ ...sampled, id: v.id });
+      }
+
+      const shotRes = resolveAuthoritativeShot({
+        shooterId: player.id,
+        weaponCfg: cfg,
+        origin: originCheck.origin,
+        dir: dirCheck.dir,
+        arena,
+        targets,
+      });
+
+      if (shotRes.hit && shotRes.targetId) {
+        const victim = this.room.players.get(shotRes.targetId);
+        if (victim && victim.alive) {
+          const victimProt = evaluateProtectionTick(victim, this.room.mode, now);
+          if (victimProt.active || isPlayerProtected(victim, now)) {
+            this.room.broadcast({
+              type: MSG.EVENT_HIT,
+              shooterId: player.id,
+              targetId: victim.id,
+              part: "shield",
+              damage: 0,
+              hp: victim.hp,
+              weaponId: cfg.id,
+              dist: Number(shotRes.dist.toFixed(1)),
+              hitPoint: shotRes.hitPoint,
+              iFrames: victimProt.iFrames,
+            });
+            hitOutcome = {
+              hit: true,
+              shielded: true,
+              iFrames: victimProt.iFrames,
+              targetId: victim.id,
+              part: "shield",
+              damage: 0,
+              hp: victim.hp,
+              dist: shotRes.dist,
+              hitPoint: shotRes.hitPoint,
+            };
+          } else {
+            const damage = computeWeaponDamage(cfg, shotRes.part, shotRes.dist);
+            if (damage > 0) {
+              victim.hp = Math.max(0, victim.hp - damage);
+              this.room.broadcast({
+                type: MSG.EVENT_HIT,
+                shooterId: player.id,
+                targetId: victim.id,
+                part: shotRes.part,
+                damage,
+                hp: victim.hp,
+                weaponId: cfg.id,
+                dist: Number(shotRes.dist.toFixed(1)),
+                hitPoint: shotRes.hitPoint,
+              });
+              hitOutcome = {
+                hit: true,
+                targetId: victim.id,
+                part: shotRes.part,
+                damage,
+                hp: victim.hp,
+                dist: shotRes.dist,
+                hitPoint: shotRes.hitPoint,
+              };
+
+              if (victim.hp <= 0) {
+                victim.alive = false;
+                victim.lastDeathPos = { x: victim.x, y: victim.y, z: victim.z };
+                this._cancelReload(victim);
+                victim.flags = 0;
+                victim.prevFlags = 0;
+                victim.ads = false;
+                victim.iFramesUntil = 0;
+                victim.invulnerableUntil = 0;
+                victim.adsProtectStartAt = 0;
+                victim.deaths++;
+                const respawnDelayMs = getSpawnRuleForMode(this.room.mode).respawnDelayMs;
+                victim.respawnAt = now + respawnDelayMs;
+                this.poseHistory.record(victim, now);
+
+                player.kills++;
+                if (shotRes.part === "head") player.headshots++;
+
+                const res = modeImpl ? modeImpl.onKill(this.room, player) : null;
+                this.room.broadcast({
+                  type: MSG.EVENT_KILL,
+                  killerId: player.id,
+                  killer: player.name,
+                  killerTeam: player.team,
+                  killerHp: Math.max(0, Math.round(player.hp)),
+                  killerPos: {
+                    x: Number((player.x || 0).toFixed(2)),
+                    y: Number((player.y || 0).toFixed(2)),
+                    z: Number((player.z || 0).toFixed(2)),
+                  },
+                  victimId: victim.id,
+                  victim: victim.name,
+                  victimTeam: victim.team,
+                  weapon: cfg.name,
+                  weaponId: cfg.id,
+                  head: shotRes.part === "head",
+                  respawnMs: respawnDelayMs,
+                });
+                this.room.broadcast({
+                  type: MSG.MATCH_SCORE,
+                  teamScores: { ...this.room.teamScores },
+                  scoreboard: this.room.getScoreboard(),
+                });
+
+                if (res && res.matchWinner !== undefined) {
+                  this.room.finishMatch(res.matchWinner, now);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
 
     if (w.mag === 0) {
       this.handleReload(player, now);
     }
 
-    return { ok: true, weaponId: w.id, mag: w.mag };
-  }
-
-  handleHit(shooter, msg, now) {
-    if (this.room.state !== ROOM_STATE.PLAYING) {
-      return { ok: false, code: ERR.MATCH_ENDED, message: "Trận đấu đã kết thúc" };
-    }
-    if (!shooter.alive || shooter.pendingHitCredit <= 0) {
-      return { ok: false, code: ERR.INVALID_STATE, message: "Phát bắn không hợp lệ" };
-    }
-
-    const victim = this.room.players.get(String(msg.targetId || ""));
-    if (!victim || !victim.alive) {
-      return { ok: false, code: ERR.INVALID_STATE, message: "Mục tiêu không tồn tại hoặc đã bị hạ" };
-    }
-    if (!this.room.modeImpl.canDamage(shooter, victim)) {
-      return { ok: false, code: ERR.INVALID_STATE, message: "Không thể gây sát thương lên đồng đội" };
-    }
-    if (now < victim.invulnerableUntil) {
-      shooter.pendingHitCredit = 0;
-      this.room.sendTo(shooter.id, {
-        type: MSG.EVENT_HIT,
-        shooterId: shooter.id,
-        targetId: victim.id,
-        part: "shield",
-        damage: 0,
-        hp: victim.hp,
-      });
-      return { ok: true, shielded: true };
-    }
-
-    const weaponCfg = resolveWeaponConfig(shooter.lastFiredWeaponId || shooter.activeWeaponId);
-    const dist = Math.hypot(victim.x - shooter.x, victim.y - shooter.y, victim.z - shooter.z);
-    if (dist > weaponCfg.maxRange) {
-      return { ok: false, code: ERR.INVALID_STATE, message: "Ngoài tầm bắn vũ khí" };
-    }
-
-    // Posture-aware wall occlusion check (crouching lowers both head and torso hitboxes)
-    const arena = this.room.arena;
-    const shooterEyeY = shooter.y + (shooter.flags & FLAG.CROUCH ? 1.12 : 1.7);
-    const victimCrouch = Boolean(victim.flags & FLAG.CROUCH);
-    const victimTorsoY = victim.y + (victimCrouch ? 0.72 : 1.25);
-    const victimHeadY = victim.y + (victimCrouch ? 1.08 : 1.63);
-    const canHitTorso = hasLineOfSight(shooter.x, shooterEyeY, shooter.z, victim.x, victimTorsoY, victim.z, arena);
-    const canHitHead = hasLineOfSight(shooter.x, shooterEyeY, shooter.z, victim.x, victimHeadY, victim.z, arena);
-    if (!canHitTorso && !canHitHead) {
-      return { ok: false, code: ERR.INVALID_STATE, message: "Bị vật cản che khuất" };
-    }
-
-    shooter.pendingHitCredit = 0;
-    const part = msg.part === "head" || msg.part === "limb" ? msg.part : "body";
-    const damage = weaponCfg.damage[part];
-    victim.hp = Math.max(0, victim.hp - damage);
-
-    this.room.broadcast({
-      type: MSG.EVENT_HIT,
-      shooterId: shooter.id,
-      targetId: victim.id,
-      part,
-      damage,
-      hp: victim.hp,
-    });
-
-    if (victim.hp <= 0) {
-      victim.alive = false;
-      this._cancelReload(victim);
-      victim.flags = 0;
-      victim.prevFlags = 0;
-      victim.ads = false;
-      victim.deaths++;
-      victim.respawnAt = now + RESPAWN_DELAY_MS;
-      shooter.kills++;
-      if (part === "head") shooter.headshots++;
-
-      const res = this.room.modeImpl.onKill(this.room, shooter);
-      this.room.broadcast({
-        type: MSG.EVENT_KILL,
-        killerId: shooter.id,
-        killer: shooter.name,
-        killerTeam: shooter.team,
-        victimId: victim.id,
-        victim: victim.name,
-        victimTeam: victim.team,
-        weapon: weaponCfg.name,
-        weaponId: weaponCfg.id,
-        head: part === "head",
-      });
-      this.room.broadcast({
-        type: MSG.MATCH_SCORE,
-        teamScores: { ...this.room.teamScores },
-        scoreboard: this.room.getScoreboard(),
-      });
-
-      if (res && res.matchWinner !== undefined) {
-        this.room.finishMatch(res.matchWinner, now);
-      }
-    }
-
-    return { ok: true, damage, hp: victim.hp };
+    return { ok: true, weaponId: w.id, mag: w.mag, ...hitOutcome };
   }
 
   step(now) {
     if (this.room.state !== ROOM_STATE.PLAYING) return;
 
+    const rule = getSpawnRuleForMode(this.room.mode);
     for (const p of this.room.players.values()) {
       if (p.alive) {
         this.tickWeapon(p, now);
+        evaluateProtectionTick(p, this.room.mode, now);
+        this.poseHistory.record(p, now);
       }
       if (!p.alive && now >= p.respawnAt) {
         this.spawnPlayer(p, now);
@@ -444,10 +617,13 @@ export class Match {
           yaw: p.yaw,
           team: p.team,
           weaponId: p.activeWeaponId,
-          invulnerableMs: INVULNERABLE_MS,
+          invulnerableMs: rule.protectMs,
+          iFramesMs: rule.iFramesMs,
+          reason: p.lastSpawnReason || "normal",
         });
       }
     }
+    this.poseHistory.prune(now);
 
     if (now >= this.matchEndsAt) {
       const winner = this.room.modeImpl.resolveTimeExpiredWinner(this.room);
@@ -464,10 +640,13 @@ export class Match {
       const activeW = p.weapons && p.weapons[p.activeWeaponId];
       const reloading = Boolean(p.alive && activeW && activeW.reloadEndsAt > now);
       const flags = reloading ? ((p.flags || 0) | FLAG.RELOADING) : ((p.flags || 0) & ~FLAG.RELOADING);
+      const prot = p.alive ? evaluateProtectionTick(p, this.room.mode, now) : { active: false, iFrames: false, expiring: false };
       const st =
         (p.alive ? 1 : 0) |
-        (p.alive && now < p.invulnerableUntil ? 2 : 0) |
-        (p.laser ? 4 : 0);
+        (prot.active ? 2 : 0) |
+        (p.laser ? 4 : 0) |
+        (prot.iFrames ? 8 : 0) |
+        (prot.expiring ? 16 : 0);
       const teamCode = p.team === "A" ? 0 : p.team === "B" ? 1 : 2;
       const wCode = SNAPSHOT_WEAPON_CODE[p.activeWeaponId] ?? 0;
       players.push([

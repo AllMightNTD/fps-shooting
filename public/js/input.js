@@ -25,6 +25,7 @@ export class InputController {
     this.adsToggled = false;
     this.adsJustPressed = false;
     this.crouchToggled = false;
+    this.proneToggled = false;
     this.dx = 0;
     this.dy = 0;
     this.wheelDir = 0;
@@ -116,6 +117,11 @@ export class InputController {
         bind.crouch.includes(e.code)
       ) {
         this.crouchToggled = !this.crouchToggled;
+        if (this.crouchToggled) this.proneToggled = false;
+      }
+      if (bind.prone && bind.prone.includes(e.code)) {
+        this.proneToggled = !this.proneToggled;
+        if (this.proneToggled) this.crouchToggled = false;
       }
     });
 
@@ -210,6 +216,15 @@ export class InputController {
       : this.isDown("crouch");
   }
 
+  isProneActive() {
+    if (!this.active || this.textFocusBlocked) return false;
+    return this.proneToggled;
+  }
+
+  setProne(active) {
+    this.proneToggled = Boolean(active);
+  }
+
   isAdsActive() {
     if (!this.active || this.textFocusBlocked) return false;
     return this.settings.get().adsMode === "toggle"
@@ -259,6 +274,7 @@ export class InputController {
     this.adsToggled = false;
     this.adsJustPressed = false;
     this.crouchToggled = false;
+    this.proneToggled = false;
     this.wheelDir = 0;
     this.dx = 0;
     this.dy = 0;

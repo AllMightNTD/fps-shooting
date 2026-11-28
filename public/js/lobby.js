@@ -1,15 +1,17 @@
 /**
  * 3D Tactical Lobby UI Controller:
- * - Main Lobby (Đấu Đơn / Đấu Đội / Luyện Tập) with smooth animated view transitions & 3D card tilt
- * - Practice 3D Map Selection (2 visual map thumbnails: Khu Quân Sự Cũ / Bến Cảng Mưa)
+ * - Main Lobby (Đấu Đơn / Đấu Đội / Luyện Tập) with animated view transitions
+ * - Practice Hub (Đấu với Máy / Sinh tồn Drone)
+ * - Bot Match Configurator (Đấu Đơn FFA / Đấu Đội TDM + 3D Map Cards + Quick Settings Bar)
+ * - Survival Map Selection (2 visual map thumbnails: Khu Quân Sự Cũ / Bến Cảng Mưa)
  * - Filtered LAN Room List (FFA / TDM / All) + Thumbnail map picker inside "+ Tạo phòng"
  */
 
 import { MSG } from "/js/protocol.js";
-import { filterRoomsByMode, normalizeLobbyView } from "./lobby_utils.js";
+import { computeBotTeamSummary, filterRoomsByMode, normalizeLobbyView } from "./lobby_utils.js";
 import { isPrivateOrLocalHost, resolveOnlineShareUrl } from "./net_utils.js";
 
-export { filterRoomsByMode, normalizeLobbyView };
+export { computeBotTeamSummary, filterRoomsByMode, normalizeLobbyView };
 
 function makeEl(tag, cls, text) {
   const node = document.createElement(tag);
@@ -29,6 +31,7 @@ export function createLobbyController({
   net,
   getNickFn,
   onEnterSolo,
+  onEnterBots,
   onSelectSoloMap,
   onViewChange = null,
   isMapCachedFn = null,
@@ -37,6 +40,8 @@ export function createLobbyController({
   const screenLobbyEl = document.getElementById("screenLobby");
   const homeViewEl = document.getElementById("lobbyHomeView");
   const practiceViewEl = document.getElementById("lobbyPracticeView");
+  const survivalViewEl = document.getElementById("lobbySurvivalView");
+  const botViewEl = document.getElementById("lobbyBotView");
   const lanViewEl = document.getElementById("lobbyLanView");
 
   const tbody = document.getElementById("lobbyRoomBody");
@@ -56,13 +61,29 @@ export function createLobbyController({
   const lanModeHintEl = document.getElementById("lanModeHint");
   const tabButtons = Array.from(document.querySelectorAll(".lanModeTab"));
   const practiceCards = Array.from(document.querySelectorAll("#practiceMapGrid .mapThumbCard"));
+  const botMapCards = Array.from(document.querySelectorAll("#botMapGrid .mapThumbCard"));
   const createMapCards = Array.from(document.querySelectorAll("#createMapPicker .createMapThumb"));
   const milReadyChip = document.getElementById("milReadyChip");
   const harborReadyChip = document.getElementById("harborReadyChip");
+  const botMilReadyChip = document.getElementById("botMilReadyChip");
+  const botHarborReadyChip = document.getElementById("botHarborReadyChip");
 
-  let activeView = "home"; // "home" | "practice" | "lan"
+  const botModeBtns = Array.from(document.querySelectorAll("[data-bot-mode]"));
+  const botDiffBtns = Array.from(document.querySelectorAll("[data-bot-diff]"));
+  const botCountEl = document.getElementById("botCountSelect");
+  const botKillsEl = document.getElementById("botKillsSelect");
+  const botTeamSummaryEl = document.getElementById("botTeamSummary");
+
+  let activeView = "home"; // "home" | "practice" | "survival" | "bot" | "lan"
   let activeModeFilter = "TDM"; // "FFA" | "TDM" | "ALL"
   let selectedPracticeMap = "military";
+  let botConfig = {
+    mode: "TDM",
+    mapId: "military",
+    difficulty: "medium",
+    botCount: 5,
+    killLimit: 30,
+  };
   let pendingJoinRoomId = null;
   let currentRooms = [];
 
@@ -70,6 +91,7 @@ export function createLobbyController({
     const qpMap = new URLSearchParams(location.search).get("map");
     if (qpMap === "harbor" || qpMap === "military") {
       selectedPracticeMap = qpMap;
+      botConfig.mapId = qpMap;
       if (soloMapEl) soloMapEl.value = qpMap;
       if (createMapEl) createMapEl.value = qpMap;
     }
@@ -97,6 +119,40 @@ export function createLobbyController({
     }
   }
 
+  function syncBotSetupUI() {
+    const harborCached = typeof isMapCachedFn === "function" ? isMapCachedFn("harbor") : false;
+    for (const btn of botModeBtns) {
+      const isSel = btn.dataset.botMode === botConfig.mode;
+      btn.classList.toggle("selected", isSel);
+      btn.setAttribute("aria-pressed", isSel ? "true" : "false");
+    }
+    for (const btn of botDiffBtns) {
+      const isSel = btn.dataset.botDiff === botConfig.difficulty;
+      btn.classList.toggle("active", isSel);
+      btn.setAttribute("aria-pressed", isSel ? "true" : "false");
+    }
+    for (const card of botMapCards) {
+      const isSel = card.dataset.botMap === botConfig.mapId;
+      card.classList.toggle("selected", isSel);
+      card.setAttribute("aria-pressed", isSel ? "true" : "false");
+    }
+    if (botMilReadyChip) {
+      botMilReadyChip.textContent = botConfig.mapId === "military" ? "ĐANG CHỌN • SẴN SÀNG" : "SẴN SÀNG";
+    }
+    if (botHarborReadyChip) {
+      botHarborReadyChip.textContent =
+        botConfig.mapId === "harbor"
+          ? (harborCached ? "ĐANG CHỌN • SẴN SÀNG" : "ĐANG NẠP...")
+          : (harborCached ? "ĐÃ SẴN SÀNG" : "CHỌN ĐỂ NẠP");
+    }
+    if (botCountEl) botCountEl.value = String(botConfig.botCount);
+    if (botKillsEl) botKillsEl.value = String(botConfig.killLimit);
+    if (botTeamSummaryEl) {
+      const sum = computeBotTeamSummary({ mode: botConfig.mode, botCount: botConfig.botCount });
+      botTeamSummaryEl.textContent = sum.summaryText;
+    }
+  }
+
   function syncCreateMapUI(mapId) {
     const safeMap = mapId === "harbor" ? "harbor" : "military";
     if (createMapEl) createMapEl.value = safeMap;
@@ -119,8 +175,11 @@ export function createLobbyController({
     if (screenLobbyEl) screenLobbyEl.dataset.lobbyView = safe;
     if (homeViewEl) homeViewEl.classList.toggle("active", safe === "home");
     if (practiceViewEl) practiceViewEl.classList.toggle("active", safe === "practice");
+    if (survivalViewEl) survivalViewEl.classList.toggle("active", safe === "survival");
+    if (botViewEl) botViewEl.classList.toggle("active", safe === "bot");
     if (lanViewEl) lanViewEl.classList.toggle("active", safe === "lan");
-    if (safe === "practice") syncPracticeCardUI();
+    if (safe === "survival") syncPracticeCardUI();
+    if (safe === "bot") syncBotSetupUI();
     if (typeof onViewChange === "function") onViewChange(safe);
   }
 
@@ -222,11 +281,15 @@ export function createLobbyController({
     }
   }
 
-  // Home View Navigation (ĐẤU ĐƠN / ĐẤU ĐỘI / LUYỆN TẬP)
+  // Home View Navigation
   const btnModeFFA = document.getElementById("btnModeFFA");
   const btnModeTDM = document.getElementById("btnModeTDM");
   const btnModePractice = document.getElementById("btnModePractice");
   const btnPracticeBack = document.getElementById("btnPracticeBack");
+  const btnPracticeBots = document.getElementById("btnPracticeBots");
+  const btnPracticeSurvival = document.getElementById("btnPracticeSurvival");
+  const btnSurvivalBack = document.getElementById("btnSurvivalBack");
+  const btnBotBack = document.getElementById("btnBotBack");
   const btnLanBack = document.getElementById("btnLanBack");
 
   if (btnModeFFA) {
@@ -241,16 +304,12 @@ export function createLobbyController({
       setLobbyView("lan");
     };
   }
-  if (btnModePractice) {
-    btnModePractice.onclick = () => {
-      setLobbyView("practice");
-    };
-  }
-  if (btnPracticeBack) {
-    btnPracticeBack.onclick = () => {
-      setLobbyView("home");
-    };
-  }
+  if (btnModePractice) btnModePractice.onclick = () => setLobbyView("practice");
+  if (btnPracticeBack) btnPracticeBack.onclick = () => setLobbyView("home");
+  if (btnPracticeBots) btnPracticeBots.onclick = () => setLobbyView("bot");
+  if (btnPracticeSurvival) btnPracticeSurvival.onclick = () => setLobbyView("survival");
+  if (btnSurvivalBack) btnSurvivalBack.onclick = () => setLobbyView("practice");
+  if (btnBotBack) btnBotBack.onclick = () => setLobbyView("practice");
   if (btnLanBack) {
     btnLanBack.onclick = () => {
       if (createForm) createForm.style.display = "none";
@@ -261,9 +320,9 @@ export function createLobbyController({
     btn.onclick = () => setModeFilter(btn.dataset.filter || "ALL");
   }
 
-  // Practice Map Thumbnail Selection & Instant Launch
+  // Survival Map Selection & Instant Launch
   const btnSoloMode = document.getElementById("btnSoloMode");
-  const defaultSoloBtnText = btnSoloMode ? btnSoloMode.textContent : "BẮT ĐẦU LUYỆN TẬP";
+  const defaultSoloBtnText = btnSoloMode ? btnSoloMode.textContent : "BẮT ĐẦU SINH TỒN";
   let soloMapSwitchToken = 0;
   let isSwitchingSoloMap = false;
 
@@ -297,9 +356,7 @@ export function createLobbyController({
       })
       .catch((err) => {
         console.error("Solo map switch failed:", err);
-        if (typeof onError === "function") {
-          onError("Không thể chuyển bản đồ, vui lòng thử lại.");
-        }
+        if (typeof onError === "function") onError("Không thể chuyển bản đồ, vui lòng thử lại.");
       })
       .finally(() => {
         if (token !== soloMapSwitchToken) return;
@@ -323,6 +380,91 @@ export function createLobbyController({
     btnSoloMode.onclick = () => {
       if (isSwitchingSoloMap) return;
       onEnterSolo(selectedPracticeMap);
+    };
+  }
+
+  // Bot Mode Configuration & Launch
+  const btnBotStart = document.getElementById("btnBotStart");
+  const defaultBotBtnText = btnBotStart ? btnBotStart.textContent : "VÀO TRẬN ĐẤU MÁY";
+  let botMapSwitchToken = 0;
+  let isSwitchingBotMap = false;
+
+  function selectBotMap(targetMap, triggerLaunch = false) {
+    const safeMap = targetMap === "harbor" ? "harbor" : "military";
+    const alreadySelected = botConfig.mapId === safeMap;
+    botConfig.mapId = safeMap;
+    syncBotSetupUI();
+
+    if (alreadySelected && typeof isMapCachedFn === "function" && isMapCachedFn(safeMap)) {
+      if (triggerLaunch && typeof onEnterBots === "function") onEnterBots({ ...botConfig });
+      return Promise.resolve();
+    }
+    if (typeof onSelectSoloMap !== "function") {
+      if (triggerLaunch && typeof onEnterBots === "function") onEnterBots({ ...botConfig });
+      return Promise.resolve();
+    }
+
+    const token = ++botMapSwitchToken;
+    isSwitchingBotMap = true;
+    if (btnBotStart) {
+      btnBotStart.disabled = true;
+      btnBotStart.textContent = "Đang tải bản đồ...";
+    }
+    return Promise.resolve(onSelectSoloMap(safeMap))
+      .then(() => {
+        if (token === botMapSwitchToken) {
+          syncBotSetupUI();
+          if (triggerLaunch && typeof onEnterBots === "function") onEnterBots({ ...botConfig });
+        }
+      })
+      .catch((err) => {
+        console.error("Bot map switch failed:", err);
+        if (typeof onError === "function") onError("Không thể chuyển bản đồ, vui lòng thử lại.");
+      })
+      .finally(() => {
+        if (token !== botMapSwitchToken) return;
+        isSwitchingBotMap = false;
+        if (btnBotStart) {
+          btnBotStart.disabled = false;
+          btnBotStart.textContent = defaultBotBtnText;
+        }
+        syncBotSetupUI();
+      });
+  }
+
+  for (const btn of botModeBtns) {
+    btn.onclick = () => {
+      botConfig.mode = btn.dataset.botMode === "FFA" ? "FFA" : "TDM";
+      botConfig.killLimit = botConfig.mode === "FFA" ? 20 : 30;
+      syncBotSetupUI();
+    };
+  }
+  for (const btn of botDiffBtns) {
+    btn.onclick = () => {
+      botConfig.difficulty = btn.dataset.botDiff || "medium";
+      syncBotSetupUI();
+    };
+  }
+  if (botCountEl) {
+    botCountEl.addEventListener("change", () => {
+      botConfig.botCount = Number(botCountEl.value) || 5;
+      syncBotSetupUI();
+    });
+  }
+  if (botKillsEl) {
+    botKillsEl.addEventListener("change", () => {
+      botConfig.killLimit = Number(botKillsEl.value) || 30;
+      syncBotSetupUI();
+    });
+  }
+  for (const card of botMapCards) {
+    card.onclick = () => selectBotMap(card.dataset.botMap, false);
+    card.ondblclick = () => selectBotMap(card.dataset.botMap, true);
+  }
+  if (btnBotStart) {
+    btnBotStart.onclick = () => {
+      if (isSwitchingBotMap || typeof onEnterBots !== "function") return;
+      onEnterBots({ ...botConfig });
     };
   }
 
@@ -414,10 +556,13 @@ export function createLobbyController({
     setLobbyView,
     setModeFilter,
     selectPracticeMap,
+    selectBotMap,
+    getBotConfig: () => ({ ...botConfig }),
     getState: () => ({
       activeView,
       activeModeFilter,
       selectedPracticeMap,
+      botConfig: { ...botConfig },
     }),
     getRooms: () => currentRooms,
   };
