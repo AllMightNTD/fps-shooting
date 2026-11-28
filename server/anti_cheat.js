@@ -3,7 +3,7 @@
  * multi-layer anti-cheat score tracker.
  */
 
-import { forwardFromYawPitch } from "./hitreg.js";
+import { EYE_HEIGHT_STAND, forwardFromYawPitch } from "./hitreg.js";
 import { hasLineOfSight } from "./spawn.js";
 import { FLAG, computeWeaponSpread } from "./weapons.js";
 
@@ -35,7 +35,7 @@ function finiteVec3(v) {
 export function validateShotOrigin(authEye, clientOrigin, arena) {
   const safeEye = {
     x: Number.isFinite(authEye?.x) ? authEye.x : 0,
-    y: Number.isFinite(authEye?.y) ? authEye.y : 1.7,
+    y: Number.isFinite(authEye?.y) ? authEye.y : EYE_HEIGHT_STAND,
     z: Number.isFinite(authEye?.z) ? authEye.z : 0,
   };
   if (clientOrigin === null || clientOrigin === undefined) {

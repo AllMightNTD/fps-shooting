@@ -30,12 +30,12 @@ export function normalizeLobbyView(viewName) {
  * Summarize offline Bot match roster sizes cleanly for TDM (balanced NvN) and FFA.
  * @param {{ mode?: string, botCount?: number }} opts
  */
-export function computeBotTeamSummary({ mode = "TDM", botCount = 5 } = {}) {
+export function computeBotTeamSummary({ mode = "TDM", botCount = 15 } = {}) {
   const safeMode = mode === "FFA" ? "FFA" : "TDM";
   const raw = Number(botCount);
-  let count = Number.isFinite(raw) ? Math.max(1, Math.min(11, Math.round(raw))) : 5;
+  let count = Number.isFinite(raw) ? Math.max(1, Math.min(17, Math.round(raw))) : 15;
   if (safeMode === "TDM" && count % 2 === 0) {
-    count = count < 11 ? count + 1 : 9;
+    count = count < 17 ? count + 1 : 15;
   }
   if (safeMode === "TDM") {
     const perSide = (count + 1) / 2;

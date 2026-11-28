@@ -532,44 +532,54 @@ export function createHudUi({
       return;
     }
 
-    _radarEnemyMeshes.length = 0;
-    for (const av of remotePlayers.values()) {
-      if (!av.alive) continue;
-      if (currentMode === "TDM" && av.team === meTeam) continue;
-      for (let i = 0; i < av.hitMeshes.length; i++) _radarEnemyMeshes.push(av.hitMeshes[i]);
-    }
-    ray.far = 160;
-    ray.setFromCamera({ x: 0, y: 0 }, cam);
-    let hover = null;
-    if (activeCollision) {
-      const targetHit = _radarEnemyMeshes.length ? ray.intersectObjects(_radarEnemyMeshes, false)[0] : null;
-      const worldHit = activeCollision.raycastShot(
-        ray.ray.origin.x,
-        ray.ray.origin.y,
-        ray.ray.origin.z,
-        ray.ray.direction.x,
-        ray.ray.direction.y,
-        ray.ray.direction.z,
-        ray.far,
-      );
-      if (targetHit && (!worldHit || targetHit.distance <= worldHit.dist)) {
-        hover = targetHit;
-      }
-    } else {
-      _radarAllTargets.length = 0;
-      if (ground) _radarAllTargets.push(ground);
-      for (let i = 0; i < solid.length; i++) _radarAllTargets.push(solid[i]);
-      for (let i = 0; i < _radarEnemyMeshes.length; i++) _radarAllTargets.push(_radarEnemyMeshes[i]);
-      hover = ray.intersectObjects(_radarAllTargets, false)[0];
-    }
-    const nextEnemyHover = Boolean(hover && hover.object.userData.hitTarget);
-    if (nextEnemyHover !== _crossEnemyHover) {
-      _crossEnemyHover = nextEnemyHover;
-      $("cross").classList.toggle("targetEnemy", nextEnemyHover);
-    }
-
+    // Throttle both enemy hover raycast & 2D minimap redraw cleanly to 20Hz (zero per-frame raycast cost, skip while scoped)
     if (nowMs - _lastRadarDrawMs < 50) return;
     _lastRadarDrawMs = nowMs;
+
+    const scopeEl = $("sniperScope");
+    const isScopedView = Boolean(scopeEl && scopeEl.style.display === "block");
+    if (isScopedView) {
+      if (_crossEnemyHover) {
+        _crossEnemyHover = false;
+        $("cross").classList.remove("targetEnemy");
+      }
+    } else {
+      _radarEnemyMeshes.length = 0;
+      for (const av of remotePlayers.values()) {
+        if (!av.alive) continue;
+        if (currentMode === "TDM" && av.team === meTeam) continue;
+        for (let i = 0; i < av.hitMeshes.length; i++) _radarEnemyMeshes.push(av.hitMeshes[i]);
+      }
+      ray.far = 160;
+      ray.setFromCamera({ x: 0, y: 0 }, cam);
+      let hover = null;
+      if (activeCollision) {
+        const targetHit = _radarEnemyMeshes.length ? ray.intersectObjects(_radarEnemyMeshes, false)[0] : null;
+        const worldHit = activeCollision.raycastShot(
+          ray.ray.origin.x,
+          ray.ray.origin.y,
+          ray.ray.origin.z,
+          ray.ray.direction.x,
+          ray.ray.direction.y,
+          ray.ray.direction.z,
+          ray.far,
+        );
+        if (targetHit && (!worldHit || targetHit.distance <= worldHit.dist)) {
+          hover = targetHit;
+        }
+      } else {
+        _radarAllTargets.length = 0;
+        if (ground) _radarAllTargets.push(ground);
+        for (let i = 0; i < solid.length; i++) _radarAllTargets.push(solid[i]);
+        for (let i = 0; i < _radarEnemyMeshes.length; i++) _radarAllTargets.push(_radarEnemyMeshes[i]);
+        hover = ray.intersectObjects(_radarAllTargets, false)[0];
+      }
+      const nextEnemyHover = Boolean(hover && hover.object.userData.hitTarget);
+      if (nextEnemyHover !== _crossEnemyHover) {
+        _crossEnemyHover = nextEnemyHover;
+        $("cross").classList.toggle("targetEnemy", nextEnemyHover);
+      }
+    }
 
     const canvas = $("radarCanvas");
     if (!canvas) return;

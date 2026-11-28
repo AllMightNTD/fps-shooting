@@ -108,13 +108,13 @@ def main() -> int:
                 timeout=8000,
             )
             tdm_summary = page.text_content("#botTeamSummary") or ""
-            assert "3v3" in tdm_summary, f"Unexpected default TDM summary: {tdm_summary}"
+            assert "8v8" in tdm_summary, f"Unexpected default TDM summary: {tdm_summary}"
 
             # Test FFA toggle & revert to TDM + Hard difficulty
             page.click("#btnBotModeFFA")
             page.wait_for_timeout(120)
             ffa_summary = page.text_content("#botTeamSummary") or ""
-            assert "5 Bot" in ffa_summary, f"Unexpected FFA summary: {ffa_summary}"
+            assert "15 Bot" in ffa_summary, f"Unexpected FFA summary: {ffa_summary}"
             page.click("#btnBotModeTDM")
             page.click("[data-bot-diff='hard']")
             page.select_option("#botKillsSelect", "15")
@@ -125,23 +125,23 @@ def main() -> int:
                 "state": page.evaluate("() => window.__fpsApp.lobby.getState()"),
             }
 
-            # 2. Launch TDM Bot Match
+            # 2. Launch TDM Bot Match (8v8 default = 15 Bots)
             page.click("#btnBotStart")
             page.wait_for_function(
                 """() => {
                   const st = window.__fpsApp.game.getState();
-                  return st.engineMode === 'bots' && st.activeState === 'play' && st.getRemotePlayers().size === 5;
+                  return st.engineMode === 'bots' && st.activeState === 'play' && st.getRemotePlayers().size === 15;
                 }""",
-                timeout=12000,
+                timeout=14000,
             )
 
             # Wait briefly for SWAT soldier.glb rigs to finish attaching
             page.wait_for_function(
                 """() => {
                   const remotes = Array.from(window.__fpsApp.game.getState().getRemotePlayers().values());
-                  return remotes.length === 5 && remotes.every((r) => r.rig && r.rig.isSkinned && r.shieldDome && r.shieldBaseRing);
+                  return remotes.length === 15 && remotes.every((r) => r.rig && r.rig.isSkinned && r.shieldDome === null && r.shieldBaseRing === null);
                 }""",
-                timeout=10000,
+                timeout=12000,
             )
 
             # Check initial Spawn Protection + iFrames + #spawnProtectBar + #shieldVignette
@@ -199,15 +199,15 @@ def main() -> int:
                   return { enemyId: enemy.id };
                 }"""
             )
-            # Sample blink state across frames so we see shieldDome + shieldBaseRing visible & cyan blinking
+            # Sample CS2 direct-body blink state across frames (translucent protected shader pulsing without white boxes)
             page.wait_for_function(
                 f"""() => {{
                   const av = window.__fpsApp.game.getState().getRemotePlayers().get({json.dumps(shield_probe["enemyId"])});
-                  return av && av.shieldDome && av.shieldDome.visible === true && av.shieldBaseRing && av.shieldBaseRing.visible === true;
+                  const matName = av && av.rig && av.rig.bodyMeshes && av.rig.bodyMeshes[0] && av.rig.bodyMeshes[0].material ? av.rig.bodyMeshes[0].material.name : '';
+                  return av && av.shieldBlinkActive === true && matName.includes('_Protected');
                 }}""",
                 timeout=4000,
             )
-            page.wait_for_timeout(120)
             page.screenshot(path=os.path.join(out_dir, "02_tdm_bot_shield_blink.png"))
 
             # Fire at shielded enemy SWAT bot in the same tick (zero movement drift) -> human protection cancels, enemy takes 0 dmg + hmShield triggers!
@@ -269,13 +269,35 @@ def main() -> int:
                   window.__fpsApp.game.shoot();
                 }}"""
             )
-            page.wait_for_function(
-                f"""() => {{
-                  const enemy = window.__fpsApp.game.getState().getBotMatch().players.get({json.dumps(shield_probe["enemyId"])});
-                  return enemy && enemy.alive === false && window.__fpsApp.game.getState().getBotMatch().getHuman().kills >= 1;
-                }}""",
-                timeout=4000,
-            )
+            try:
+                page.wait_for_function(
+                    f"""() => {{
+                      const enemy = window.__fpsApp.game.getState().getBotMatch().players.get({json.dumps(shield_probe["enemyId"])});
+                      return enemy && enemy.alive === false && window.__fpsApp.game.getState().getBotMatch().getHuman().kills >= 1;
+                    }}""",
+                    timeout=4000,
+                )
+            except Exception as exc:
+                kill_diag = page.evaluate(
+                    f"""() => {{
+                      const st = window.__fpsApp.game.getState();
+                      const m = st.getBotMatch();
+                      const h = m.getHuman();
+                      const e = m.players.get({json.dumps(shield_probe["enemyId"])});
+                      const w = st.getWeapons();
+                      return {{
+                        meAlive: st.getMe().meAlive,
+                        hp: st.getMe().hp,
+                        human: {{ alive: h.alive, hp: h.hp, kills: h.kills, x: h.x, y: h.y, z: h.z }},
+                        enemy: e ? {{ alive: e.alive, hp: e.hp, x: e.x, y: e.y, z: e.z, flags: e.flags, inv: e.invulnerableUntil, iF: e.iFramesUntil }} : null,
+                        weapon: w.activeWeaponId,
+                        mag: w.weapons[w.activeWeaponId]?.mag,
+                        nextFireAt: w.weapons[w.activeWeaponId]?.nextFireAt,
+                        nowMs: performance.now(),
+                      }};
+                    }}"""
+                )
+                raise RuntimeError(f"Kill wait failed: {exc} | diag={json.dumps(kill_diag)}") from exc
 
             # Simulate human getting eliminated -> verify Death Cam / Respawn Card -> automatic Respawn with fresh protection
             page.evaluate(
@@ -385,9 +407,9 @@ def main() -> int:
                 """() => {
                   const st = window.__fpsApp.game.getState();
                   const m = st.getBotMatch();
-                  return st.engineMode === 'bots' && m && m.config.mode === 'FFA' && st.getRemotePlayers().size === 5;
+                  return st.engineMode === 'bots' && m && m.config.mode === 'FFA' && st.getRemotePlayers().size === 15;
                 }""",
-                timeout=10000,
+                timeout=12000,
             )
             ffa_info = page.evaluate(
                 """() => {
@@ -405,6 +427,59 @@ def main() -> int:
             assert ffa_info["mode"] == "FFA" and ffa_info["protectMs"] == 2000 and ffa_info["respawnMs"] == 2000
             page.screenshot(path=os.path.join(out_dir, "04_ffa_bots_match.png"))
             report["ffa_bot_match"] = ffa_info
+
+            # 4. Measure live 6-bot FFA frame pacing + AWM Scope actually OPEN via RMB click (no CSS blur filter!)
+            page.evaluate(
+                """() => {
+                  const st = window.__fpsApp.game.getState();
+                  st.setTestCombat({ locked: true });
+                  // Keep human invincible for clean steady scope benchmark in crowded FFA
+                  const h = st.getBotMatch().getHuman();
+                  h.invulnerableUntil = performance.now() + 8000;
+                }"""
+            )
+            page.keyboard.press("Digit3")
+            page.wait_for_timeout(860)
+            page.mouse.click(640, 360, button="right")
+            page.wait_for_function(
+                "() => getComputedStyle(document.getElementById('sniperScope')).display === 'block'",
+                timeout=4000,
+            )
+            scope_perf = page.evaluate(
+                """() => new Promise((resolve) => {
+                  const frames = [];
+                  let last = performance.now();
+                  function sample(now) {
+                    frames.push(now - last);
+                    last = now;
+                    if (frames.length < 44) {
+                      requestAnimationFrame(sample);
+                    } else {
+                      // Skip initial Playwright IPC callback frame before rAF loop settles
+                      const steady = frames.slice(2);
+                      const avgMs = steady.reduce((a, b) => a + b, 0) / steady.length;
+                      const sorted = steady.slice().sort((a, b) => a - b);
+                      const p95Ms = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))];
+                      const retWrap = document.getElementById('scopeReticleWrap');
+                      const scopeEl = document.getElementById('sniperScope');
+                      resolve({
+                        avgFrameMs: Number(avgMs.toFixed(2)),
+                        p95FrameMs: Number(p95Ms.toFixed(2)),
+                        estFps: Number((1000 / Math.max(1, avgMs)).toFixed(1)),
+                        framesMs: frames.map((v) => Number(v.toFixed(1))),
+                        scopeDisplay: scopeEl ? getComputedStyle(scopeEl).display : '',
+                        reticleFilter: retWrap ? retWrap.style.filter : '',
+                      });
+                    }
+                  }
+                  requestAnimationFrame(sample);
+                })"""
+            )
+            assert scope_perf["scopeDisplay"] == "block", f"AWM Scope did not open cleanly: {scope_perf}"
+            assert scope_perf["reticleFilter"] == "", f"Per-frame CSS filter blur must stay removed: {scope_perf}"
+            assert scope_perf["avgFrameMs"] < 25.0, f"AWM Scope frameMs too high: {scope_perf}"
+            page.screenshot(path=os.path.join(out_dir, "05_ffa_awm_scope.png"))
+            report["ffa_awm_scope_perf"] = scope_perf
 
             tracker.assert_clean("e2e_complete")
             report["errors_clean"] = True

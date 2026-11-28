@@ -21,7 +21,17 @@ import {
 } from "/js/weapons.js";
 import { createBotMatchController } from "/js/bot_ai.js";
 import { MILITARY_COLLIDERS } from "/js/military_map_data.js";
-import { SPAWN_RULES, generateSpawnPoints, getSpawnRuleForMode } from "/js/spawn_rules.js";
+import {
+  CROUCH_UP_CLEARANCE,
+  EYE_HEIGHT_CROUCH,
+  EYE_HEIGHT_PRONE,
+  EYE_HEIGHT_STAND,
+  PLAYER_RADIUS,
+  SPAWN_RULES,
+  STAND_UP_CLEARANCE,
+  generateSpawnPoints,
+  getSpawnRuleForMode,
+} from "/js/spawn_rules.js";
 import { createMilitaryMapLoader } from "/js/map_loader.js";
 import {
   collectSceneTextures,
@@ -81,9 +91,9 @@ const FIXED_DT = 1 / 60;
 const JUMP_BUFFER_MS = 100;
 const COYOTE_TIME_MS = 80;
 const JUMP_COOLDOWN_MS = 300;
-const EYE_STAND = 1.70;
-const EYE_CROUCH = 1.12;
-const EYE_PRONE = 0.42;
+const EYE_STAND = EYE_HEIGHT_STAND;
+const EYE_CROUCH = EYE_HEIGHT_CROUCH;
+const EYE_PRONE = EYE_HEIGHT_PRONE;
 const RING_CIRCUMFERENCE = 106.81;
 const DEG2RAD = Math.PI / 180;
 const RAD2DEG = 180 / Math.PI;
@@ -274,8 +284,9 @@ export function createGameEngine({
   const flashL = new THREE.PointLight(0xffbe6a, 0, 6.5, 2);
   muz.position.set(0, 0.02, -0.615);
   laserOrigin.position.set(0.046, 0.025, -0.35);
-  flashL.position.set(0, 0.02, -0.68);
-  gun.add(muz, laserOrigin, flashL);
+  flashL.position.set(0.15, -0.12, -0.95);
+  // Keep flashL parented on vmCam (not gun) so hiding gun during AWM Scope / death never changes NUM_POINT_LIGHTS!
+  gun.add(muz, laserOrigin);
 
   const glowTex = tex(64, 64, (g, w, h) => {
     const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
@@ -309,7 +320,7 @@ export function createGameEngine({
   vmFill.position.set(0.45, -0.2, -0.1);
   const vmRim = new THREE.PointLight(0xffc27a, 0.26, 2.2, 1.3);
   vmRim.position.set(0.32, 0.38, -0.65);
-  vmCam.add(vmKey, vmFill, vmRim, gun);
+  vmCam.add(vmKey, vmFill, vmRim, gun, flashL);
   gun.traverse((o) => o.layers.set(VIEW_LAYER));
   S.traverse((o) => { if (o.isLight) o.layers.enableAll(); });
   vmKey.layers.set(VIEW_LAYER);
@@ -364,6 +375,7 @@ export function createGameEngine({
 
   let isBootstrapped = false;
   let freezeVfxClock = false;
+  let testSpecCam = null;
   let loopStarted = false;
 
   function buildBotArenaForMap(mapId) {
@@ -406,12 +418,13 @@ export function createGameEngine({
   }
 
   let yaw = 0, pitch = 0, vy = 0, velX = 0, velZ = 0, eyeHeight = EYE_STAND;
-  let crouched = false, prone = false, grounded = true, onLadder = false, isSprinting = false, sprintBrokenUntilShiftUp = false;
+  let crouched = false, prone = false, grounded = true, prevGrounded = true, landDip = 0, onLadder = false, isSprinting = false, sprintBrokenUntilShiftUp = false;
   let lastGroundedAt = 0, jumpBufferedUntil = 0, nextJumpAllowedAt = 0, physicsAccum = 0;
   let bob = 0, curFlags = 0, laserOn = false;
   let lastInputSentAt = 0, lastSentFlags = 0, nextHeartbeatAt = 0, lastStepIdx = 0, lastHudSyncMs = 0;
+  const _botSnapCache = { players: [], teamScores: { A: 0, B: 0 } };
 
-  function sendLanState(nowMs, mvRatio = Math.hypot(velX, velZ) > 0.25 ? 1 : 0) {
+  function sendLanState(nowMs, mvRatio = 0) {
     lastInputSentAt = nowMs;
     lastSentFlags = curFlags;
     net.send(MSG.STATE, {
@@ -419,7 +432,7 @@ export function createGameEngine({
       yaw: +yaw.toFixed(4),
       pitch: +pitch.toFixed(4),
       flags: curFlags,
-      anim: { mv: mvRatio ? (isSprinting ? 1.4 : prone ? 0.55 : crouched ? 0.65 : 1) : 0, laser: laserOn },
+      anim: { mv: +Math.max(0, Math.min(1.5, mvRatio)).toFixed(2), laser: laserOn },
     });
   }
 
@@ -1077,12 +1090,13 @@ export function createGameEngine({
   // ---------- 60Hz Physics & Main Loop ----------
   const clock = new THREE.Clock();
 
-  function canRiseTo(targetHeight = 1.85) {
+  function canRiseTo(targetHeight = STAND_UP_CLEARANCE) {
+    const checkRadius = PLAYER_RADIUS - 0.03;
     const activeCollision = sceneMgr.getActiveCollision();
-    if (activeCollision) return activeCollision.canStandUp(P.x, P.y, P.z, 0.42, targetHeight);
+    if (activeCollision) return activeCollision.canStandUp(P.x, P.y, P.z, checkRadius, targetHeight);
     const minCheckY = targetHeight < 1.5 ? 0.52 : 1.05;
     for (const c of cols) {
-      if (P.x >= c.x0 - 0.42 && P.x <= c.x1 + 0.42 && P.z >= c.z0 - 0.42 && P.z <= c.z1 + 0.42) {
+      if (P.x >= c.x0 - checkRadius && P.x <= c.x1 + checkRadius && P.z >= c.z0 - checkRadius && P.z <= c.z1 + checkRadius) {
         const baseY = c.y0 || 0;
         if (baseY > P.y + minCheckY && baseY < P.y + targetHeight) return false;
       }
@@ -1095,7 +1109,7 @@ export function createGameEngine({
   }
 
   function canStandUp() {
-    return canRiseTo(1.85);
+    return canRiseTo(STAND_UP_CLEARANCE);
   }
 
   function stepPhysicsFixed(dtFixed, nowMs) {
@@ -1134,14 +1148,14 @@ export function createGameEngine({
         prone = false;
         crouched = false;
         input.setProne(false);
-      } else if (canRiseTo(1.28)) {
+      } else if (canRiseTo(CROUCH_UP_CLEARANCE)) {
         prone = false;
         crouched = true;
         input.setProne(false);
       }
     } else if (wantsCrouchRaw) {
       if (prone) {
-        if (canRiseTo(1.28)) {
+        if (canRiseTo(CROUCH_UP_CLEARANCE)) {
           prone = false;
           crouched = true;
           input.setProne(false);
@@ -1160,7 +1174,7 @@ export function createGameEngine({
           prone = false;
           crouched = false;
           input.setProne(false);
-        } else if (canRiseTo(1.28)) {
+        } else if (canRiseTo(CROUCH_UP_CLEARANCE)) {
           prone = false;
           crouched = true;
           input.setProne(false);
@@ -1236,6 +1250,8 @@ export function createGameEngine({
 
     P.x += velX * dtFixed;
     P.z += velZ * dtFixed;
+    const wasGrounded = grounded;
+    const preImpactVy = vy;
     const activeCollision = sceneMgr.getActiveCollision();
     if (activeCollision) {
       const mState = { x: P.x, y: P.y, z: P.z, vy, grounded, onLadder };
@@ -1246,7 +1262,7 @@ export function createGameEngine({
           jumpHeld: activeInput && !chatOpen && input.isDown("jump"),
           crouched,
           prone,
-          radius: 0.45,
+          radius: PLAYER_RADIUS,
         },
         dtFixed,
       );
@@ -1264,23 +1280,32 @@ export function createGameEngine({
       } else {
         grounded = false;
       }
+      const rSq = PLAYER_RADIUS * PLAYER_RADIUS;
       for (const c of cols) {
         const dx = P.x - Math.max(c.x0, Math.min(P.x, c.x1));
         const dz = P.z - Math.max(c.z0, Math.min(P.z, c.z1));
         const d2 = dx * dx + dz * dz;
-        if (d2 < 0.2025 && P.y < c.y1) {
+        if (d2 < rSq && P.y < c.y1) {
           const d = Math.sqrt(d2) || 0.001;
-          P.x += (dx / d) * (0.45 - d);
-          P.z += (dz / d) * (0.45 - d);
+          P.x += (dx / d) * (PLAYER_RADIUS - d);
+          P.z += (dz / d) * (PLAYER_RADIUS - d);
         }
       }
       P.x = Math.max(-48, Math.min(48, P.x));
       P.z = Math.max(-48, Math.min(48, P.z));
     }
 
-    if (hasMove && grounded) {
-      bob += speed * dtFixed;
-      const stepIdx = Math.floor(bob / 1.55);
+    if (!wasGrounded && grounded && preImpactVy < -2.4) {
+      landDip = Math.min(0.16, Math.abs(preImpactVy) * 0.018);
+    }
+    prevGrounded = grounded;
+    landDip *= Math.exp(-15 * dtFixed);
+
+    const actualHorizSpeed = Math.hypot(velX, velZ);
+    if (actualHorizSpeed > 0.25 && grounded) {
+      bob += actualHorizSpeed * dtFixed;
+      const stepStride = prone ? 0.95 : crouched ? 1.24 : 1.54;
+      const stepIdx = Math.floor(bob / stepStride);
       if (stepIdx !== lastStepIdx) {
         lastStepIdx = stepIdx;
         if (activeState === "play") {
@@ -1427,19 +1452,29 @@ export function createGameEngine({
     combat.stepWeaponUpdate(dt, nowMs, canAct, activeControl, chatOpen, isSprinting, crouched, grounded, velX, velZ, lookProxy, prone);
 
     const curW = combat.activeWeapon();
-    const mvRatio = Math.hypot(velX, velZ) > 0.25 ? 1 : 0;
+    const speedHoriz = Math.hypot(velX, velZ);
+    const mvRatio = speedHoriz > 0.25 ? +Math.min(1.45, speedHoriz / BASE_MOVE_SPEED).toFixed(2) : 0;
     const hideSniperModel = curW.cfg.scopeOverlay && combat.getScopeOut().hideWeaponModel;
-    gun.visible = canAct && !hideSniperModel;
+    gun.visible = !testSpecCam && canAct && !hideSniperModel;
     const { armsRoot: activeArmsRoot } = assetLoader.getArms();
-    if (activeArmsRoot) activeArmsRoot.visible = canAct && !hideSniperModel;
+    if (activeArmsRoot) activeArmsRoot.visible = !testSpecCam && canAct && !hideSniperModel;
 
     const sk = combat.getShake() * 0.05;
-    cam.position.set(
-      P.x + rnd(-sk, sk),
-      P.y + eyeHeight + (canAct && mvRatio && grounded ? Math.sin(bob * 2) * 0.035 * (1 - 0.7 * vmAnim.getAds()) : 0),
-      P.z,
-    );
-    cam.rotation.set(pitch + combat.getKick() + rnd(-sk, sk), yaw, 0);
+    const bobScale = canAct && mvRatio > 0 && grounded ? Math.min(1.35, mvRatio) * (1 - 0.72 * vmAnim.getAds()) : 0;
+    const lateralBob = Math.cos(bob) * 0.011 * bobScale;
+    const snCam = Math.sin(yaw);
+    const csCam = Math.cos(yaw);
+    if (testSpecCam) {
+      cam.position.set(testSpecCam.x, testSpecCam.y, testSpecCam.z);
+      cam.rotation.set(testSpecCam.pitch, testSpecCam.yaw, 0);
+    } else {
+      cam.position.set(
+        P.x + csCam * lateralBob + rnd(-sk, sk),
+        P.y + eyeHeight - landDip + Math.sin(bob * 2.02) * 0.030 * bobScale,
+        P.z - snCam * lateralBob,
+      );
+      cam.rotation.set(pitch + combat.getKick() + rnd(-sk, sk), yaw, 0);
+    }
     vmAnim.gunAnim(dt, canAct ? mvRatio : 0);
 
     if (engineMode === "lan" && canAct && activeState === "play" && !awaitingInitialSpawnSnap) {
@@ -1464,39 +1499,44 @@ export function createGameEngine({
       meProtState = nextProt;
       meInvuln = nextProt.active;
 
-      const botSnap = activeBotMatch.step(dt, nowMs);
+      const botSnap = activeBotMatch.step(dt, nowMs, _botSnapCache);
       if (botSnap && !botSnap.ended) {
         timeLeftSec = botSnap.timeLeftSec;
         teamScores = botSnap.teamScores;
         lastPlayers = botSnap.players;
-        const meEntry = lastPlayers.find((p) => p.id === "human-local");
-        if (meEntry) {
-          hp = meEntry.hp;
-          meAlive = meEntry.alive;
-          if (!meEntry.alive) respawnMs = meEntry.respawnMs;
-        }
-        for (const p of lastPlayers) {
-          if (p.id === "human-local") continue;
+        for (let i = 0; i < lastPlayers.length; i++) {
+          const p = lastPlayers[i];
+          if (p.id === "human-local") {
+            hp = p.hp;
+            meAlive = p.alive;
+            if (!p.alive) respawnMs = p.respawnMs;
+            continue;
+          }
           let av = remoteMgr.remotePlayers.get(p.id);
           if (!av) av = remoteMgr.createRemoteAvatar(p);
-          av.snapshots.length = 0;
-          av.snapshots.push({
-            t: botSnap.t,
-            x: p.x,
-            y: p.y,
-            z: p.z,
-            yaw: p.yaw,
-            pitch: p.pitch,
-            mv: p.mv || 0,
-            flags: p.flags || 0,
-            weaponId: p.weaponId || "m416",
-            reloading: Boolean(p.reloading),
-            hp: p.hp,
-            alive: p.alive,
-            invulnerable: p.invulnerable,
-            iFrames: Boolean(p.iFrames),
-            protectExpiring: Boolean(p.protectExpiring),
-          });
+          // Zero-GC snapshot update in-place instead of re-allocating snapshot objects every frame
+          let snapEntry = av.snapshots[0];
+          if (!snapEntry) {
+            snapEntry = {};
+            av.snapshots.push(snapEntry);
+          } else {
+            av.snapshots.length = 1;
+          }
+          snapEntry.t = botSnap.t;
+          snapEntry.x = p.x;
+          snapEntry.y = p.y;
+          snapEntry.z = p.z;
+          snapEntry.yaw = p.yaw;
+          snapEntry.pitch = p.pitch;
+          snapEntry.mv = p.mv || 0;
+          snapEntry.flags = p.flags || 0;
+          snapEntry.weaponId = p.weaponId || "m416";
+          snapEntry.reloading = Boolean(p.reloading);
+          snapEntry.hp = p.hp;
+          snapEntry.alive = p.alive;
+          snapEntry.invulnerable = p.invulnerable;
+          snapEntry.iFrames = Boolean(p.iFrames);
+          snapEntry.protectExpiring = Boolean(p.protectExpiring);
         }
       }
     }
@@ -2079,6 +2119,26 @@ export function createGameEngine({
           input.active = opts.locked;
         }
         combat.setTestCombat(opts);
+        if (opts.specCam === null) {
+          testSpecCam = null;
+        } else if (
+          opts.specCam &&
+          typeof opts.specCam === "object" &&
+          Number.isFinite(opts.specCam.x) &&
+          Number.isFinite(opts.specCam.y) &&
+          Number.isFinite(opts.specCam.z)
+        ) {
+          testSpecCam = {
+            x: opts.specCam.x,
+            y: opts.specCam.y,
+            z: opts.specCam.z,
+            yaw: Number.isFinite(opts.specCam.yaw) ? opts.specCam.yaw : 0,
+            pitch: Number.isFinite(opts.specCam.pitch) ? opts.specCam.pitch : 0,
+          };
+          cam.position.set(testSpecCam.x, testSpecCam.y, testSpecCam.z);
+          cam.rotation.set(testSpecCam.pitch, testSpecCam.yaw, 0);
+          cam.updateMatrixWorld(true);
+        }
         if (typeof opts.prone === "boolean") {
           prone = opts.prone;
           if (prone) crouched = false;

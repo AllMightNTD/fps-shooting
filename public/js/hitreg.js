@@ -3,14 +3,26 @@
  * and hitscan + AWM projectile ray tracing. Shared cleanly by Server & Browser Bot AI.
  */
 
-import { rayIntersectsOBB, raycastArenaDistance } from "./spawn_rules.js";
+import {
+  EYE_HEIGHT_CROUCH,
+  EYE_HEIGHT_PRONE,
+  EYE_HEIGHT_STAND,
+  SOLDIER_SCALE_XZ,
+  SOLDIER_SCALE_Y,
+  rayIntersectsOBB,
+  raycastArenaDistance,
+} from "./spawn_rules.js";
 
 const FLAG_CROUCH = 1 << 0;
 const FLAG_PRONE = 1 << 6;
 
-export const EYE_HEIGHT_STAND = 1.7;
-export const EYE_HEIGHT_CROUCH = 1.12;
-export const EYE_HEIGHT_PRONE = 0.42;
+export {
+  EYE_HEIGHT_CROUCH,
+  EYE_HEIGHT_PRONE,
+  EYE_HEIGHT_STAND,
+  SOLDIER_SCALE_XZ,
+  SOLDIER_SCALE_Y,
+};
 
 const ZONE_PRIORITY = Object.freeze({ head: 3, body: 2, limb: 1 });
 
@@ -42,12 +54,12 @@ export function buildPlayerHitboxes(pose) {
     const fx = -Math.sin(yaw);
     const fz = -Math.cos(yaw);
     return {
-      head: { cx: x + fx * 0.55, cy: y + 0.36, cz: z + fz * 0.55, r: 0.17 },
+      head: { cx: x + fx * 0.63, cy: y + 0.39, cz: z + fz * 0.63, r: 0.195 },
       boxes: [
-        { part: "body", obb: { cx: x, cy: y + 0.24, cz: z, hx: 0.24, hy: 0.2, hz: 0.42, yaw } },
+        { part: "body", obb: { cx: x, cy: y + 0.26, cz: z, hx: 0.28, hy: 0.22, hz: 0.48, yaw } },
         {
           part: "limb",
-          obb: { cx: x - fx * 0.65, cy: y + 0.2, cz: z - fz * 0.65, hx: 0.22, hy: 0.18, hz: 0.36, yaw },
+          obb: { cx: x - fx * 0.75, cy: y + 0.22, cz: z - fz * 0.75, hx: 0.25, hy: 0.20, hz: 0.41, yaw },
         },
       ],
     };
@@ -55,29 +67,29 @@ export function buildPlayerHitboxes(pose) {
 
   if (flags & FLAG_CROUCH) {
     return {
-      head: { cx: x, cy: y + 1.08, cz: z, r: 0.175 },
+      head: { cx: x, cy: y + 1.18, cz: z, r: 0.20 },
       boxes: [
-        { part: "body", obb: { cx: x, cy: y + 0.71, cz: z, hx: 0.24, hy: 0.23, hz: 0.18, yaw } },
-        { part: "limb", obb: { cx: x, cy: y + 0.24, cz: z, hx: 0.22, hy: 0.24, hz: 0.18, yaw } },
+        { part: "body", obb: { cx: x, cy: y + 0.77, cz: z, hx: 0.28, hy: 0.25, hz: 0.21, yaw } },
+        { part: "limb", obb: { cx: x, cy: y + 0.26, cz: z, hx: 0.25, hy: 0.26, hz: 0.21, yaw } },
       ],
     };
   }
 
   const cs = Math.cos(yaw);
   const sn = Math.sin(yaw);
-  const armOffset = 0.29;
+  const armOffset = 0.335;
   return {
-    head: { cx: x, cy: y + 1.62, cz: z, r: 0.175 },
+    head: { cx: x, cy: y + 1.77, cz: z, r: 0.20 },
     boxes: [
-      { part: "body", obb: { cx: x, cy: y + 1.16, cz: z, hx: 0.24, hy: 0.3, hz: 0.16, yaw } },
-      { part: "limb", obb: { cx: x, cy: y + 0.43, cz: z, hx: 0.2, hy: 0.43, hz: 0.15, yaw } },
+      { part: "body", obb: { cx: x, cy: y + 1.26, cz: z, hx: 0.28, hy: 0.33, hz: 0.19, yaw } },
+      { part: "limb", obb: { cx: x, cy: y + 0.47, cz: z, hx: 0.23, hy: 0.47, hz: 0.17, yaw } },
       {
         part: "limb",
-        obb: { cx: x - armOffset * cs, cy: y + 1.17, cz: z + armOffset * sn, hx: 0.08, hy: 0.25, hz: 0.11, yaw },
+        obb: { cx: x - armOffset * cs, cy: y + 1.28, cz: z + armOffset * sn, hx: 0.095, hy: 0.27, hz: 0.13, yaw },
       },
       {
         part: "limb",
-        obb: { cx: x + armOffset * cs, cy: y + 1.17, cz: z - armOffset * sn, hx: 0.08, hy: 0.25, hz: 0.11, yaw },
+        obb: { cx: x + armOffset * cs, cy: y + 1.28, cz: z - armOffset * sn, hx: 0.095, hy: 0.27, hz: 0.13, yaw },
       },
     ],
   };

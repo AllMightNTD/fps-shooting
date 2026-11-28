@@ -255,7 +255,7 @@ export class RoomManager {
       mode: targetMode,
       map: "military",
       killLimit: 30,
-      maxPlayers: 10,
+      maxPlayers: 16,
     });
   }
 

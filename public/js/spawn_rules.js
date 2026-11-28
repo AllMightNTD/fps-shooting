@@ -12,10 +12,18 @@ const FLAG_CROUCH = 1 << 0;
 const FLAG_PRONE = 1 << 6;
 
 export const ARENA_BOUND = 48.0;
-export const PLAYER_RADIUS = 0.45;
-export const EYE_HEIGHT_STAND = 1.70;
-export const EYE_HEIGHT_CROUCH = 1.12;
-export const EYE_HEIGHT_PRONE = 0.42;
+// Synchronized Heroic FPS soldier proportion (1A): ~1.92m tall x ~0.83m broad shoulders
+export const SOLDIER_SCALE_XZ = 1.15;
+export const SOLDIER_SCALE_Y = 1.09;
+export const PLAYER_RADIUS = 0.50;
+export const EYE_HEIGHT_STAND = 1.84;
+export const EYE_HEIGHT_CROUCH = 1.18;
+export const EYE_HEIGHT_PRONE = 0.45;
+export const COLLIDER_HEIGHT_STAND = 1.94;
+export const COLLIDER_HEIGHT_CROUCH = 1.33;
+export const COLLIDER_HEIGHT_PRONE = 0.63;
+export const STAND_UP_CLEARANCE = 1.98;
+export const CROUCH_UP_CLEARANCE = 1.38;
 
 export const SPAWN_RULES = Object.freeze({
   TDM: Object.freeze({
@@ -48,6 +56,66 @@ export function getEyeHeightForFlags(flags = 0) {
   if (flags & FLAG_PRONE) return EYE_HEIGHT_PRONE;
   if (flags & FLAG_CROUCH) return EYE_HEIGHT_CROUCH;
   return EYE_HEIGHT_STAND;
+}
+
+const GRID_CELL_SIZE = 8.0;
+const _arenaGridCache = new WeakMap();
+
+function buildArenaGrid(boxes, obbs) {
+  const cellBoxes = new Map();
+  const cellObbs = new Map();
+  const inv = 1 / GRID_CELL_SIZE;
+  const pushCell = (map, gx, gz, idx) => {
+    const k = (gx + 512) * 1024 + (gz + 512);
+    let arr = map.get(k);
+    if (!arr) {
+      arr = [];
+      map.set(k, arr);
+    }
+    arr.push(idx);
+  };
+
+  for (let i = 0; i < boxes.length; i++) {
+    const b = boxes[i];
+    const gx0 = Math.floor((b.x0 - 1.0) * inv);
+    const gx1 = Math.floor((b.x1 + 1.0) * inv);
+    const gz0 = Math.floor((b.z0 - 1.0) * inv);
+    const gz1 = Math.floor((b.z1 + 1.0) * inv);
+    for (let gx = gx0; gx <= gx1; gx++) {
+      for (let gz = gz0; gz <= gz1; gz++) pushCell(cellBoxes, gx, gz, i);
+    }
+  }
+  for (let i = 0; i < obbs.length; i++) {
+    const o = obbs[i];
+    const rad = Math.hypot(o.hx, o.hz) + 1.0;
+    const gx0 = Math.floor((o.cx - rad) * inv);
+    const gx1 = Math.floor((o.cx + rad) * inv);
+    const gz0 = Math.floor((o.cz - rad) * inv);
+    const gz1 = Math.floor((o.cz + rad) * inv);
+    for (let gx = gx0; gx <= gx1; gx++) {
+      for (let gz = gz0; gz1 >= gz; gz++) pushCell(cellObbs, gx, gz, i);
+    }
+  }
+  return {
+    boxes,
+    obbs,
+    cellBoxes,
+    cellObbs,
+    seenBoxes: new Int32Array(boxes.length),
+    seenObbs: new Int32Array(obbs.length),
+    stamp: 0,
+  };
+}
+
+function getArenaSpatialGrid(arenaOrBoxes, boxes, obbs) {
+  if (!arenaOrBoxes || typeof arenaOrBoxes !== "object" || Array.isArray(arenaOrBoxes)) return null;
+  if (boxes.length + obbs.length <= 14) return null;
+  let g = _arenaGridCache.get(arenaOrBoxes);
+  if (!g || g.boxes !== boxes || g.obbs !== obbs) {
+    g = buildArenaGrid(boxes, obbs);
+    _arenaGridCache.set(arenaOrBoxes, g);
+  }
+  return g;
 }
 
 /**
@@ -131,7 +199,11 @@ export function clampAndResolvePlayerPos(pos, arenaOrBoxes, radius = PLAYER_RADI
     if (y < supportY) y = supportY;
   }
 
-  const pHeight = flags & FLAG_PRONE ? 0.58 : flags & FLAG_CROUCH ? 1.22 : 1.78;
+  const pHeight = flags & FLAG_PRONE
+    ? COLLIDER_HEIGHT_PRONE
+    : flags & FLAG_CROUCH
+      ? COLLIDER_HEIGHT_CROUCH
+      : COLLIDER_HEIGHT_STAND;
   const minFootClear = y + 0.36;
   const maxHeadY = y + pHeight;
 
@@ -237,16 +309,91 @@ export function raycastArenaDistance(ox, oy, oz, dx, dy, dz, maxDist, arenaOrBox
   const obbs = isArr ? [] : (arenaOrBoxes && arenaOrBoxes.obbs) || [];
   let bestT = Infinity;
 
-  for (const b of boxes) {
-    if (b.moveOnly) continue;
-    const t = rayIntersectsAABB(ox, oy, oz, dx, dy, dz, b, maxDist);
-    if (t !== null && t < bestT) bestT = t;
+  const grid = getArenaSpatialGrid(arenaOrBoxes, boxes, obbs);
+  if (!grid || maxDist > 160) {
+    for (let i = 0; i < boxes.length; i++) {
+      const b = boxes[i];
+      if (b.moveOnly) continue;
+      const t = rayIntersectsAABB(ox, oy, oz, dx, dy, dz, b, maxDist);
+      if (t !== null && t < bestT) bestT = t;
+    }
+    for (let i = 0; i < obbs.length; i++) {
+      const o = obbs[i];
+      if (o.moveOnly) continue;
+      const t = rayIntersectsOBB(ox, oy, oz, dx, dy, dz, o, maxDist);
+      if (t !== null && t < bestT) bestT = t;
+    }
+    return bestT <= maxDist ? { dist: bestT } : null;
   }
-  for (const o of obbs) {
-    if (o.moveOnly) continue;
-    const t = rayIntersectsOBB(ox, oy, oz, dx, dy, dz, o, maxDist);
-    if (t !== null && t < bestT) bestT = t;
+
+  // Zero-GC 2D DDA grid traversal with early-exit at closest hit distance
+  const stamp = ++grid.stamp;
+  const seenB = grid.seenBoxes;
+  const seenO = grid.seenObbs;
+  const cellSize = GRID_CELL_SIZE;
+  const inv = 1 / cellSize;
+  let gx = Math.floor(ox * inv);
+  let gz = Math.floor(oz * inv);
+  const stepX = dx > 1e-8 ? 1 : dx < -1e-8 ? -1 : 0;
+  const stepZ = dz > 1e-8 ? 1 : dz < -1e-8 ? -1 : 0;
+  const tDeltaX = stepX !== 0 ? cellSize / Math.abs(dx) : Infinity;
+  const tDeltaZ = stepZ !== 0 ? cellSize / Math.abs(dz) : Infinity;
+  let tMaxX =
+    stepX > 0
+      ? ((gx + 1) * cellSize - ox) / dx
+      : stepX < 0
+        ? (gx * cellSize - ox) / dx
+        : Infinity;
+  let tMaxZ =
+    stepZ > 0
+      ? ((gz + 1) * cellSize - oz) / dz
+      : stepZ < 0
+        ? (gz * cellSize - oz) / dz
+        : Infinity;
+
+  let tCur = 0;
+  const limitSteps = Math.ceil((maxDist * inv) * 2.2) + 4;
+  for (let step = 0; step < limitSteps; step++) {
+    const k = (gx + 512) * 1024 + (gz + 512);
+    const bList = grid.cellBoxes.get(k);
+    if (bList) {
+      for (let i = 0; i < bList.length; i++) {
+        const bi = bList[i];
+        if (seenB[bi] === stamp) continue;
+        seenB[bi] = stamp;
+        const b = boxes[bi];
+        if (b.moveOnly) continue;
+        const t = rayIntersectsAABB(ox, oy, oz, dx, dy, dz, b, maxDist);
+        if (t !== null && t < bestT) bestT = t;
+      }
+    }
+    const oList = grid.cellObbs.get(k);
+    if (oList) {
+      for (let i = 0; i < oList.length; i++) {
+        const oi = oList[i];
+        if (seenO[oi] === stamp) continue;
+        seenO[oi] = stamp;
+        const o = obbs[oi];
+        if (o.moveOnly) continue;
+        const t = rayIntersectsOBB(ox, oy, oz, dx, dy, dz, o, maxDist);
+        if (t !== null && t < bestT) bestT = t;
+      }
+    }
+
+    const tNext = tMaxX < tMaxZ ? tMaxX : tMaxZ;
+    if (tNext > maxDist || tNext > bestT) break;
+    if (tMaxX < tMaxZ) {
+      tCur = tMaxX;
+      tMaxX += tDeltaX;
+      gx += stepX;
+    } else {
+      tCur = tMaxZ;
+      tMaxZ += tDeltaZ;
+      gz += stepZ;
+    }
+    if (tCur > maxDist) break;
   }
+
   return bestT <= maxDist ? { dist: bestT } : null;
 }
 

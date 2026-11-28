@@ -10,14 +10,18 @@ import {
   getEnemyHighlightPreset,
   resolvePlayerRelation,
 } from "./iff_system.js";
-import { computeProtectionBlinkState } from "./spawn_rules.js";
+import { SOLDIER_SCALE_XZ, SOLDIER_SCALE_Y, computeProtectionBlinkState } from "./spawn_rules.js";
 import {
+  CROUCH_DIR_KEYS,
   SOLDIER_BONE_ALIASES,
+  SOLDIER_CLIP_KEYS,
   cloneSkinnedHierarchy,
+  computeCrouchDirectionalWeights,
   findSoldierClip,
   hasSkinnedMesh,
   resolveRigBone,
   selectSoldierAnimState,
+  stepNormalizedActionWeights,
 } from "./skinned_clone.js";
 
 export function lerpAngle(a, b, t) {
@@ -58,6 +62,22 @@ export function createRemotePlayersManager({
   const _charFwd = new THREE.Vector3();
   const _charUp = new THREE.Vector3();
   const _aimDir = new THREE.Vector3();
+  const _poseScratch = {
+    x: 0,
+    y: 0,
+    z: 0,
+    yaw: 0,
+    pitch: 0,
+    mv: 0,
+    flags: 0,
+    weaponId: "m416",
+    reloading: false,
+    hp: 100,
+    alive: true,
+    invulnerable: false,
+    iFrames: false,
+    protectExpiring: false,
+  };
   const _contQuat = typeof THREE.Quaternion === "function" ? new THREE.Quaternion() : null;
   const _parentQuat = typeof THREE.Quaternion === "function" ? new THREE.Quaternion() : null;
   const _desiredWorldQuat = typeof THREE.Quaternion === "function" ? new THREE.Quaternion() : null;
@@ -148,12 +168,16 @@ export function createRemotePlayersManager({
     return { hitMeshes, headBone, spineBone };
   }
 
+  const CROUCH_DIR_SET = new Set(CROUCH_DIR_KEYS);
+
   function buildSoldierActions(mixer, animations) {
     const actions = {};
     if (!mixer || !Array.isArray(animations) || !animations.length) return actions;
-    for (const key of ["idle", "run", "crouch", "jump", "prone", "prone_move"]) {
+    const seenClips = new Set();
+    for (const key of SOLDIER_CLIP_KEYS) {
       const clip = findSoldierClip(animations, key);
-      if (!clip) continue;
+      if (!clip || seenClips.has(clip)) continue;
+      seenClips.add(clip);
       const act = mixer.clipAction(clip);
       if (key === "jump") {
         act.setLoop(THREE.LoopOnce, 1);
@@ -161,6 +185,7 @@ export function createRemotePlayersManager({
       } else {
         act.setLoop(THREE.LoopRepeat, Infinity);
       }
+      act.setEffectiveWeight(0);
       actions[key] = act;
     }
     return actions;
@@ -192,6 +217,9 @@ export function createRemotePlayersManager({
 
     if (!soldierProto) {
       const root = new THREE.Group();
+      if (root.scale && typeof root.scale.set === "function") {
+        root.scale.set(SOLDIER_SCALE_XZ, SOLDIER_SCALE_Y, SOLDIER_SCALE_XZ);
+      }
       const uni = new THREE.MeshStandardMaterial({ color: 0x323b42, roughness: 0.75 });
       const acc = resolveAccentMaterial(team, relation);
       const upper = new THREE.Group();
@@ -236,6 +264,9 @@ export function createRemotePlayersManager({
 
     const isSkinned = hasSkinnedMesh(soldierProto);
     const root = isSkinned ? cloneSkinnedHierarchy(soldierProto, THREE) : soldierProto.clone();
+    if (root.scale && typeof root.scale.set === "function") {
+      root.scale.set(SOLDIER_SCALE_XZ, SOLDIER_SCALE_Y, SOLDIER_SCALE_XZ);
+    }
     const bodyMeshes = [];
     const teamPatchMeshes = [];
     root.traverse((o) => {
@@ -255,9 +286,23 @@ export function createRemotePlayersManager({
     if (isSkinned) {
       const mixer = new THREE.AnimationMixer(root);
       const actions = buildSoldierActions(mixer, soldierAnimations);
-      const initialAct = actions.idle || Object.values(actions)[0] || null;
-      if (initialAct) initialAct.play();
+      const actionKeys = Object.keys(actions);
+      const initialKey = actions.idle ? "idle" : actionKeys[0] || "";
+      const initialAct = initialKey ? actions[initialKey] : null;
+      const actionWeights = {};
+      const targetWeights = {};
+      for (const k of actionKeys) {
+        const w = k === initialKey ? 1 : 0;
+        actionWeights[k] = w;
+        targetWeights[k] = w;
+        actions[k].setEffectiveWeight(w);
+      }
+      if (initialAct) {
+        initialAct.enabled = true;
+        initialAct.play();
+      }
       const { hitMeshes, headBone, spineBone } = buildSkinnedHitboxes(root, playerId);
+      const hipsBone = resolveRigBone(root, SOLDIER_BONE_ALIASES.hips);
       const weaponMount = resolveRigBone(root, SOLDIER_BONE_ALIASES.rightHand);
       const leftHandBone = resolveRigBone(root, SOLDIER_BONE_ALIASES.leftHand);
       const rig = {
@@ -266,8 +311,14 @@ export function createRemotePlayersManager({
         isFallback: false,
         mixer,
         actions,
+        actionKeys,
+        actionWeights,
+        targetWeights,
+        hasDirectionalCrouch: CROUCH_DIR_KEYS.every((k) => Boolean(actions[k])),
         activeAction: initialAct,
-        activeState: initialAct ? "idle" : "",
+        activeState: initialKey,
+        lastBlendDur: 0.11,
+        hipsBone,
         headBone,
         spineBone,
         weaponMount,
@@ -376,7 +427,7 @@ export function createRemotePlayersManager({
     );
     sp.renderOrder = 12;
     sp.scale.set(1.26, 0.39, 1);
-    sp.position.set(0, 2.08, 0);
+    sp.position.set(0, 2.26, 0);
     sp.userData = { canvas: c, tex: t, lastKey: "" };
     updateNameplateSprite(sp, name, hpVal, { compact: false, distM: 10 });
     return sp;
@@ -437,44 +488,6 @@ export function createRemotePlayersManager({
     const rig = buildSoldierVisual(p.team, p.id, relation);
     container.add(rig.root);
 
-    const shieldMat = new THREE.MeshBasicMaterial({
-      color: 0x5ce1ff,
-      transparent: true,
-      opacity: 0.24,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-    });
-    const shieldGeo =
-      typeof THREE.CylinderGeometry === "function"
-        ? new THREE.CylinderGeometry(0.46, 0.56, 1.76, 20, 1, true)
-        : new THREE.SphereGeometry(0.95, 16, 12);
-    const shieldDome = new THREE.Mesh(shieldGeo, shieldMat);
-    shieldDome.position.set(0, 0.88, 0);
-    shieldDome.visible = false;
-    container.add(shieldDome);
-
-    const ringGeo = typeof THREE.RingGeometry === "function" ? new THREE.RingGeometry(0.54, 0.68, 28) : null;
-    const shieldBaseRing = ringGeo
-      ? new THREE.Mesh(
-          ringGeo,
-          new THREE.MeshBasicMaterial({
-            color: 0x64e6ff,
-            transparent: true,
-            opacity: 0.55,
-            side: THREE.DoubleSide,
-            depthWrite: false,
-            blending: THREE.AdditiveBlending,
-          }),
-        )
-      : null;
-    if (shieldBaseRing) {
-      shieldBaseRing.rotation.x = -Math.PI * 0.5;
-      shieldBaseRing.position.set(0, 0.04, 0);
-      shieldBaseRing.visible = false;
-      container.add(shieldBaseRing);
-    }
-
     const muzFlash = new THREE.Mesh(remoteMuzFlashGeo, remoteMuzFlashMat);
     muzFlash.visible = false;
     container.add(muzFlash);
@@ -492,8 +505,8 @@ export function createRemotePlayersManager({
       container,
       rig,
       hitMeshes: rig.hitMeshes,
-      shieldDome,
-      shieldBaseRing,
+      shieldDome: null,
+      shieldBaseRing: null,
       shieldHitFlash: 0,
       shieldBlinkActive: false,
       muzFlash,
@@ -519,6 +532,12 @@ export function createRemotePlayersManager({
       radarBlipUntil: 0,
       crouchK: 0,
       proneK: 0,
+      gaitYawOffset: 0,
+      localVelFwd: 0,
+      localVelRight: 0,
+      hasLocalVel: false,
+      prevWorldX: p.x || 0,
+      prevWorldZ: p.z || 0,
       markerOccluded: false,
       nextLosCheckMs: 0,
     };
@@ -531,12 +550,6 @@ export function createRemotePlayersManager({
     if (!av) return;
     av.relation = relation;
     applyRigRelation(av.rig, av.team, relation);
-    if (av.shieldDome && av.shieldDome.material && av.shieldDome.material.color && typeof av.shieldDome.material.color.setHex === "function") {
-      av.shieldDome.material.color.setHex(relation === "ally" ? 0x5ce1ff : 0x72ebff);
-    }
-    if (av.shieldBaseRing && av.shieldBaseRing.material && av.shieldBaseRing.material.color && typeof av.shieldBaseRing.material.color.setHex === "function") {
-      av.shieldBaseRing.material.color.setHex(relation === "ally" ? 0x5ce1ff : 0x72ebff);
-    }
     if (relation !== "ally") {
       av.nameplate.visible = false;
     }
@@ -616,6 +629,7 @@ export function createRemotePlayersManager({
     const nowMs = performance.now();
     const renderTime = Date.now() + net.clockOffsetMs - INTERP_DELAY_MS;
     const { currentMode, meTeam } = getMatchMeta();
+    const camObjForDist = typeof getCamera === "function" ? getCamera() : null;
 
     for (const av of remotePlayers.values()) {
       const snaps = av.snapshots;
@@ -624,27 +638,32 @@ export function createRemotePlayersManager({
       let pose = snaps[0];
       if (snaps.length >= 2 && snaps[1].t > snaps[0].t) {
         const alpha = Math.max(0, Math.min(1, (renderTime - snaps[0].t) / (snaps[1].t - snaps[0].t)));
-        pose = {
-          x: THREE.MathUtils.lerp(snaps[0].x, snaps[1].x, alpha),
-          y: THREE.MathUtils.lerp(snaps[0].y, snaps[1].y, alpha),
-          z: THREE.MathUtils.lerp(snaps[0].z, snaps[1].z, alpha),
-          yaw: lerpAngle(snaps[0].yaw, snaps[1].yaw, alpha),
-          pitch: THREE.MathUtils.lerp(snaps[0].pitch, snaps[1].pitch, alpha),
-          mv: THREE.MathUtils.lerp(snaps[0].mv, snaps[1].mv, alpha),
-          flags: snaps[1].flags || 0,
-          weaponId: snaps[1].weaponId || av.weaponId,
-          reloading: Boolean(snaps[1].reloading),
-          hp: snaps[1].hp,
-          alive: snaps[1].alive,
-          invulnerable: snaps[1].invulnerable,
-          iFrames: snaps[1].iFrames,
-          protectExpiring: snaps[1].protectExpiring,
-        };
+        _poseScratch.x = THREE.MathUtils.lerp(snaps[0].x, snaps[1].x, alpha);
+        _poseScratch.y = THREE.MathUtils.lerp(snaps[0].y, snaps[1].y, alpha);
+        _poseScratch.z = THREE.MathUtils.lerp(snaps[0].z, snaps[1].z, alpha);
+        _poseScratch.yaw = lerpAngle(snaps[0].yaw, snaps[1].yaw, alpha);
+        _poseScratch.pitch = THREE.MathUtils.lerp(snaps[0].pitch, snaps[1].pitch, alpha);
+        _poseScratch.mv = THREE.MathUtils.lerp(snaps[0].mv, snaps[1].mv, alpha);
+        _poseScratch.flags = snaps[1].flags || 0;
+        _poseScratch.weaponId = snaps[1].weaponId || av.weaponId;
+        _poseScratch.reloading = Boolean(snaps[1].reloading);
+        _poseScratch.hp = snaps[1].hp;
+        _poseScratch.alive = snaps[1].alive;
+        _poseScratch.invulnerable = snaps[1].invulnerable;
+        _poseScratch.iFrames = snaps[1].iFrames;
+        _poseScratch.protectExpiring = snaps[1].protectExpiring;
+        pose = _poseScratch;
       }
 
-      if (av.alive && !pose.alive) {
-        av.deathTime = 0;
-        av.reloadEndsAt = 0;
+      if (av.alive !== pose.alive) {
+        if (av.alive && !pose.alive) {
+          av.deathTime = 0;
+          av.reloadEndsAt = 0;
+        }
+        av.localVelFwd = 0;
+        av.localVelRight = 0;
+        av.hasLocalVel = false;
+        av.gaitYawOffset = 0;
       }
       if (pose.weaponId && pose.weaponId !== av.weaponId && nowMs >= (av.weaponLockUntil || 0)) {
         av.weaponId = pose.weaponId;
@@ -654,6 +673,11 @@ export function createRemotePlayersManager({
       if (!pose.reloading && av.reloadEndsAt > nowMs + 250) {
         av.reloadEndsAt = 0;
       }
+      const stepWorldDx = pose.x - (av.prevWorldX !== undefined ? av.prevWorldX : pose.x);
+      const stepWorldDz = pose.z - (av.prevWorldZ !== undefined ? av.prevWorldZ : pose.z);
+      av.prevWorldX = pose.x;
+      av.prevWorldZ = pose.z;
+
       av.alive = pose.alive;
       av.flags = pose.flags || 0;
       av.yaw = pose.yaw;
@@ -671,8 +695,6 @@ export function createRemotePlayersManager({
         const drop = Math.min(1, av.deathTime * 4.5);
         av.rig.root.rotation.x = -drop * Math.PI * 0.48;
         av.rig.root.position.y = drop * 0.16;
-        av.shieldDome.visible = false;
-        if (av.shieldBaseRing) av.shieldBaseRing.visible = false;
         av.shieldHitFlash = 0;
         av.shieldBlinkActive = false;
         av.nameplate.visible = false;
@@ -695,49 +717,41 @@ export function createRemotePlayersManager({
         hitFlash: av.shieldHitFlash,
       });
 
-      const showShield = (isProt || av.shieldHitFlash > 0) && blink.blinkOn;
-      av.shieldDome.visible = showShield;
-      if (showShield) {
-        const yScale = isProne ? 0.38 : targetCrouch ? 0.68 : 1.0;
-        av.shieldDome.scale.set(isProne ? 1.25 : 1.0, yScale, isProne ? 1.55 : 1.0);
-        av.shieldDome.position.y = 0.88 * yScale;
-        if (av.shieldDome.material) {
-          av.shieldDome.material.opacity = av.shieldHitFlash > 0 ? 0.42 : 0.08 + 0.22 * blink.intensity;
-        }
-      }
-      if (av.shieldBaseRing) {
-        av.shieldBaseRing.visible = isProt || av.shieldHitFlash > 0;
-        if (av.shieldBaseRing.visible) {
-          const rPulse = blink.blinkOn ? 1.04 : 0.92;
-          av.shieldBaseRing.scale.setScalar(isProne ? rPulse * 1.25 : rPulse);
-          if (av.shieldBaseRing.material) {
-            av.shieldBaseRing.material.opacity = blink.blinkOn ? 0.35 + 0.45 * blink.intensity : 0.14;
-          }
-        }
-      }
-
-      // Swap SWAT armor shader material pointer during blink peaks (0 extra WebGL shaders, 0 GC)
+      // CS2-style Spawn Protection: blink the operator body directly while keeping their Ally/Enemy uniform tint!
+      const isProtectedBlink = (isProt || av.shieldHitFlash > 0) && blink.blinkOn;
+      av.shieldBlinkActive = Boolean(isProt || av.shieldHitFlash > 0);
       const bodyMats = typeof getSoldierBodyMats === "function" ? getSoldierBodyMats() : null;
       if (av.rig && Array.isArray(av.rig.bodyMeshes) && av.rig.bodyMeshes.length && bodyMats) {
-        const targetMat =
-          showShield && bodyMats.protected
-            ? bodyMats.protected
-            : bodyMats[av.relation] || null;
+        const protMat =
+          av.relation === "ally"
+            ? bodyMats.protectedAlly || bodyMats.protected
+            : bodyMats.protectedEnemy || bodyMats.protected;
+        const targetMat = isProtectedBlink && protMat ? protMat : bodyMats[av.relation] || null;
         if (targetMat && av.rig.bodyMeshes[0].material !== targetMat) {
           for (let i = 0; i < av.rig.bodyMeshes.length; i++) {
             av.rig.bodyMeshes[i].material = targetMat;
           }
         }
+        if (camObjForDist && camObjForDist.position) {
+          const cdx = pose.x - camObjForDist.position.x;
+          const cdz = pose.z - camObjForDist.position.z;
+          const nearShadow = cdx * cdx + cdz * cdz <= 784;
+          for (let i = 0; i < av.rig.bodyMeshes.length; i++) {
+            if (av.rig.bodyMeshes[i].castShadow !== nearShadow) {
+              av.rig.bodyMeshes[i].castShadow = nearShadow;
+            }
+          }
+        }
       }
 
-      const targetPlateY = isProne ? 0.88 : targetCrouch ? 1.56 : 2.06;
+      const targetPlateY = isProne ? 0.96 : targetCrouch ? 1.70 : 2.24;
       av.nameplate.position.y += (targetPlateY - av.nameplate.position.y) * Math.min(1, 12 * dt);
 
       // Show smart wall-through markers ONLY on teammates in TDM (hide on all enemies & FFA)
       if (av.relation === "ally") {
         const camObj = typeof getCamera === "function" ? getCamera() : null;
         if (camObj && camObj.position && typeof _markerNdc.project === "function") {
-          const anchorY = isProne ? 0.42 : targetCrouch ? 1.05 : 1.52;
+          const anchorY = isProne ? 0.46 : targetCrouch ? 1.14 : 1.66;
           _markerWorldPos.set(pose.x, pose.y + av.nameplate.position.y, pose.z);
           const dx = pose.x - camObj.position.x;
           const dy = pose.y + anchorY - camObj.position.y;
@@ -805,8 +819,55 @@ export function createRemotePlayersManager({
 
       if (av.rig.isSkinned) {
         const rig = av.rig;
-        const desiredState = selectSoldierAnimState({ alive: pose.alive, mv: pose.mv, flags: pose.flags, FLAG });
-        const hasDedicatedCrouch = Boolean(rig.actions.crouch);
+
+        // Smooth local horizontal velocity in avatar yaw space (anti-jitter on 20Hz snapshots & bots)
+        const snY = Math.sin(pose.yaw);
+        const csY = Math.cos(pose.yaw);
+        const rawHorizStep = Math.hypot(stepWorldDx, stepWorldDz);
+        const isTeleportStep = rawHorizStep > 1.5;
+        const horizStep = isTeleportStep ? 0 : rawHorizStep;
+        const fwdStep = isTeleportStep ? 0 : -snY * stepWorldDx - csY * stepWorldDz;
+        const rightStep = isTeleportStep ? 0 : csY * stepWorldDx - snY * stepWorldDz;
+
+        if (isTeleportStep) {
+          av.localVelFwd = 0;
+          av.localVelRight = 0;
+          av.hasLocalVel = false;
+          av.gaitYawOffset = 0;
+        } else if (dt > 1e-4 && horizStep > 1e-4) {
+          const instFwd = fwdStep / dt;
+          const instRight = rightStep / dt;
+          if (!av.hasLocalVel) {
+            av.localVelFwd = instFwd;
+            av.localVelRight = instRight;
+            av.hasLocalVel = true;
+          } else {
+            const kVel = 1 - Math.exp(-dt * 16);
+            av.localVelFwd += (instFwd - av.localVelFwd) * kVel;
+            av.localVelRight += (instRight - av.localVelRight) * kVel;
+          }
+        } else if (pose.mv <= 0.08) {
+          const kDecay = Math.exp(-dt * 18);
+          av.localVelFwd *= kDecay;
+          av.localVelRight *= kDecay;
+          if (Math.hypot(av.localVelFwd, av.localVelRight) < 0.05) {
+            av.localVelFwd = 0;
+            av.localVelRight = 0;
+            av.hasLocalVel = false;
+          }
+        }
+
+        const desiredState = selectSoldierAnimState({
+          alive: pose.alive,
+          mv: pose.mv,
+          flags: pose.flags,
+          FLAG,
+          fwdVel: av.localVelFwd,
+          rightVel: av.localVelRight,
+          hasDirectionalCrouch: rig.hasDirectionalCrouch,
+        });
+        const isDirectionalCrouchMove = Boolean(rig.hasDirectionalCrouch && CROUCH_DIR_SET.has(desiredState));
+        const hasDedicatedCrouch = Boolean(rig.actions.crouch || rig.hasDirectionalCrouch);
         const hasDedicatedProne = Boolean(rig.actions.prone || rig.actions.prone_move);
         if (isProne && !hasDedicatedProne) {
           rig.root.rotation.x = -av.proneK * Math.PI * 0.44;
@@ -815,37 +876,124 @@ export function createRemotePlayersManager({
           rig.root.position.y = hasDedicatedCrouch || isProne ? 0 : -0.44 * av.crouchK;
         }
 
-        if (rig.mixer) {
-          const nextAct =
-            rig.actions[desiredState] ||
-            (desiredState === "prone_move" ? rig.actions.prone : null) ||
-            rig.actions.idle ||
-            Object.values(rig.actions)[0] ||
-            null;
-          if (nextAct && nextAct !== rig.activeAction) {
-            const isJumpTransition = rig.activeState === "jump" || desiredState === "jump";
-            const fadeDur = isJumpTransition ? 0.07 : 0.14;
-            nextAct.reset();
-            nextAct.setEffectiveWeight(1);
-            nextAct.play();
-            if (rig.activeAction) rig.activeAction.crossFadeTo(nextAct, fadeDur, true);
-            rig.activeAction = nextAct;
-            rig.activeState = desiredState;
+        if (rig.mixer && rig.actionKeys && rig.actionKeys.length) {
+          const prevState = rig.activeState;
+          const targetWeights = rig.targetWeights;
+          for (let i = 0; i < rig.actionKeys.length; i++) {
+            targetWeights[rig.actionKeys[i]] = 0;
           }
-          if (rig.activeAction && desiredState === "run") {
-            rig.activeAction.setEffectiveTimeScale(Math.max(0.75, Math.min(1.45, pose.mv / 1.0)));
-          } else if (rig.activeAction && desiredState === "prone_move") {
-            rig.activeAction.setEffectiveTimeScale(Math.max(0.75, Math.min(1.45, pose.mv / 0.55)));
-          } else if (rig.activeAction) {
-            rig.activeAction.setEffectiveTimeScale(1.0);
+
+          if (isDirectionalCrouchMove) {
+            const cw = computeCrouchDirectionalWeights(av.localVelFwd, av.localVelRight);
+            targetWeights.crouch_forward = cw.crouch_forward;
+            targetWeights.crouch_backward = cw.crouch_backward;
+            targetWeights.crouch_left = cw.crouch_left;
+            targetWeights.crouch_right = cw.crouch_right;
+          } else {
+            const singleKey = rig.actions[desiredState]
+              ? desiredState
+              : desiredState === "crouch_move" && rig.actions.crouch
+                ? "crouch"
+                : desiredState === "prone_move" && rig.actions.prone
+                  ? "prone"
+                  : rig.actions.idle
+                    ? "idle"
+                    : rig.actionKeys[0];
+            if (singleKey) targetWeights[singleKey] = 1;
           }
+
+          const isJumpTransition = prevState === "jump" || desiredState === "jump";
+          const isCrouchDirPivot = CROUCH_DIR_SET.has(prevState) && isDirectionalCrouchMove;
+          const blendDur = isJumpTransition ? 0.07 : isCrouchDirPivot ? 0.085 : 0.11;
+
+          // Capture normalized cycle phase from lead running crouch clip so newly blended crouch clips lock stride phase
+          let leadCrouchPhase = null;
+          if (isDirectionalCrouchMove) {
+            let bestW = 0;
+            for (let i = 0; i < CROUCH_DIR_KEYS.length; i++) {
+              const ck = CROUCH_DIR_KEYS[i];
+              const act = rig.actions[ck];
+              const curW = rig.actionWeights[ck] || 0;
+              const running = act && (typeof act.isRunning === "function" ? act.isRunning() : Boolean(act.playing));
+              if (running && curW > bestW && act.clip && act.clip.duration > 0) {
+                bestW = curW;
+                leadCrouchPhase = (((act.time || 0) / act.clip.duration) % 1 + 1) % 1;
+              }
+            }
+          }
+
+          stepNormalizedActionWeights(rig.actionWeights, targetWeights, rig.actionKeys, dt, blendDur);
+
+          const rawSpeedMps = dt > 1e-4 && horizStep > 1e-4 ? horizStep / dt : 0;
+          const smoothedSpeedMps = Math.hypot(av.localVelFwd, av.localVelRight);
+          const effSpeedMps = rawSpeedMps > 0.25 ? rawSpeedMps : smoothedSpeedMps;
+          const mvNorm = effSpeedMps > 0.25 ? Math.max(0.25, Math.min(1.5, effSpeedMps / 5.5)) : pose.mv;
+          const isBackpedal = !isDirectionalCrouchMove && effSpeedMps > 0.25 && av.localVelFwd < -0.25 * effSpeedMps;
+
+          // Standing run uses 1 forward clip -> keep gentle pelvis alignment; 4-way crouch uses native clips (no extra yaw twist)
+          let targetGaitYaw = 0;
+          if (desiredState === "run" || (desiredState === "crouch_move" && !rig.hasDirectionalCrouch)) {
+            if (effSpeedMps > 0.25) {
+              const localStrafeRatio = Math.atan2(av.localVelRight, Math.abs(av.localVelFwd) + 1e-4);
+              targetGaitYaw = Math.max(-0.34, Math.min(0.34, (isBackpedal ? -localStrafeRatio : localStrafeRatio) * 0.65));
+            }
+          }
+          av.gaitYawOffset = (av.gaitYawOffset || 0) + (targetGaitYaw - (av.gaitYawOffset || 0)) * Math.min(1, 12 * dt);
+
+          const dirSign = isBackpedal ? -0.88 : 1.0;
+          const runScale = Math.max(0.95, Math.min(2.35, mvNorm * 2.05)) * dirSign;
+          const crouchSpeedRef = effSpeedMps > 0.25 ? effSpeedMps : pose.mv * 3.19;
+          const dirCrouchScale = Math.max(0.72, Math.min(1.48, crouchSpeedRef / 2.75));
+          const legacyCrouchScale = Math.max(0.85, Math.min(1.9, mvNorm * 1.9)) * dirSign;
+          const proneMoveScale = Math.max(0.85, Math.min(1.55, (mvNorm || 0.55) / 0.45)) * dirSign;
+
+          for (let i = 0; i < rig.actionKeys.length; i++) {
+            const key = rig.actionKeys[i];
+            const act = rig.actions[key];
+            if (!act) continue;
+            const w = rig.actionWeights[key] || 0;
+            const isRunning = typeof act.isRunning === "function" ? act.isRunning() : Boolean(act.playing);
+            if (w > 0) {
+              act.enabled = true;
+              if (!isRunning || (key === "jump" && prevState !== "jump" && desiredState === "jump")) {
+                if (key === "jump") {
+                  act.reset();
+                } else if (CROUCH_DIR_SET.has(key) && leadCrouchPhase !== null && act.clip && act.clip.duration > 0) {
+                  act.time = leadCrouchPhase * act.clip.duration;
+                }
+                act.play();
+              }
+              act.setEffectiveWeight(w);
+              if (key === "run") act.setEffectiveTimeScale(runScale);
+              else if (CROUCH_DIR_SET.has(key)) act.setEffectiveTimeScale(dirCrouchScale);
+              else if (key === "crouch_move") act.setEffectiveTimeScale(legacyCrouchScale);
+              else if (key === "prone_move") act.setEffectiveTimeScale(proneMoveScale);
+              else act.setEffectiveTimeScale(1.0);
+            } else {
+              act.setEffectiveWeight(0);
+              if (isRunning && typeof act.stop === "function") act.stop();
+            }
+          }
+
+          rig.activeState = desiredState;
+          rig.activeAction = rig.actions[desiredState] || rig.activeAction;
+          rig.lastBlendDur = blendDur;
           rig.mixer.update(dt);
         }
+
+        // Apply subtle pelvis directional alignment & counter-rotate spine so chest/rifle stays aimed at opponent
+        if (Math.abs(av.gaitYawOffset || 0) > 0.002) {
+          rig.root.rotation.y = av.gaitYawOffset;
+          if (rig.spineBone) rig.spineBone.rotation.y -= av.gaitYawOffset * 0.85;
+        } else {
+          rig.root.rotation.y = 0;
+        }
+
         const pitchScale = isProne ? 0.3 : 1.0;
         if (rig.spineBone) rig.spineBone.rotation.x += pose.pitch * 0.28 * pitchScale;
         if (rig.headBone) rig.headBone.rotation.x += pose.pitch * 0.52 * pitchScale;
 
-        // Align weaponMount toward LeftHand blended with soldier forward (-Z) to keep weapon upright & on-target
+        // Align weaponMount toward LeftHand blended with soldier forward (-Z) to keep weapon upright & shoulder-tucked
         if (
           rig.weaponMount &&
           rig.weaponMount.parent &&
@@ -856,13 +1004,21 @@ export function createRemotePlayersManager({
           typeof rig.weaponMount.getWorldPosition === "function" &&
           typeof rig.weaponMount.parent.getWorldQuaternion === "function"
         ) {
-          av.container.updateMatrixWorld(true);
+          // Targeted ancestor-only matrix refresh avoids traversing all 41 bones/meshes every frame
+          if (typeof rig.weaponMount.parent.updateWorldMatrix === "function") {
+            rig.weaponMount.parent.updateWorldMatrix(true, false);
+          } else {
+            av.container.updateMatrixWorld(true);
+          }
           _contQuat.copy(av.container.quaternion);
           _charFwd.set(0, Math.sin(pose.pitch) * (isProne ? 0.2 : 0.65), -1).normalize().applyQuaternion(_contQuat);
           _charUp.set(0, 1, 0).applyQuaternion(_contQuat);
 
           let hasHandAim = false;
           if (rig.leftHandBone && typeof rig.leftHandBone.getWorldPosition === "function") {
+            if (typeof rig.leftHandBone.updateWorldMatrix === "function") {
+              rig.leftHandBone.updateWorldMatrix(true, false);
+            }
             rig.weaponMount.getWorldPosition(_rhWorld);
             rig.leftHandBone.getWorldPosition(_lhWorld);
             _handDir.subVectors(_lhWorld, _rhWorld);
@@ -873,16 +1029,18 @@ export function createRemotePlayersManager({
           }
 
           if (hasHandAim) {
+            const isCrouchState =
+              desiredState === "crouch" || desiredState === "crouch_move" || CROUCH_DIR_SET.has(desiredState);
             const handWeight =
               desiredState === "prone"
-                ? 0.08
+                ? 0.25
                 : desiredState === "prone_move"
-                  ? 0.12
-                  : desiredState === "crouch"
-                    ? 0.55
+                  ? 0.1
+                  : isCrouchState
+                    ? 0.85
                     : desiredState === "run"
-                      ? 0.62
-                      : 0.85;
+                      ? 0.82
+                      : 0.88;
             _aimDir.copy(_charFwd).multiplyScalar(1 - handWeight).addScaledVector(_handDir, handWeight);
           } else {
             _aimDir.copy(_charFwd);

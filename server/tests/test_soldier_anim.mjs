@@ -12,12 +12,15 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+  CROUCH_DIR_KEYS,
   SOLDIER_BONE_ALIASES,
   cloneSkinnedHierarchy,
+  computeCrouchDirectionalWeights,
   findSoldierClip,
   hasSkinnedMesh,
   resolveRigBone,
   selectSoldierAnimState,
+  stepNormalizedActionWeights,
 } from "../../public/js/skinned_clone.js";
 import { createRemotePlayersManager } from "../../public/js/remote_players.js";
 import { computeRecoilModifiers } from "../../public/js/recoil.js";
@@ -160,6 +163,8 @@ function createMockThree() {
       this.loop = null;
       this.clampWhenFinished = false;
       this.playing = false;
+      this.enabled = true;
+      this.time = 0;
       this.timeScale = 1;
       this.weight = 1;
       this.crossFadedTo = [];
@@ -169,6 +174,7 @@ function createMockThree() {
       return this;
     }
     reset() {
+      this.time = 0;
       return this;
     }
     setEffectiveWeight(w) {
@@ -182,6 +188,13 @@ function createMockThree() {
     play() {
       this.playing = true;
       return this;
+    }
+    stop() {
+      this.playing = false;
+      return this;
+    }
+    isRunning() {
+      return this.playing;
     }
     crossFadeTo(other, dur) {
       this.crossFadedTo.push({ to: other.clip.name, dur });
@@ -272,13 +285,14 @@ function buildMockSkinnedSoldierProto(THREE) {
   return root;
 }
 
-test("selectSoldierAnimState enforces FPS priority dead > jump > prone_move/prone > crouch > run > idle", () => {
+test("selectSoldierAnimState enforces FPS priority dead > jump > prone_move/prone > crouch_move/crouch > run > idle", () => {
   // Arrange & Act & Assert
   assert.equal(selectSoldierAnimState({ alive: false, mv: 1, flags: FLAG.AIR | FLAG.PRONE, FLAG }), "dead");
   assert.equal(selectSoldierAnimState({ alive: true, mv: 1.2, flags: FLAG.AIR | FLAG.PRONE | FLAG.CROUCH, FLAG }), "jump");
   assert.equal(selectSoldierAnimState({ alive: true, mv: 0.5, flags: FLAG.PRONE, FLAG }), "prone_move");
   assert.equal(selectSoldierAnimState({ alive: true, mv: 0.02, flags: FLAG.PRONE, FLAG }), "prone");
-  assert.equal(selectSoldierAnimState({ alive: true, mv: 0.9, flags: FLAG.CROUCH, FLAG }), "crouch");
+  assert.equal(selectSoldierAnimState({ alive: true, mv: 0.65, flags: FLAG.CROUCH, FLAG }), "crouch_move");
+  assert.equal(selectSoldierAnimState({ alive: true, mv: 0.02, flags: FLAG.CROUCH, FLAG }), "crouch");
   assert.equal(selectSoldierAnimState({ alive: true, mv: 0.45, flags: 0, FLAG }), "run");
   assert.equal(selectSoldierAnimState({ alive: true, mv: 0.02, flags: 0, FLAG }), "idle");
   // Unhappy path: omitted parameters default cleanly to idle
@@ -393,6 +407,7 @@ test("remote_players manager drives AnimationMixer crossfades & bone hitboxes fo
       { name: "idle" },
       { name: "run" },
       { name: "crouch" },
+      { name: "crouch_move" },
       { name: "jump" },
       { name: "prone" },
       { name: "prone_move" },
@@ -425,15 +440,21 @@ test("remote_players manager drives AnimationMixer crossfades & bone hitboxes fo
 
     const av = mgr.createRemoteAvatar({ id: "enemy-1", name: "FSB_Bot", team: "B", hp: 100, alive: true });
 
-    // Assert bone hitboxes (head + body + limbs) & TeamColor override & weapon_mount
+    // Assert scaled Heroic FPS proportion (~1.92m tall x ~0.83m broad) & bone hitboxes & weapon_mount
     assert.equal(av.rig.isSkinned, true);
+    assert.ok(Math.abs(av.rig.root.scale.x - 1.15) < 1e-6);
+    assert.ok(Math.abs(av.rig.root.scale.y - 1.09) < 1e-6);
+    assert.ok(Math.abs(av.rig.root.scale.z - 1.15) < 1e-6);
     assert.ok(av.hitMeshes.some((m) => m.userData.hitTarget.part === "head"));
     assert.ok(av.hitMeshes.some((m) => m.userData.hitTarget.part === "body"));
     assert.ok(av.hitMeshes.some((m) => m.userData.hitTarget.part === "limb"));
     assert.equal(av.rig.weaponMount.name, "weapon_mount");
     assert.equal(av.rig.root.getObjectByName("head_team_iff").material, teamAccentMats.B);
 
-    // Act: transition idle -> run -> crouch -> jump via snapshots
+    assert.equal(av.shieldDome, null);
+    assert.equal(av.shieldBaseRing, null);
+
+    // Act: transition idle -> run -> crouch -> crouch_move -> prone -> prone_move -> jump -> idle via snapshots
     const t0 = Date.now();
     av.snapshots = [{ t: t0 - 10, x: 0, y: 0, z: 0, yaw: 0, pitch: 0.2, mv: 1.0, flags: 0, hp: 100, alive: true }];
     mgr.updateRemotePlayers(0.016);
@@ -444,6 +465,10 @@ test("remote_players manager drives AnimationMixer crossfades & bone hitboxes fo
     assert.equal(av.rig.activeState, "crouch");
     // Dedicated crouch clip owns hip height -> root stays grounded at y=0 (no double sinking)
     assert.equal(av.rig.root.position.y, 0);
+
+    av.snapshots = [{ t: t0 - 10, x: 0, y: 0, z: -0.05, yaw: 0, pitch: 0, mv: 0.65, flags: FLAG.CROUCH, hp: 100, alive: true }];
+    mgr.updateRemotePlayers(0.016);
+    assert.equal(av.rig.activeState, "crouch_move");
 
     av.snapshots = [{ t: t0 - 10, x: 0, y: 0, z: 0, yaw: 0, pitch: 0, mv: 0, flags: FLAG.PRONE, hp: 100, alive: true }];
     mgr.updateRemotePlayers(0.016);
@@ -459,23 +484,189 @@ test("remote_players manager drives AnimationMixer crossfades & bone hitboxes fo
     assert.equal(av.rig.activeState, "jump");
     assert.equal(av.rig.actions.jump.loop, THREE.LoopOnce);
     assert.equal(av.rig.actions.jump.clampWhenFinished, true);
-    const jumpFade = av.rig.actions.prone_move.crossFadedTo.at(-1);
-    assert.equal(jumpFade.to, "jump");
-    assert.equal(jumpFade.dur, 0.07);
+    assert.equal(av.rig.lastBlendDur, 0.07);
 
     av.snapshots = [{ t: t0 - 10, x: 0, y: 0, z: 0, yaw: 0, pitch: 0, mv: 0, flags: 0, hp: 100, alive: true }];
     mgr.updateRemotePlayers(0.016);
     assert.equal(av.rig.activeState, "idle");
-    const landFade = av.rig.actions.jump.crossFadedTo.at(-1);
-    assert.equal(landFade.to, "idle");
-    assert.equal(landFade.dur, 0.07);
+    assert.equal(av.rig.lastBlendDur, 0.07);
+    const wSumLegacy = av.rig.actionKeys.reduce((acc, k) => acc + (av.rig.actionWeights[k] || 0), 0);
+    assert.ok(Math.abs(wSumLegacy - 1) < 1e-6, `Expected normalized full weight sum=1, got ${wSumLegacy}`);
     assert.ok(av.rig.mixer.updatedDt > 0.08);
   } finally {
     globalThis.document = prevDoc;
   }
 });
 
-test("Exported model/dist/soldier.glb contains 6-clip FSB/SWAT SkinnedMesh, weapon_mount, TeamColor, and no Draco", () => {
+test("computeCrouchDirectionalWeights & stepNormalizedActionWeights enforce full-weight normalization and smooth 8-way crouch", () => {
+  // Happy Path: pure 4 directions + diagonals
+  const fwd = computeCrouchDirectionalWeights(3.0, 0.0);
+  assert.equal(fwd.dominant, "crouch_forward");
+  assert.equal(fwd.crouch_forward, 1);
+
+  const back = computeCrouchDirectionalWeights(-2.8, 0.1); // minor noise suppressed by deadzone
+  assert.equal(back.dominant, "crouch_backward");
+  assert.equal(back.crouch_backward, 1);
+  assert.equal(back.crouch_right, 0);
+
+  const left = computeCrouchDirectionalWeights(0.0, -2.5);
+  assert.equal(left.dominant, "crouch_left");
+  assert.equal(left.crouch_left, 1);
+
+  const right = computeCrouchDirectionalWeights(0.0, 2.5);
+  assert.equal(right.dominant, "crouch_right");
+  assert.equal(right.crouch_right, 1);
+
+  const diag = computeCrouchDirectionalWeights(2.0, 2.0);
+  assert.ok(Math.abs(diag.crouch_forward - 0.5) < 1e-6);
+  assert.ok(Math.abs(diag.crouch_right - 0.5) < 1e-6);
+  assert.equal(diag.crouch_backward, 0);
+  assert.equal(diag.crouch_left, 0);
+
+  // Unhappy Path: zero / NaN defaults safely to crouch_forward = 1
+  const nanRes = computeCrouchDirectionalWeights(Number.NaN, Number.NaN);
+  assert.equal(nanRes.dominant, "crouch_forward");
+  assert.equal(nanRes.crouch_forward, 1);
+
+  // stepNormalizedActionWeights: invariant sum === 1.0 on every frame and mid-transition
+  const keys = ["idle", "run", "crouch", ...CROUCH_DIR_KEYS, "jump"];
+  const cur = Object.fromEntries(keys.map((k) => [k, k === "idle" ? 1 : 0]));
+  const tgt = Object.fromEntries(keys.map((k) => [k, k === "crouch_forward" ? 0.5 : k === "crouch_right" ? 0.5 : 0]));
+  for (let step = 0; step < 16; step++) {
+    const s = stepNormalizedActionWeights(cur, tgt, keys, 0.016, 0.11);
+    assert.ok(Math.abs(s - 1) < 1e-6, `Expected sum=1 on step ${step}, got ${s}`);
+  }
+  assert.ok(cur.crouch_forward > 0.45 && cur.crouch_right > 0.45);
+  assert.equal(cur.idle, 0);
+
+  // Unhappy Path: corrupted zero/NaN current weights recover cleanly to sum === 1.0
+  const broken = Object.fromEntries(keys.map((k) => [k, Number.NaN]));
+  const recSum = stepNormalizedActionWeights(broken, tgt, keys, 0.016, 0.11);
+  assert.ok(Math.abs(recSum - 1) < 1e-6);
+});
+
+test("remote_players manager drives 4-way crouch blendspace with yaw alignment, teleport reset, and full weight invariant", () => {
+  const THREE = createMockThree();
+  const prevDoc = globalThis.document;
+  globalThis.document = {
+    createElement() {
+      return {
+        width: 256,
+        height: 64,
+        getContext() {
+          return { clearRect() {}, fillRect() {}, strokeRect() {}, fillText() {} };
+        },
+      };
+    },
+  };
+
+  try {
+    const scene = new THREE.Group("scene");
+    const soldierProto = buildMockSkinnedSoldierProto(THREE);
+    const soldierAnimations = [
+      { name: "idle", duration: 3.5 },
+      { name: "run", duration: 0.77 },
+      { name: "crouch", duration: 2.0 },
+      { name: "crouch_forward", duration: 1.0 },
+      { name: "crouch_backward", duration: 1.0 },
+      { name: "crouch_left", duration: 1.0 },
+      { name: "crouch_right", duration: 1.0 },
+      { name: "jump", duration: 0.4 },
+      { name: "prone", duration: 4.9 },
+      { name: "prone_move", duration: 2.3 },
+    ];
+    const teamAccentMats = { A: { name: "TeamColor_A" }, B: { name: "TeamColor_B" }, FFA: { name: "TeamColor_FFA" } };
+
+    const mgr = createRemotePlayersManager({
+      THREE,
+      scene,
+      net: { clockOffsetMs: 0 },
+      TEAM_META,
+      FLAG,
+      INTERP_DELAY_MS: 0,
+      remoteMuzFlashGeo: new THREE.Geometry(),
+      remoteMuzFlashMat: new THREE.MeshBasicMaterial(),
+      getPrototypes: () => ({
+        soldierProto,
+        soldierAnimations,
+        m416WorldProto: null,
+        pistolWorldProto: null,
+        awmWorldProto: null,
+      }),
+      getTeamAccentMats: () => teamAccentMats,
+      getMatchMeta: () => ({ currentMode: "TDM", meTeam: "A" }),
+    });
+
+    const av = mgr.createRemoteAvatar({ id: "swat-4way", name: "SWAT", team: "B", hp: 100, alive: true, x: 0, y: 0, z: 0 });
+    assert.equal(av.rig.hasDirectionalCrouch, true);
+
+    const assertWeightUnity = (label) => {
+      const sum = av.rig.actionKeys.reduce((acc, k) => acc + (av.rig.actionWeights[k] || 0), 0);
+      assert.ok(Math.abs(sum - 1) < 1e-6, `${label}: expected sum(weights)=1, got ${sum}`);
+    };
+
+    const t0 = Date.now();
+    // Forward crouch (-Z when yaw=0)
+    let px = 0;
+    let pz = 0;
+    for (let i = 0; i < 12; i++) {
+      pz -= 0.05;
+      av.snapshots = [{ t: t0 - 10, x: px, y: 0, z: pz, yaw: 0, pitch: 0, mv: 0.55, flags: FLAG.CROUCH, hp: 100, alive: true }];
+      mgr.updateRemotePlayers(0.016);
+      assertWeightUnity(`crouch_forward_${i}`);
+    }
+    assert.equal(av.rig.activeState, "crouch_forward");
+    assert.equal(av.gaitYawOffset, 0);
+
+    // Backward crouch (+Z when yaw=0)
+    for (let i = 0; i < 15; i++) {
+      pz += 0.05;
+      av.snapshots = [{ t: t0 - 10, x: px, y: 0, z: pz, yaw: 0, pitch: 0, mv: 0.55, flags: FLAG.CROUCH, hp: 100, alive: true }];
+      mgr.updateRemotePlayers(0.016);
+      assertWeightUnity(`crouch_backward_${i}`);
+    }
+    assert.equal(av.rig.activeState, "crouch_backward");
+
+    // Left strafe crouch (-X when yaw=0)
+    for (let i = 0; i < 15; i++) {
+      px -= 0.05;
+      av.snapshots = [{ t: t0 - 10, x: px, y: 0, z: pz, yaw: 0, pitch: 0, mv: 0.55, flags: FLAG.CROUCH, hp: 100, alive: true }];
+      mgr.updateRemotePlayers(0.016);
+      assertWeightUnity(`crouch_left_${i}`);
+    }
+    assert.equal(av.rig.activeState, "crouch_left");
+
+    // Right strafe crouch (+X when yaw=0)
+    for (let i = 0; i < 15; i++) {
+      px += 0.05;
+      av.snapshots = [{ t: t0 - 10, x: px, y: 0, z: pz, yaw: 0, pitch: 0, mv: 0.55, flags: FLAG.CROUCH, hp: 100, alive: true }];
+      mgr.updateRemotePlayers(0.016);
+      assertWeightUnity(`crouch_right_${i}`);
+    }
+    assert.equal(av.rig.activeState, "crouch_right");
+
+    // Diagonal forward-right crouch (-Z and +X) blends both forward & right weights evenly
+    for (let i = 0; i < 16; i++) {
+      px += 0.04;
+      pz -= 0.04;
+      av.snapshots = [{ t: t0 - 10, x: px, y: 0, z: pz, yaw: 0, pitch: 0, mv: 0.55, flags: FLAG.CROUCH, hp: 100, alive: true }];
+      mgr.updateRemotePlayers(0.016);
+      assertWeightUnity(`crouch_diag_${i}`);
+    }
+    assert.ok(av.rig.actionWeights.crouch_forward > 0.35 && av.rig.actionWeights.crouch_right > 0.35);
+
+    // Teleport (>1.5m) resets velocity cleanly without corrupting direction
+    av.snapshots = [{ t: t0 - 10, x: 10, y: 0, z: 10, yaw: 0, pitch: 0, mv: 0, flags: FLAG.CROUCH, hp: 100, alive: true }];
+    mgr.updateRemotePlayers(0.016);
+    assert.equal(av.localVelFwd, 0);
+    assert.equal(av.localVelRight, 0);
+    assertWeightUnity("teleport_reset");
+  } finally {
+    globalThis.document = prevDoc;
+  }
+});
+
+test("Exported model/dist/soldier.glb contains 10-clip 28k FSB/SWAT SkinnedMesh (incl. 4-way crouch), weapon_mount, TeamColor, and no Draco", () => {
   // Arrange
   const glbPath = path.join(REPO_ROOT, "model", "dist", "soldier.glb");
   assert.ok(fs.existsSync(glbPath), "model/dist/soldier.glb must exist");
@@ -492,7 +683,18 @@ test("Exported model/dist/soldier.glb contains 6-clip FSB/SWAT SkinnedMesh, weap
   assert.equal((gltf.extensionsRequired || []).includes("KHR_draco_mesh_compression"), false);
   assert.equal((gltf.skins || []).length, 1);
   assert.ok(gltf.skins[0].joints.length >= 40, `Expected >=40 joints, got ${gltf.skins[0].joints.length}`);
-  for (const clip of ["idle", "run", "crouch", "jump", "prone", "prone_move"]) {
+  for (const clip of [
+    "idle",
+    "run",
+    "crouch",
+    "crouch_forward",
+    "crouch_backward",
+    "crouch_left",
+    "crouch_right",
+    "jump",
+    "prone",
+    "prone_move",
+  ]) {
     assert.ok(animNames.includes(clip), `Missing animation clip '${clip}' in soldier.glb`);
   }
   for (const anim of gltf.animations) {
@@ -503,7 +705,7 @@ test("Exported model/dist/soldier.glb contains 6-clip FSB/SWAT SkinnedMesh, weap
   assert.ok(matNames.includes("FSB_Operator_PBR"), "soldier.glb must include FSB_Operator_PBR material");
 });
 
-test("Preprocessed fsb_ready_for_rig.glb meets WebGL budget (<=20k tris, 1.76m, 1024px textures, no Draco)", () => {
+test("Preprocessed fsb_ready_for_rig.glb meets WebGL budget (<=32k tris, 1.76m, 1024px textures, no Draco)", () => {
   // Arrange
   const glbPath = path.join(REPO_ROOT, "model", "assets", "fsb_ready_for_rig.glb");
   if (!fs.existsSync(glbPath)) return; // Skip cleanly if asset hasn't been preprocessed on CI
@@ -529,11 +731,11 @@ test("Preprocessed fsb_ready_for_rig.glb meets WebGL budget (<=20k tris, 1.76m, 
   }
 
   // Assert geometry, scale, texture resolution and no Draco requirement
-  assert.ok(tris > 5000 && tris <= 20000, `Expected 5k..20k tris, got ${tris}`);
+  assert.ok(tris >= 24000 && tris <= 32000, `Expected 24k..32k tris, got ${tris}`);
   assert.ok(Math.abs(minY) < 0.02, `Feet should sit at Y=0, got ${minY}`);
   assert.ok(Math.abs(maxY - minY - 1.76) < 0.03, `Height should be ~1.76m, got ${maxY - minY}`);
   assert.equal((gltf.extensionsRequired || []).includes("KHR_draco_mesh_compression"), false);
-  assert.ok(buf.length < 6 * 1024 * 1024, `Preprocessed GLB should be <6MB, got ${(buf.length / 1048576).toFixed(2)}MB`);
+  assert.ok(buf.length < 8 * 1024 * 1024, `Preprocessed GLB should be <8MB, got ${(buf.length / 1048576).toFixed(2)}MB`);
 
   for (const im of gltf.images || []) {
     const bv = gltf.bufferViews[im.bufferView];

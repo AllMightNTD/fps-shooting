@@ -1031,6 +1031,8 @@
         padding: 10px;
         border-radius: 4px;
         min-height: 150px;
+        max-height: 320px;
+        overflow-y: auto;
       }
       .teamBox h3 {
         margin: 0 0 8px;
@@ -1347,6 +1349,8 @@
         display: none;
         pointer-events: none;
         z-index: 9;
+        will-change: opacity;
+        contain: layout style;
         background: radial-gradient(
           circle at center,
           rgba(16, 26, 30, 0.04) 24%,
@@ -1359,7 +1363,7 @@
         inset: 0;
         display: grid;
         place-items: center;
-        will-change: filter, opacity;
+        will-change: transform, opacity;
       }
       #scopeReticleSvg {
         width: min(62vh, 62vw);
@@ -1621,6 +1625,8 @@
         top: 50%;
         transform: translate(-50%, -50%);
         width: min(640px, 90vw);
+        max-height: 82vh;
+        overflow-y: auto;
         background: rgba(9, 16, 24, 0.92);
         border: 1px solid rgba(240, 180, 41, 0.45);
         padding: 14px 18px;
@@ -1636,7 +1642,7 @@
       }
       #scoreboard th,
       #scoreboard td {
-        padding: 6px 8px;
+        padding: 4px 8px;
         text-align: left;
         border-bottom: 1px solid rgba(255, 255, 255, 0.08);
         font-size: 13px;
@@ -2840,12 +2846,14 @@
             <div class="botCtrlGroup">
               <label for="botCountSelect">Số Bot:</label>
               <select id="botCountSelect">
-                <option value="3">3 Bot</option>
-                <option value="5" selected>5 Bot</option>
-                <option value="7">7 Bot</option>
-                <option value="9">9 Bot</option>
+                <option value="5">5 Bot (3v3)</option>
+                <option value="9">9 Bot (5v5)</option>
+                <option value="11">11 Bot (6v6)</option>
+                <option value="13">13 Bot (7v7)</option>
+                <option value="15" selected>15 Bot (8v8)</option>
+                <option value="17">17 Bot (9v9)</option>
               </select>
-              <span id="botTeamSummary" class="botTeamPill">3v3 • Bạn + 2 Đồng đội vs 3 Bot địch</span>
+              <span id="botTeamSummary" class="botTeamPill">8v8 • Bạn + 7 Đồng đội vs 8 Bot địch</span>
             </div>
             <div class="botCtrlGroup">
               <label for="botKillsSelect">Mục tiêu:</label>
@@ -3096,9 +3104,12 @@
                   <option value="600" selected>10 Phút</option>
                 </select>
                 <select id="createMaxPlayers">
-                  <option value="4">4 Người</option>
-                  <option value="6">6 Người</option>
-                  <option value="10" selected>10 Người</option>
+                  <option value="4">4 Người (2v2)</option>
+                  <option value="6">6 Người (3v3)</option>
+                  <option value="10">10 Người (5v5)</option>
+                  <option value="12">12 Người (6v6)</option>
+                  <option value="16" selected>16 Người (8v8)</option>
+                  <option value="18">18 Người (9v9)</option>
                 </select>
               </div>
               <div class="row" style="justify-content: space-between">
@@ -3224,6 +3235,9 @@
             <option value="4">4 Người</option>
             <option value="6">6 Người</option>
             <option value="10">10 Người</option>
+            <option value="12">12 Người</option>
+            <option value="16">16 Người</option>
+            <option value="18">18 Người</option>
           </select>
           <input
             id="roomSetPassword"

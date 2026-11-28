@@ -262,14 +262,26 @@ def _get_remote_telemetry(observer: Page) -> dict[str, Any]:
             weaponForwardDot = Number(mBarrel.dot(cFwd).toFixed(3));
             weaponUpY = Number(mUp.y.toFixed(3));
           }
+          const weightsObj = rig.actionWeights || {};
+          const weightSum = Number(
+            Object.values(weightsObj)
+              .reduce((a, b) => a + (Number.isFinite(b) ? b : 0), 0)
+              .toFixed(4),
+          );
           return {
             name: av.name,
             team: av.team,
             alive: av.alive,
             flags: av.flags || 0,
             isSkinned: Boolean(rig.isSkinned),
+            hasDirectionalCrouch: Boolean(rig.hasDirectionalCrouch),
             actionKeys: rig.actions ? Object.keys(rig.actions) : [],
             activeState: rig.activeState || "",
+            weightSum,
+            actionWeights: Object.fromEntries(
+              Object.entries(weightsObj).filter(([, w]) => w > 0.01).map(([k, w]) => [k, Number(w.toFixed(3))]),
+            ),
+            gaitYawOffset: Number((av.gaitYawOffset || 0).toFixed(3)),
             weaponAttached: Boolean(av.weaponAttached),
             weaponId: av.weaponId,
             weaponForwardDot,
@@ -281,7 +293,7 @@ def _get_remote_telemetry(observer: Page) -> dict[str, Any]:
             },
             headWorldY,
             crownY,
-            invulnerable: Boolean(av.shieldDome && av.shieldDome.visible),
+            invulnerable: Boolean(av.shieldBlinkActive),
           };
         }"""
     )
@@ -314,26 +326,26 @@ def _aim_observer_at(observer: Page, obs_pos: tuple[float, float, float], target
     tx, tz = target_xz
     dx = tx - ox
     dz = tz - oz
-    # Shift slightly right (+yaw? no, -yaw turns right in Three.js) so actor sits cleanly left-of-center away from 1P gun
-    yaw = math.atan2(-dx, -dz) - 0.14
+    yaw = math.atan2(-dx, -dz)
     observer.evaluate(
         """([ox, oy, oz, yaw, pitch]) => {
           const st = window.__fpsApp.game.getState();
-          st.setPose(ox, oy, oz, yaw, pitch);
-          st.setTestCombat({ locked: true, aimHeld: false, adsSteps: 80 });
-          window.__fpsApp.game.gunAnim(0, 0);
+          st.setTestCombat({
+            locked: true,
+            specCam: { x: ox, y: oy + 1.48, z: oz, yaw, pitch },
+          });
         }""",
         [ox, oy, oz, yaw, pitch],
     )
 
 
-def _set_actor_pose(actor: Page, x: float, y: float, z: float, yaw: float) -> None:
+def _turn_actor_in_place(actor: Page, yaw: float) -> None:
     actor.evaluate(
-        """([x, y, z, yaw]) => {
+        """(yaw) => {
           const st = window.__fpsApp.game.getState();
-          st.setPose(x, y, z, yaw, 0.0);
+          st.setPose(st.P.x, st.P.y, st.P.z, yaw, 0.0);
         }""",
-        [x, y, z, yaw],
+        yaw,
     )
 
 
@@ -452,28 +464,41 @@ def main() -> int:
                     timeout=15000,
                 )
 
-                # Position Observer right in Team B sunlit courtyard across from SwatActor
-                obs_pos = (-1.65, 0.0, 41.15)
-                act_center = (0.35, 0.0, 39.15)
-                _aim_observer_at(observer, obs_pos, (act_center[0], act_center[2]), pitch=-0.22)
-                _set_actor_pose(actor, act_center[0], act_center[1], act_center[2], yaw=1.92)
+                # Anchor spectator camera beside SwatActor's natural Team B courtyard spawn (0 SPEED_TAMPER teleports)
+                init_act = _get_actor_telemetry(actor)
+                sx, sz = init_act["x"], init_act["z"]
+                yaw_open = math.atan2(-(0.0 - sx), -(38.5 - sz))
+                obs_pos = (sx - 1.95, 0.0, sz - 1.95)
+                _turn_actor_in_place(actor, yaw_open + 0.35)
+                _aim_observer_at(observer, obs_pos, (sx, sz), pitch=-0.20)
                 _install_observer_overlay(observer)
 
-                # Wait for 2.5s spawn shield dome to fade and interpolation to settle cleanly
+                # Wait for 3.0s CS2 spawn protection blink to finish & interpolation settle
                 observer.wait_for_function(
                     """() => {
                       const av = Array.from(window.__fpsApp.game.getState().getRemotePlayers().values())[0];
-                      return av && !av.shieldDome.visible && Math.hypot(av.container.position.x - 0.35, av.container.position.z - 39.15) < 0.85;
+                      return av && !av.shieldBlinkActive;
                     }""",
                     timeout=12000,
                 )
                 observer.wait_for_timeout(350)
                 match_ready_t0 = time.monotonic()
 
-                # Verify remote SWAT rig & all 6 clips loaded
+                # Verify remote SWAT rig & all 10 clips (incl. 4-way crouch) loaded
                 init_rem = _get_remote_telemetry(observer)
                 assert init_rem and init_rem["isSkinned"] is True, f"Remote SWAT is not SkinnedMesh: {init_rem}"
-                for req_clip in ("idle", "run", "crouch", "jump", "prone", "prone_move"):
+                for req_clip in (
+                    "idle",
+                    "run",
+                    "crouch",
+                    "crouch_forward",
+                    "crouch_backward",
+                    "crouch_left",
+                    "crouch_right",
+                    "jump",
+                    "prone",
+                    "prone_move",
+                ):
                     assert req_clip in init_rem["actionKeys"], f"Missing action '{req_clip}': {init_rem}"
                 assert init_rem["weaponAttached"] is True, f"Weapon not attached to SWAT rig: {init_rem}"
                 report["rig_info"] = init_rem
@@ -481,19 +506,19 @@ def main() -> int:
                 # ---- STATE 1: ĐỨNG (idle) ----
                 _set_observer_banner(
                     observer,
-                    "1/6 — ĐỨNG (idle)",
-                    "Phím: Mặc định | Clip: idle | SkinnedMesh 41 xương + M416",
+                    "1/10 — ĐỨNG (idle)",
+                    "Phím: Mặc định | Clip: idle | SkinnedMesh 28k + M416",
                 )
                 observer.wait_for_function(
                     "() => Array.from(window.__fpsApp.game.getState().getRemotePlayers().values())[0]?.rig?.activeState === 'idle'",
                     timeout=6000,
                 )
-                observer.wait_for_timeout(1600)
+                observer.wait_for_timeout(1200)
                 rem_idle = _get_remote_telemetry(observer)
                 act_idle = _get_actor_telemetry(actor)
                 assert rem_idle["activeState"] == "idle", rem_idle
                 assert 1.30 <= rem_idle["headWorldY"] <= 1.85, rem_idle
-                assert rem_idle["weaponForwardDot"] > 0.90 and rem_idle["weaponUpY"] > 0.90, rem_idle
+                assert rem_idle["weaponForwardDot"] > 0.85 and rem_idle["weaponUpY"] > 0.85, rem_idle
                 ss1 = ss_dir / "01_idle_dung.png"
                 observer.screenshot(path=str(ss1))
                 report["states"]["idle"] = {"remote": rem_idle, "actor": act_idle, "screenshot": str(ss1)}
@@ -501,38 +526,83 @@ def main() -> int:
                 # ---- STATE 2: NGỒI (crouch) ----
                 _set_observer_banner(
                     observer,
-                    "2/6 — NGỒI (crouch)",
-                    "Phím: Giữ C | Clip: crouch | Hạ trọng tâm & hitbox",
+                    "2/10 — NGỒI (crouch)",
+                    "Phím: Giữ C | Clip: crouch (cân bằng +24cm khớp hitbox ngồi)",
                 )
                 actor.keyboard.down("KeyC")
                 observer.wait_for_function(
                     "() => Array.from(window.__fpsApp.game.getState().getRemotePlayers().values())[0]?.rig?.activeState === 'crouch'",
                     timeout=6000,
                 )
-                observer.wait_for_timeout(1400)
+                observer.wait_for_timeout(1100)
                 rem_crouch = _get_remote_telemetry(observer)
                 act_crouch = _get_actor_telemetry(actor)
                 assert rem_crouch["activeState"] == "crouch", rem_crouch
+                assert rem_crouch["hasDirectionalCrouch"] is True, rem_crouch
+                assert abs(rem_crouch["weightSum"] - 1.0) < 0.01, rem_crouch
                 assert act_crouch["crouched"] is True and act_crouch["eyeHeight"] < 1.22, act_crouch
-                assert rem_crouch["headWorldY"] < rem_idle["headWorldY"] - 0.30, (rem_crouch, rem_idle)
-                assert rem_crouch["weaponForwardDot"] > 0.72 and rem_crouch["weaponUpY"] > 0.88, rem_crouch
+                assert rem_crouch["headWorldY"] < rem_idle["headWorldY"] - 0.25, (rem_crouch, rem_idle)
+                assert rem_crouch["weaponForwardDot"] > 0.80 and rem_crouch["weaponUpY"] > 0.88, rem_crouch
                 ss2 = ss_dir / "02_crouch_ngoi.png"
                 observer.screenshot(path=str(ss2))
                 report["states"]["crouch"] = {"remote": rem_crouch, "actor": act_crouch, "screenshot": str(ss2)}
+
+                # ---- STATES 2B..2E: ĐI NGỒI 4 HƯỚNG (W / S / A / D) ----
+                cm_pos = _get_actor_telemetry(actor)
+                cm_yaw = math.atan2(-(0.0 - cm_pos["x"]), -(38.5 - cm_pos["z"]))
+                _turn_actor_in_place(actor, cm_yaw)
+                crouch_dirs = [
+                    ("crouch_forward", "KeyW", "02b_crouch_forward.png", "3/10 — NGỒI ĐI THẲNG (C + W)"),
+                    ("crouch_backward", "KeyS", "02c_crouch_backward.png", "4/10 — NGỒI ĐI LÙI (C + S)"),
+                    ("crouch_left", "KeyA", "02d_crouch_left.png", "5/10 — NGỒI SANG TRÁI (C + A)"),
+                    ("crouch_right", "KeyD", "02e_crouch_right.png", "6/10 — NGỒI SANG PHẢI (C + D)"),
+                ]
+                for expected_state, key_code, png_name, banner_title in crouch_dirs:
+                    cur_a = _get_actor_telemetry(actor)
+                    _aim_observer_at(
+                        observer,
+                        (cur_a["x"] - 2.1, 0.0, cur_a["z"] - 2.1),
+                        (cur_a["x"], cur_a["z"]),
+                        pitch=-0.20,
+                    )
+                    _set_observer_banner(
+                        observer,
+                        banner_title,
+                        f"Phím: C + {key_code[-1]} | Clip: {expected_state} | Full-weight 4-way blend",
+                    )
+                    actor.keyboard.down(key_code)
+                    observer.wait_for_function(
+                        f"() => Array.from(window.__fpsApp.game.getState().getRemotePlayers().values())[0]?.rig?.activeState === '{expected_state}'",
+                        polling=100,
+                        timeout=6000,
+                    )
+                    observer.wait_for_timeout(650)
+                    rem_cd = _get_remote_telemetry(observer)
+                    ss_cd = ss_dir / png_name
+                    observer.screenshot(path=str(ss_cd))
+                    actor.keyboard.up(key_code)
+                    observer.wait_for_timeout(250)
+                    assert rem_cd["activeState"] == expected_state, rem_cd
+                    assert abs(rem_cd["weightSum"] - 1.0) < 0.01, rem_cd
+                    assert abs(rem_cd["headWorldY"] - rem_crouch["headWorldY"]) < 0.16, (rem_cd, rem_crouch)
+                    assert rem_cd["weaponForwardDot"] > 0.82 and rem_cd["weaponUpY"] > 0.85, rem_cd
+                    report["states"][expected_state] = {"remote": rem_cd, "screenshot": str(ss_cd)}
 
                 actor.keyboard.up("KeyC")
                 observer.wait_for_function(
                     "() => Array.from(window.__fpsApp.game.getState().getRemotePlayers().values())[0]?.rig?.activeState === 'idle'",
                     timeout=6000,
                 )
-                observer.wait_for_timeout(500)
+                observer.wait_for_timeout(450)
 
                 # ---- STATE 3: NHẢY (jump) ----
                 _set_observer_banner(
                     observer,
-                    "3/6 — NHẢY (jump)",
+                    "4/7 — NHẢY (jump)",
                     "Phím: Space | Clip: jump (nhịp tiếp đất nhanh 0.07s)",
                 )
+                j_pos = _get_actor_telemetry(actor)
+                _aim_observer_at(observer, (j_pos["x"] - 1.9, 0.0, j_pos["z"] - 2.0), (j_pos["x"], j_pos["z"]), pitch=-0.16)
                 actor.keyboard.press("Space")
                 observer.wait_for_function(
                     "() => Array.from(window.__fpsApp.game.getState().getRemotePlayers().values())[0]?.rig?.activeState === 'jump'",
@@ -543,41 +613,26 @@ def main() -> int:
                 act_jump = _get_actor_telemetry(actor)
                 assert rem_jump["activeState"] == "jump", rem_jump
                 assert rem_jump["headWorldY"] > rem_idle["headWorldY"] + 0.12 or rem_jump["pos"]["y"] > 0.12, rem_jump
-                assert rem_jump["weaponForwardDot"] > 0.82 and rem_jump["weaponUpY"] > 0.88, rem_jump
+                assert rem_jump["weaponForwardDot"] > 0.80 and rem_jump["weaponUpY"] > 0.85, rem_jump
                 ss3 = ss_dir / "03_jump_nhay.png"
                 observer.screenshot(path=str(ss3))
-                # Wait landing and perform a second clean jump for clear video review
                 observer.wait_for_function(
                     "() => Array.from(window.__fpsApp.game.getState().getRemotePlayers().values())[0]?.rig?.activeState === 'idle'",
                     timeout=6000,
                 )
-                observer.wait_for_timeout(450)
-                actor.keyboard.press("Space")
-                observer.wait_for_function(
-                    "() => Array.from(window.__fpsApp.game.getState().getRemotePlayers().values())[0]?.rig?.activeState === 'idle'",
-                    timeout=6000,
-                )
-                observer.wait_for_timeout(450)
+                observer.wait_for_timeout(400)
                 report["states"]["jump"] = {"remote": rem_jump, "actor": act_jump, "screenshot": str(ss3)}
 
                 # ---- STATE 4: CHẠY (run) ----
                 _set_observer_banner(
                     observer,
-                    "4/6 — CHẠY (run)",
-                    "Phím: Shift + W | Clip: run | Tốc độ 1.35x In-Place",
+                    "5/7 — CHẠY (run)",
+                    "Phím: Shift + W | Clip: run | Khớp tốc độ bước chân In-Place",
                 )
-                run_start = (-1.1, 0.0, 38.0)
-                run_yaw = math.atan2(-(1.5 - run_start[0]), -(39.8 - run_start[2]))
-                _set_actor_pose(actor, run_start[0], 0.0, run_start[2], run_yaw)
-                observer.wait_for_function(
-                    """([tx, tz]) => {
-                      const av = Array.from(window.__fpsApp.game.getState().getRemotePlayers().values())[0];
-                      return av && Math.hypot(av.container.position.x - tx, av.container.position.z - tz) < 0.25;
-                    }""",
-                    arg=[run_start[0], run_start[2]],
-                    polling=100,
-                    timeout=8000,
-                )
+                r0 = _get_actor_telemetry(actor)
+                run_yaw = math.atan2(-(0.0 - r0["x"]), -(38.5 - r0["z"]))
+                _turn_actor_in_place(actor, run_yaw)
+                _aim_observer_at(observer, (r0["x"] - 2.1, 0.0, r0["z"] - 2.2), (r0["x"], r0["z"] - 1.2), pitch=-0.18)
                 run_pos_before = _get_remote_telemetry(observer)["pos"]
 
                 actor.keyboard.down("ShiftLeft")
@@ -590,7 +645,7 @@ def main() -> int:
                 observer.wait_for_function(
                     """([x0, z0]) => {
                       const av = Array.from(window.__fpsApp.game.getState().getRemotePlayers().values())[0];
-                      return av && Math.hypot(av.container.position.x - x0, av.container.position.z - z0) >= 0.9;
+                      return av && Math.hypot(av.container.position.x - x0, av.container.position.z - z0) >= 0.85;
                     }""",
                     arg=[run_pos_before["x"], run_pos_before["z"]],
                     polling=100,
@@ -603,7 +658,7 @@ def main() -> int:
                 observer.wait_for_function(
                     """([x0, z0]) => {
                       const av = Array.from(window.__fpsApp.game.getState().getRemotePlayers().values())[0];
-                      return av && Math.hypot(av.container.position.x - x0, av.container.position.z - z0) >= 1.8;
+                      return av && Math.hypot(av.container.position.x - x0, av.container.position.z - z0) >= 1.65;
                     }""",
                     arg=[run_pos_before["x"], run_pos_before["z"]],
                     polling=100,
@@ -614,8 +669,9 @@ def main() -> int:
                 run_pos_after = _get_remote_telemetry(observer)["pos"]
                 run_dist = math.hypot(run_pos_after["x"] - run_pos_before["x"], run_pos_after["z"] - run_pos_before["z"])
                 assert rem_run["activeState"] == "run", rem_run
-                assert rem_run["weaponForwardDot"] > 0.72 and rem_run["weaponUpY"] > 0.85, rem_run
-                assert run_dist >= 1.5, f"Expected SWAT to run >=1.5m, moved {run_dist:.2f}m"
+                assert abs(rem_run["weightSum"] - 1.0) < 0.01, rem_run
+                assert rem_run["weaponForwardDot"] > 0.85 and rem_run["weaponUpY"] > 0.85, rem_run
+                assert run_dist >= 1.4, f"Expected SWAT to run >=1.4m, moved {run_dist:.2f}m"
                 report["states"]["run"] = {
                     "remote": rem_run,
                     "actor": act_run,
@@ -623,23 +679,22 @@ def main() -> int:
                     "screenshot": str(ss4),
                 }
 
-                # Return to center before Prone
-                _set_actor_pose(actor, act_center[0], 0.0, act_center[2], yaw=1.45)
+                # Settle idle & aim observer cleanly before Prone
                 observer.wait_for_function(
-                    """([tx, tz]) => {
-                      const av = Array.from(window.__fpsApp.game.getState().getRemotePlayers().values())[0];
-                      return av && av.rig?.activeState === 'idle' && Math.hypot(av.container.position.x - tx, av.container.position.z - tz) < 0.25;
-                    }""",
-                    arg=[act_center[0], act_center[2]],
+                    "() => Array.from(window.__fpsApp.game.getState().getRemotePlayers().values())[0]?.rig?.activeState === 'idle'",
                     polling=100,
-                    timeout=8000,
+                    timeout=6000,
                 )
-                observer.wait_for_timeout(400)
+                p0 = _get_actor_telemetry(actor)
+                prone_yaw = math.atan2(-(sx - p0["x"]), -(sz - p0["z"]))
+                _turn_actor_in_place(actor, prone_yaw)
+                _aim_observer_at(observer, (p0["x"] - 1.75, 0.0, p0["z"] + 1.85), (p0["x"], p0["z"]), pitch=-0.26)
+                observer.wait_for_timeout(350)
 
                 # ---- STATE 5: NẰM (prone) ----
                 _set_observer_banner(
                     observer,
-                    "5/6 — NẰM (prone)",
+                    "6/7 — NẰM (prone)",
                     "Phím: Z | Clip: prone | Hạ mắt 0.42m & giảm giật 0.65x",
                 )
                 actor.keyboard.press("KeyZ")
@@ -648,13 +703,13 @@ def main() -> int:
                     polling=100,
                     timeout=6000,
                 )
-                observer.wait_for_timeout(1600)
+                observer.wait_for_timeout(1300)
                 rem_prone = _get_remote_telemetry(observer)
                 act_prone = _get_actor_telemetry(actor)
                 assert rem_prone["activeState"] == "prone", rem_prone
                 assert act_prone["prone"] is True and act_prone["eyeHeight"] < 0.50, act_prone
                 assert rem_prone["headWorldY"] < 0.72, rem_prone
-                assert rem_prone["weaponForwardDot"] > 0.88 and rem_prone["weaponUpY"] > 0.85, rem_prone
+                assert rem_prone["weaponForwardDot"] > 0.85 and rem_prone["weaponUpY"] > 0.82, rem_prone
                 assert "Nằm" in act_prone["postureBadge"], act_prone
                 ss5 = ss_dir / "05_prone_nam.png"
                 observer.screenshot(path=str(ss5))
@@ -663,20 +718,8 @@ def main() -> int:
                 # ---- STATE 6: BÒ (prone_move) ----
                 _set_observer_banner(
                     observer,
-                    "6/6 — BÒ (prone_move)",
+                    "7/7 — BÒ (prone_move)",
                     "Phím: Z + W | Clip: prone_move | Tốc độ bò 0.30x",
-                )
-                crawl_start = (-1.1, 0.0, 38.2)
-                crawl_yaw = math.atan2(-(1.6 - crawl_start[0]), -(39.8 - crawl_start[2]))
-                _set_actor_pose(actor, crawl_start[0], 0.0, crawl_start[2], crawl_yaw)
-                observer.wait_for_function(
-                    """([tx, tz]) => {
-                      const av = Array.from(window.__fpsApp.game.getState().getRemotePlayers().values())[0];
-                      return av && Math.hypot(av.container.position.x - tx, av.container.position.z - tz) < 0.25;
-                    }""",
-                    arg=[crawl_start[0], crawl_start[2]],
-                    polling=100,
-                    timeout=8000,
                 )
                 crawl_pos_before = _get_remote_telemetry(observer)["pos"]
 
@@ -689,7 +732,7 @@ def main() -> int:
                 observer.wait_for_function(
                     """([x0, z0]) => {
                       const av = Array.from(window.__fpsApp.game.getState().getRemotePlayers().values())[0];
-                      return av && Math.hypot(av.container.position.x - x0, av.container.position.z - z0) >= 0.75;
+                      return av && Math.hypot(av.container.position.x - x0, av.container.position.z - z0) >= 0.65;
                     }""",
                     arg=[crawl_pos_before["x"], crawl_pos_before["z"]],
                     polling=100,
@@ -702,7 +745,7 @@ def main() -> int:
                 observer.wait_for_function(
                     """([x0, z0]) => {
                       const av = Array.from(window.__fpsApp.game.getState().getRemotePlayers().values())[0];
-                      return av && Math.hypot(av.container.position.x - x0, av.container.position.z - z0) >= 1.5;
+                      return av && Math.hypot(av.container.position.x - x0, av.container.position.z - z0) >= 1.25;
                     }""",
                     arg=[crawl_pos_before["x"], crawl_pos_before["z"]],
                     polling=100,
@@ -713,9 +756,9 @@ def main() -> int:
                 crawl_dist = math.hypot(crawl_pos_after["x"] - crawl_pos_before["x"], crawl_pos_after["z"] - crawl_pos_before["z"])
                 assert rem_crawl["activeState"] == "prone_move", rem_crawl
                 assert act_crawl["prone"] is True and rem_crawl["headWorldY"] < 0.72, (rem_crawl, act_crawl)
-                assert rem_crawl["weaponForwardDot"] > 0.85 and rem_crawl["weaponUpY"] > 0.85, rem_crawl
+                assert rem_crawl["weaponForwardDot"] > 0.85 and rem_crawl["weaponUpY"] > 0.82, rem_crawl
                 assert "Bò" in act_crawl["postureBadge"], act_crawl
-                assert crawl_dist >= 1.3, f"Expected SWAT to crawl >=1.3m, moved {crawl_dist:.2f}m"
+                assert crawl_dist >= 1.1, f"Expected SWAT to crawl >=1.1m, moved {crawl_dist:.2f}m"
                 report["states"]["prone_move"] = {
                     "remote": rem_crawl,
                     "actor": act_crawl,

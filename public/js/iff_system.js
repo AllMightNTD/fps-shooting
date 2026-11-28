@@ -20,6 +20,28 @@ export const ALLY_IFF_META = Object.freeze({
   symbol: "▲",
 });
 
+// Counter-Hue Urban SWAT uniform palettes (separates players cleanly from warm brown/olive Military props & dark Harbor night):
+// - Ally: Tactical Cobalt-Navy (#1F4E7E) + black armor plates
+// - Enemy: Cool Urban Titanium-Slate (#4E5A68) + black armor plates (rich gunmetal-grey contrast vs ground, snow-free highlights & crisp IFF rim)
+export const UNIFORM_IFF_PRESETS = Object.freeze({
+  ally: Object.freeze({
+    id: "ally",
+    label: "Hải Quân Lạnh (Đồng đội)",
+    hex: "#1F4E7E",
+    clothRgbSrgb: Object.freeze([0.122, 0.306, 0.494]),
+    strength: 0.96,
+    lumaGain: 0.96,
+  }),
+  enemy: Object.freeze({
+    id: "enemy",
+    label: "Xám Thép Đô Thị (Địch)",
+    hex: "#4E5A68",
+    clothRgbSrgb: Object.freeze([0.306, 0.353, 0.408]),
+    strength: 0.96,
+    lumaGain: 0.94,
+  }),
+});
+
 export const ENEMY_HIGHLIGHT_PRESETS = Object.freeze({
   red: Object.freeze({
     id: "red",
@@ -52,28 +74,27 @@ export const ENEMY_HIGHLIGHT_PRESETS = Object.freeze({
 
 export const ENEMY_HIGHLIGHT_IDS = Object.freeze(["red", "yellow", "purple"]);
 
-// User-approved 2B default: "strong" (bold crisp Valorant silhouette while keeping interior 100% pure PBR)
+// User-approved 2B default: "strong" + distance-adaptive contour widening at 12-45m while keeping <10m headshot-crisp
 export const ENEMY_RIM_PRESETS = Object.freeze({
   strong: Object.freeze({
     id: "strong",
-    label: "Rõ kiểu Valorant (Mặc định)",
-    intensity: 0.98,
-    hdrBoost: 1.72,
-    // (nearLo, farLo, nearHi, farHi) on (1.0 - abs(dot(geomN, V)))
-    nearLo: 0.56,
-    farLo: 0.42,
-    nearHi: 0.84,
-    farHi: 0.74,
+    label: "Viền mảnh chuẩn FPS (Mặc định)",
+    intensity: 0.74,
+    hdrBoost: 0.92,
+    nearLo: 0.74,
+    farLo: 0.56,
+    nearHi: 0.95,
+    farHi: 0.87,
   }),
   crisp: Object.freeze({
     id: "crisp",
-    label: "Mảnh sắc nét",
+    label: "Siêu mảnh tự nhiên",
     intensity: 0.74,
-    hdrBoost: 1.48,
-    nearLo: 0.66,
-    farLo: 0.52,
-    nearHi: 0.90,
-    farHi: 0.82,
+    hdrBoost: 0.64,
+    nearLo: 0.81,
+    farLo: 0.65,
+    nearHi: 0.96,
+    farHi: 0.90,
   }),
   off: Object.freeze({
     id: "off",
@@ -131,32 +152,61 @@ function srgbChannelToLinear(c) {
 }
 
 /**
- * Computes map-calibrated uniform values for the Geometric-Normal Fresnel rim shader.
- * - On `military` (THREE.sRGBEncoding + exposure 0.86): converts sRGB highlight color to true Linear RGB
- *   so `#FF3535` stays deep saturated Valorant red instead of washing out to salmon pink!
- * - On `harbor` (THREE.LinearEncoding + exposure 1.08, dark night rain): applies mild gamma tightening
- *   and 0.88x gain to stay vivid without over-blooming in darkness.
+ * Computes map-calibrated uniform values for:
+ * 1) GLSL Hue-Selective Cloth Recolor (Ally Cobalt-Navy vs Enemy Urban Wolf-Grey)
+ * 2) Hero Visibility (Shadow Fill Lift, Character Fog Attenuation, Cool Contour Separation)
+ * 3) Geometric-Normal Silhouette Fresnel Enemy Rim
  */
 export function computeIffUniformValues({
+  relation = "enemy",
   enemyColor = DEFAULT_ENEMY_HIGHLIGHT_COLOR,
   rimStrength = DEFAULT_ENEMY_RIM_STRENGTH,
   mapId = "military",
 } = {}) {
+  const isAlly = relation === "ally";
   const colorPreset = getEnemyHighlightPreset(enemyColor);
   const rimPreset = getEnemyRimPreset(rimStrength);
+  const clothPreset = isAlly ? UNIFORM_IFF_PRESETS.ally : UNIFORM_IFF_PRESETS.enemy;
   const isHarbor = mapId === "harbor";
   const [sr, sg, sb] = colorPreset.rimRgbSrgb;
+  const [cr, cg, cb] = clothPreset.clothRgbSrgb;
 
-  const rgb = isHarbor
-    ? [Math.pow(sr, 1.35), Math.pow(sg, 1.35), Math.pow(sb, 1.35)]
-    : [srgbChannelToLinear(sr), srgbChannelToLinear(sg), srgbChannelToLinear(sb)];
+  const toMapLinear = (v) =>
+    isHarbor ? Math.pow(Math.max(0, v), 1.35) : srgbChannelToLinear(v);
+
+  const rgb = [toMapLinear(sr), toMapLinear(sg), toMapLinear(sb)];
+  const clothRgb = [toMapLinear(cr), toMapLinear(cg), toMapLinear(cb)];
 
   const mapGain = isHarbor ? 0.88 : 1.08;
+  const intensity = isAlly ? 0 : rimPreset.intensity;
+  const heroFillLift = isHarbor ? 0.145 : 0.105;
+  const fogAtten = isHarbor ? 0.46 : 0.42;
+  const coolRimStrength = isAlly
+    ? isHarbor
+      ? 0.22
+      : 0.18
+    : intensity > 0
+      ? isHarbor
+        ? 0.14
+        : 0.12
+      : isHarbor
+        ? 0.20
+        : 0.18;
+  const clothLumaGain = clothPreset.lumaGain * (isHarbor ? 1.12 : 1.0);
+
   return {
+    relation: isAlly ? "ally" : "enemy",
+    clothPreset,
     colorPreset,
     rimPreset,
     rgb,
-    intensity: rimPreset.intensity,
+    clothRgb,
+    clothStrength: clothPreset.strength,
+    heroFillLift,
+    fogAtten,
+    coolRimStrength,
+    clothLumaGain,
+    intensity,
     hdrBoost: rimPreset.hdrBoost * mapGain,
     edgeParams: [rimPreset.nearLo, rimPreset.farLo, rimPreset.nearHi, rimPreset.farHi],
   };
@@ -263,7 +313,7 @@ export function resolveTopScoreboardView({
 }
 
 /**
- * Creates a Three.js uniform container for the soldier IFF rim shader.
+ * Creates a Three.js uniform container for the soldier IFF uniform recolor, hero visibility, and rim shader.
  */
 export function createSoldierIffUniforms(THREE, initialOpts = {}) {
   const vals = computeIffUniformValues(initialOpts);
@@ -277,6 +327,22 @@ export function createSoldierIffUniforms(THREE, initialOpts = {}) {
         vals.edgeParams[1],
         vals.edgeParams[2],
         vals.edgeParams[3],
+      ),
+    },
+    uIffClothTint: {
+      value: new THREE.Vector4(
+        vals.clothRgb[0],
+        vals.clothRgb[1],
+        vals.clothRgb[2],
+        vals.clothStrength,
+      ),
+    },
+    uIffHeroParams: {
+      value: new THREE.Vector4(
+        vals.heroFillLift,
+        vals.fogAtten,
+        vals.coolRimStrength,
+        vals.clothLumaGain,
       ),
     },
   };
@@ -301,6 +367,22 @@ export function syncSoldierIffUniforms(uniforms, opts = {}) {
       vals.edgeParams[3],
     );
   }
+  if (uniforms.uIffClothTint && uniforms.uIffClothTint.value && typeof uniforms.uIffClothTint.value.set === "function") {
+    uniforms.uIffClothTint.value.set(
+      vals.clothRgb[0],
+      vals.clothRgb[1],
+      vals.clothRgb[2],
+      vals.clothStrength,
+    );
+  }
+  if (uniforms.uIffHeroParams && uniforms.uIffHeroParams.value && typeof uniforms.uIffHeroParams.value.set === "function") {
+    uniforms.uIffHeroParams.value.set(
+      vals.heroFillLift,
+      vals.fogAtten,
+      vals.coolRimStrength,
+      vals.clothLumaGain,
+    );
+  }
   return vals;
 }
 
@@ -310,6 +392,28 @@ uniform vec3 uIffColor;
 uniform float uIffIntensity;
 uniform float uIffHdrBoost;
 uniform vec4 uIffEdgeParams;
+uniform vec4 uIffClothTint;
+uniform vec4 uIffHeroParams;
+`;
+
+const IFF_FRAG_RECOLOR_MAP = `
+#include <map_fragment>
+if (uIffClothTint.w > 0.001) {
+  vec3 iffSrgb = pow(max(diffuseColor.rgb, vec3(0.0001)), vec3(0.454545));
+  float iffMx = max(iffSrgb.r, max(iffSrgb.g, iffSrgb.b));
+  float iffMn = min(iffSrgb.r, min(iffSrgb.g, iffSrgb.b));
+  float iffSat = (iffMx - iffMn) / max(iffMx, 0.001);
+  // Isolate khaki/olive cloth while preserving black armor/boots/gloves, vivid yellow LOB & flag patches
+  float iffDarkG = smoothstep(0.21, 0.30, iffMx);
+  float iffSatLo = smoothstep(0.12, 0.24, iffSat);
+  float iffWarmG = smoothstep(0.015, 0.055, iffSrgb.r - iffSrgb.b) * smoothstep(0.010, 0.045, iffSrgb.g - iffSrgb.b);
+  float iffNotRed = 1.0 - smoothstep(0.075, 0.145, iffSrgb.r - iffSrgb.g);
+  float iffNotVivid = 1.0 - smoothstep(0.46, 0.58, iffSat);
+  float iffClothMask = iffDarkG * iffSatLo * iffWarmG * iffNotRed * iffNotVivid * uIffClothTint.w;
+  float iffSrcLuma = max(dot(diffuseColor.rgb, vec3(0.2126, 0.7152, 0.0722)), 0.001);
+  float iffShade = clamp(iffSrcLuma / 0.085, 0.24, 1.42) * uIffHeroParams.w;
+  diffuseColor.rgb = mix(diffuseColor.rgb, uIffClothTint.rgb * iffShade, iffClothMask);
+}
 `;
 
 const IFF_FRAG_CAPTURE_NORMAL = `
@@ -318,28 +422,52 @@ vec3 iffGeomNormal = normal;
 `;
 
 const IFF_FRAG_RIM_APPLY = `
+if (uIffHeroParams.x > 0.001) {
+  float iffCurLum = dot(gl_FragColor.rgb, vec3(0.2126, 0.7152, 0.0722));
+  float iffDarkWeight = 1.0 - smoothstep(0.06, 0.45, iffCurLum);
+  gl_FragColor.rgb += diffuseColor.rgb * (uIffHeroParams.x * mix(0.28, 1.0, iffDarkWeight));
+}
+vec3 iffN = normalize(iffGeomNormal);
+float iffViewDist = max(length(vViewPosition), 0.001);
+vec3 iffV = vViewPosition / iffViewDist;
+float iffNdotV = clamp(abs(dot(iffN, iffV)), 0.0, 1.0);
+float iffDistT = smoothstep(8.0, 42.0, iffViewDist);
+if (uIffHeroParams.z > 0.001) {
+  float iffCoolRim = pow(smoothstep(0.58, 0.94, 1.0 - iffNdotV), 1.8) * uIffHeroParams.z;
+  vec3 iffSkyTone = vec3(0.62, 0.76, 0.96);
+  gl_FragColor.rgb = mix(gl_FragColor.rgb, max(gl_FragColor.rgb, iffSkyTone * 0.55), clamp(iffCoolRim, 0.0, 0.28));
+}
 if (uIffIntensity > 0.001) {
-  vec3 iffN = normalize(iffGeomNormal);
-  float iffViewDist = max(length(vViewPosition), 0.001);
-  vec3 iffV = vViewPosition / iffViewDist;
-  float iffNdotV = clamp(abs(dot(iffN, iffV)), 0.0, 1.0);
-  float iffDistT = smoothstep(8.0, 40.0, iffViewDist);
   float iffEdgeLo = mix(uIffEdgeParams.x, uIffEdgeParams.y, iffDistT);
   float iffEdgeHi = mix(uIffEdgeParams.z, uIffEdgeParams.w, iffDistT);
   float iffRim = smoothstep(iffEdgeLo, iffEdgeHi, 1.0 - iffNdotV);
-  // Subtle close-range preservation (keeps interior 100% pure PBR, stronger contour at 15-45m & prone)
-  float iffDistGain = mix(0.84, 1.18, iffDistT);
-  float iffMask = clamp(iffRim * uIffIntensity * iffDistGain, 0.0, 1.0);
-  vec3 iffEdgeCol = gl_FragColor.rgb * 0.36 + uIffColor * uIffHdrBoost;
+  iffRim = pow(iffRim, 1.65);
+  // Thin contour up close (<10m) & distance-adaptive visibility at 12-45m while keeping armor interior crisp PBR
+  float iffDistGain = mix(0.68, 1.06, iffDistT);
+  float iffMask = clamp(iffRim * uIffIntensity * iffDistGain, 0.0, 0.84);
+  vec3 iffEdgeCol = mix(gl_FragColor.rgb * 0.62, uIffColor * uIffHdrBoost, 0.84);
   gl_FragColor.rgb = mix(gl_FragColor.rgb, iffEdgeCol, iffMask);
 }
 #include <tonemapping_fragment>
 `;
 
+const IFF_FRAG_FOG_ATTEN = `
+#ifdef USE_FOG
+  vec3 iffPreFogRgb = gl_FragColor.rgb;
+#endif
+#include <fog_fragment>
+#ifdef USE_FOG
+  if (uIffHeroParams.y < 0.999) {
+    gl_FragColor.rgb = mix(iffPreFogRgb, gl_FragColor.rgb, clamp(uIffHeroParams.y, 0.0, 1.0));
+  }
+#endif
+`;
+
 /**
- * Patches a Three.js r128 MeshPhysicalMaterial / MeshStandardMaterial with Geometric-Normal
- * Silhouette Fresnel rim highlighting. Both Ally (uIffIntensity = 0) and Enemy materials share
- * the exact same `customProgramCacheKey` so WebGL compiles only ONE program total!
+ * Patches a Three.js r128 MeshPhysicalMaterial / MeshStandardMaterial with:
+ * - Pre-lighting hue-selective cloth recolor (Ally Navy vs Enemy Urban Wolf-Grey)
+ * - Hero Fill Lift, Distance-Adaptive Geometric-Normal Fresnel rim, and Fog Attenuation
+ * All soldier material variants share ONE `customProgramCacheKey` (0 extra WebGL programs).
  */
 export function applySoldierIffShader(material, uniforms) {
   if (!material || !uniforms) return material;
@@ -351,11 +479,15 @@ export function applySoldierIffShader(material, uniforms) {
     shader.uniforms.uIffIntensity = uniforms.uIffIntensity;
     shader.uniforms.uIffHdrBoost = uniforms.uIffHdrBoost;
     shader.uniforms.uIffEdgeParams = uniforms.uIffEdgeParams;
+    shader.uniforms.uIffClothTint = uniforms.uIffClothTint;
+    shader.uniforms.uIffHeroParams = uniforms.uIffHeroParams;
     if (!shader.fragmentShader.includes("uIffEdgeParams")) {
       shader.fragmentShader = shader.fragmentShader
         .replace("#include <common>", IFF_FRAG_UNIFORMS)
+        .replace("#include <map_fragment>", IFF_FRAG_RECOLOR_MAP)
         .replace("#include <normal_fragment_begin>", IFF_FRAG_CAPTURE_NORMAL)
-        .replace("#include <tonemapping_fragment>", IFF_FRAG_RIM_APPLY);
+        .replace("#include <tonemapping_fragment>", IFF_FRAG_RIM_APPLY)
+        .replace("#include <fog_fragment>", IFF_FRAG_FOG_ATTEN);
     }
   };
   material.userData = material.userData || {};

@@ -100,31 +100,191 @@ export function cloneSkinnedHierarchy(source, THREE) {
   return clone;
 }
 
+export const CROUCH_DIR_KEYS = Object.freeze([
+  "crouch_forward",
+  "crouch_backward",
+  "crouch_left",
+  "crouch_right",
+]);
+
+export const SOLDIER_CLIP_KEYS = Object.freeze([
+  "idle",
+  "run",
+  "crouch",
+  "crouch_forward",
+  "crouch_backward",
+  "crouch_left",
+  "crouch_right",
+  "crouch_move",
+  "jump",
+  "prone",
+  "prone_move",
+]);
+
+const CLIP_MATCH_EXCLUSIONS = Object.freeze({
+  run: Object.freeze(["crouch"]),
+  crouch: Object.freeze(["move", "walk", "run", "forward", "backward", "left", "right"]),
+  prone: Object.freeze(["move", "crawl", "forward"]),
+});
+
 export function findSoldierClip(animations, clipKey) {
   if (!Array.isArray(animations) || !animations.length || !clipKey) return null;
   const key = String(clipKey).toLowerCase();
   const exact = animations.find((clip) => clip && typeof clip.name === "string" && clip.name.toLowerCase() === key);
   if (exact) return exact;
-  return (
+
+  const excl = CLIP_MATCH_EXCLUSIONS[key] || null;
+  const partial =
     animations.find((clip) => {
       if (!clip || typeof clip.name !== "string") return false;
       const low = clip.name.toLowerCase();
-      if (key === "prone" && (low.includes("move") || low.includes("crawl") || low.includes("forward"))) {
-        return false;
-      }
+      if (excl && excl.some((tok) => low.includes(tok))) return false;
       return low.includes(key);
-    }) || null
-  );
+    }) || null;
+  if (partial) return partial;
+
+  if (key === "crouch_move") {
+    return findSoldierClip(animations, "crouch_forward");
+  }
+  return null;
 }
 
-export function selectSoldierAnimState({ alive = true, mv = 0, flags = 0, FLAG = { CROUCH: 1, AIR: 8, PRONE: 64 } } = {}) {
+/**
+ * Resolve normalized 4-way directional crouch weights (sum === 1.0) from local horizontal velocity.
+ * Suppresses minor-axis jitter below deadzoneRatio * dominantAxis while preserving smooth diagonals.
+ */
+export function computeCrouchDirectionalWeights(fwdVel = 0, rightVel = 0, deadzoneRatio = 0.14) {
+  let f = Number.isFinite(fwdVel) ? fwdVel : 0;
+  let r = Number.isFinite(rightVel) ? rightVel : 0;
+  const absF = Math.abs(f);
+  const absR = Math.abs(r);
+  const dom = Math.max(absF, absR);
+  if (dom < 1e-4) {
+    return {
+      crouch_forward: 1,
+      crouch_backward: 0,
+      crouch_left: 0,
+      crouch_right: 0,
+      dominant: "crouch_forward",
+    };
+  }
+  const thresh = dom * Math.max(0, Math.min(0.45, deadzoneRatio));
+  if (absF < thresh) f = 0;
+  if (absR < thresh) r = 0;
+
+  const wF = Math.max(0, f);
+  const wB = Math.max(0, -f);
+  const wR = Math.max(0, r);
+  const wL = Math.max(0, -r);
+  const sum = wF + wB + wL + wR;
+  if (sum <= 1e-6) {
+    return {
+      crouch_forward: 1,
+      crouch_backward: 0,
+      crouch_left: 0,
+      crouch_right: 0,
+      dominant: "crouch_forward",
+    };
+  }
+  const inv = 1 / sum;
+  const nF = wF * inv;
+  const nB = wB * inv;
+  const nL = wL * inv;
+  const nR = wR * inv;
+  let dominant = "crouch_forward";
+  let best = nF;
+  if (nB > best) {
+    best = nB;
+    dominant = "crouch_backward";
+  }
+  if (nL > best) {
+    best = nL;
+    dominant = "crouch_left";
+  }
+  if (nR > best) {
+    dominant = "crouch_right";
+  }
+  return {
+    crouch_forward: nF,
+    crouch_backward: nB,
+    crouch_left: nL,
+    crouch_right: nR,
+    dominant,
+  };
+}
+
+/**
+ * Smoothly step every action weight toward targetWeights and enforce sum(weights) === 1.0
+ * across all animation states (zero-GC in-place update).
+ */
+export function stepNormalizedActionWeights(currentWeights, targetWeights, actionKeys, dt = 0.016, blendDurSec = 0.11) {
+  if (!currentWeights || !targetWeights || !Array.isArray(actionKeys) || !actionKeys.length) return 0;
+  const safeDt = Number.isFinite(dt) && dt > 0 ? dt : 0;
+  const tau = Math.max(0.012, (Number.isFinite(blendDurSec) ? blendDurSec : 0.11) * 0.35);
+  const alpha = safeDt > 0 ? 1 - Math.exp(-safeDt / tau) : 1;
+
+  let total = 0;
+  for (let i = 0; i < actionKeys.length; i++) {
+    const key = actionKeys[i];
+    const cur = Number.isFinite(currentWeights[key]) ? currentWeights[key] : 0;
+    const tgt = Number.isFinite(targetWeights[key]) ? Math.max(0, targetWeights[key]) : 0;
+    let next = cur + (tgt - cur) * alpha;
+    if (tgt === 0 && next < 0.004) next = 0;
+    else if (next < 0) next = 0;
+    currentWeights[key] = next;
+    total += next;
+  }
+
+  if (total <= 1e-6) {
+    let tgtSum = 0;
+    for (let i = 0; i < actionKeys.length; i++) {
+      const key = actionKeys[i];
+      const tgt = Number.isFinite(targetWeights[key]) ? Math.max(0, targetWeights[key]) : 0;
+      currentWeights[key] = tgt;
+      tgtSum += tgt;
+    }
+    total = tgtSum;
+    if (total <= 1e-6) {
+      currentWeights[actionKeys[0]] = 1;
+      return 1;
+    }
+  }
+
+  const invTotal = 1 / total;
+  let normSum = 0;
+  for (let i = 0; i < actionKeys.length; i++) {
+    const key = actionKeys[i];
+    const v = (currentWeights[key] || 0) * invTotal;
+    currentWeights[key] = v;
+    normSum += v;
+  }
+  return normSum;
+}
+
+export function selectSoldierAnimState({
+  alive = true,
+  mv = 0,
+  flags = 0,
+  FLAG = { CROUCH: 1, AIR: 8, PRONE: 64 },
+  fwdVel = 0,
+  rightVel = 0,
+  hasDirectionalCrouch = false,
+} = {}) {
   if (!alive) return "dead";
   const airBit = FLAG && typeof FLAG.AIR === "number" ? FLAG.AIR : 8;
   const proneBit = FLAG && typeof FLAG.PRONE === "number" ? FLAG.PRONE : 64;
   const crouchBit = FLAG && typeof FLAG.CROUCH === "number" ? FLAG.CROUCH : 1;
   if (flags & airBit) return "jump";
   if (flags & proneBit) return mv > 0.08 ? "prone_move" : "prone";
-  if (flags & crouchBit) return "crouch";
+  if (flags & crouchBit) {
+    if (mv > 0.08) {
+      if (hasDirectionalCrouch) {
+        return computeCrouchDirectionalWeights(fwdVel, rightVel).dominant;
+      }
+      return "crouch_move";
+    }
+    return "crouch";
+  }
   if (mv > 0.08) return "run";
   return "idle";
 }

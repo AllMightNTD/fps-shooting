@@ -9,6 +9,7 @@
 
 import { forwardFromYawPitch, getEyeHeight, resolveAuthoritativeShot } from "./hitreg.js";
 import {
+  PLAYER_RADIUS,
   SPAWN_RULES,
   activateSpawnProtection,
   cancelProtectionOnFire,
@@ -87,6 +88,12 @@ const BOT_CALLSIGNS = Object.freeze([
   "Ajax_AI",
   "Valkyrie_AI",
   "Lynx_AI",
+  "Phantom_AI",
+  "Reaper_AI",
+  "Atlas_AI",
+  "Orion_AI",
+  "Apex_AI",
+  "Warden_AI",
 ]);
 
 const DEFAULT_WAYPOINT_SEEDS = Object.freeze([
@@ -129,11 +136,11 @@ export function normalizeBotConfig(raw = {}) {
   const mapId = raw.mapId === "harbor" ? "harbor" : "military";
   const difficulty = BOT_DIFFICULTY_PRESETS[raw.difficulty] ? raw.difficulty : "medium";
   const rawCount = Number(raw.botCount);
-  let botCount = Number.isFinite(rawCount) ? Math.round(rawCount) : 5;
-  botCount = clamp(botCount, 1, 11);
+  let botCount = Number.isFinite(rawCount) ? Math.round(rawCount) : 15;
+  botCount = clamp(botCount, 1, 17);
   if (mode === "TDM" && botCount % 2 === 0) {
-    // Odd botCount pairs cleanly with 1 human -> balanced NvN teams (e.g. 5 bots = 3v3, 9 bots = 5v5)
-    botCount = botCount < 11 ? botCount + 1 : 9;
+    // Odd botCount pairs cleanly with 1 human -> balanced NvN teams (e.g. 9 bots = 5v5, 15 bots = 8v8, 17 bots = 9v9)
+    botCount = botCount < 17 ? botCount + 1 : 15;
   }
   const rawKillLimit = Number(raw.killLimit);
   const killLimit = Number.isFinite(rawKillLimit) ? clamp(Math.round(rawKillLimit), 5, 100) : mode === "TDM" ? 30 : 20;
@@ -365,6 +372,10 @@ export function createBotMatchController({
       strafeSwitchAt: now,
       waypoint: waypoints[0],
       nextLosCheckAt: now + i * 40,
+      nextActiveLosAt: now + i * 25,
+      cachedTargetVisible: false,
+      nextWhiskerAt: now + i * 20,
+      cachedSteerOffset: 0,
     };
     players.set(bot.id, bot);
     spawnActor(bot, now, false);
@@ -672,35 +683,63 @@ export function createBotMatchController({
     tickBotWeapon(bot, tNow);
     const prot = evaluateProtectionTick(bot, cfg.mode, tNow);
 
-    // Target acquisition throttled cleanly for low CPU
+    // Target acquisition & active-target LoS re-verification both throttled cleanly (~5-10Hz instead of 60Hz)
     let visibleTarget = null;
     if (tNow >= bot.nextLosCheckAt) {
       bot.nextLosCheckAt = tNow + 140 + rngFn() * 60;
+      bot.nextActiveLosAt = tNow + 95;
       const found = findBestVisibleEnemy(bot, tNow);
       if (found) {
         if (bot.targetId !== found.enemy.id) {
           bot.targetId = found.enemy.id;
           bot.targetSeenAt = tNow;
-          bot.burstRemaining = preset.burstMin + ((rngFn() * (preset.burstMax - preset.burstMin + 1)) | 0);
+          bot.burstRemaining = preset.burstMin + ((rngFn() * (preset.burstMax - bot.burstMin + 1)) | 0);
         }
-        bot.lastSeenPos = { x: found.enemy.x, y: found.enemy.y, z: found.enemy.z, flags: found.enemy.flags || 0 };
+        if (bot.lastSeenPos) {
+          bot.lastSeenPos.x = found.enemy.x;
+          bot.lastSeenPos.y = found.enemy.y;
+          bot.lastSeenPos.z = found.enemy.z;
+          bot.lastSeenPos.flags = found.enemy.flags || 0;
+        } else {
+          bot.lastSeenPos = { x: found.enemy.x, y: found.enemy.y, z: found.enemy.z, flags: found.enemy.flags || 0 };
+        }
+        bot.cachedTargetVisible = true;
         visibleTarget = found;
-      } else if (bot.targetId && tNow - bot.targetSeenAt > 3600) {
-        bot.targetId = null;
-        bot.lastSeenPos = null;
+      } else {
+        bot.cachedTargetVisible = false;
+        if (bot.targetId && tNow - bot.targetSeenAt > 3600) {
+          bot.targetId = null;
+          bot.lastSeenPos = null;
+        }
       }
     } else if (bot.targetId) {
       const curT = players.get(bot.targetId);
       if (curT && curT.alive) {
         const d = Math.hypot(curT.x - bot.x, curT.z - bot.z);
-        const eyeY = (bot.y || 0) + getEyeHeight(bot.flags);
-        const tgtY = (curT.y || 0) + getEyeHeight(curT.flags || 0) - 0.14;
-        if (d <= preset.sightRange && hasLineOfSight(bot.x, eyeY, bot.z, curT.x, tgtY, curT.z, safeArena)) {
-          bot.lastSeenPos = { x: curT.x, y: curT.y, z: curT.z, flags: curT.flags || 0 };
-          visibleTarget = { enemy: curT, dist: d };
+        if (d <= preset.sightRange) {
+          if (tNow >= (bot.nextActiveLosAt || 0)) {
+            bot.nextActiveLosAt = tNow + 90 + rngFn() * 30;
+            const eyeY = (bot.y || 0) + getEyeHeight(bot.flags);
+            const tgtY = (curT.y || 0) + getEyeHeight(curT.flags || 0) - 0.14;
+            bot.cachedTargetVisible = hasLineOfSight(bot.x, eyeY, bot.z, curT.x, tgtY, curT.z, safeArena);
+          }
+          if (bot.cachedTargetVisible) {
+            if (bot.lastSeenPos) {
+              bot.lastSeenPos.x = curT.x;
+              bot.lastSeenPos.y = curT.y;
+              bot.lastSeenPos.z = curT.z;
+              bot.lastSeenPos.flags = curT.flags || 0;
+            } else {
+              bot.lastSeenPos = { x: curT.x, y: curT.y, z: curT.z, flags: curT.flags || 0 };
+            }
+            visibleTarget = { enemy: curT, dist: d };
+          }
+        } else {
+          bot.cachedTargetVisible = false;
         }
       } else {
         bot.targetId = null;
+        bot.cachedTargetVisible = false;
       }
     }
 
@@ -800,20 +839,24 @@ export function createBotMatchController({
         pickNextWaypoint(bot);
       } else if (!wantsPause) {
         const baseYaw = Math.atan2(-dx, -dz);
-        // Obstacle whisker avoidance so bots steer smoothly around walls/containers
-        let steerOffset = 0;
-        const probeOriginY = (bot.y || 0) + 1.05;
-        const fHit = raycastArenaDistance(bot.x, probeOriginY, bot.z, -Math.sin(baseYaw), 0, -Math.cos(baseYaw), 2.4, safeArena);
-        if (fHit && fHit.dist < 2.2) {
-          const lYaw = baseYaw + 0.72;
-          const rYaw = baseYaw - 0.72;
-          const lHit = raycastArenaDistance(bot.x, probeOriginY, bot.z, -Math.sin(lYaw), 0, -Math.cos(lYaw), 3.4, safeArena);
-          const rHit = raycastArenaDistance(bot.x, probeOriginY, bot.z, -Math.sin(rYaw), 0, -Math.cos(rYaw), 3.4, safeArena);
-          const lDist = lHit ? lHit.dist : 3.5;
-          const rDist = rHit ? rHit.dist : 3.5;
-          steerOffset = lDist >= rDist ? 0.78 : -0.78;
+        // Obstacle whisker avoidance throttled to ~10Hz so bots steer smoothly without 60Hz ray spam
+        if (tNow >= (bot.nextWhiskerAt || 0)) {
+          bot.nextWhiskerAt = tNow + 95 + rngFn() * 30;
+          let steerOffset = 0;
+          const probeOriginY = (bot.y || 0) + 1.05;
+          const fHit = raycastArenaDistance(bot.x, probeOriginY, bot.z, -Math.sin(baseYaw), 0, -Math.cos(baseYaw), 2.4, safeArena);
+          if (fHit && fHit.dist < 2.2) {
+            const lYaw = baseYaw + 0.72;
+            const rYaw = baseYaw - 0.72;
+            const lHit = raycastArenaDistance(bot.x, probeOriginY, bot.z, -Math.sin(lYaw), 0, -Math.cos(lYaw), 3.4, safeArena);
+            const rHit = raycastArenaDistance(bot.x, probeOriginY, bot.z, -Math.sin(rYaw), 0, -Math.cos(rYaw), 3.4, safeArena);
+            const lDist = lHit ? lHit.dist : 3.5;
+            const rDist = rHit ? rHit.dist : 3.5;
+            steerOffset = lDist >= rDist ? 0.78 : -0.78;
+          }
+          bot.cachedSteerOffset = steerOffset;
         }
-        targetYaw = wrapAngle(baseYaw + steerOffset);
+        targetYaw = wrapAngle(baseYaw + (bot.cachedSteerOffset || 0));
         desiredVx = -Math.sin(targetYaw);
         desiredVz = -Math.cos(targetYaw);
       }
@@ -848,7 +891,7 @@ export function createBotMatchController({
           z: bot.z + (desiredVz / norm) * moveSpeed * dt,
         },
         safeArena,
-        0.45,
+        PLAYER_RADIUS,
         bot.flags,
       );
       bot.x = nextPos.x;
@@ -936,9 +979,9 @@ export function createBotMatchController({
     }
   }
 
-  function step(dt, tNow = nowFn()) {
+  function step(dt, tNow = nowFn(), outTarget = null) {
     now = tNow;
-    if (ended) return buildSnapshot(now);
+    if (ended) return buildSnapshot(now, outTarget);
 
     const safeDt = Math.min(Math.max(0, dt), 0.05);
 
@@ -971,42 +1014,61 @@ export function createBotMatchController({
       finishMatch(win, now);
     }
 
-    return buildSnapshot(now);
+    return buildSnapshot(now, outTarget);
   }
 
-  function buildSnapshot(tNow = now) {
-    const outPlayers = [];
+  function buildSnapshot(tNow = now, outTarget = null) {
+    const outPlayers = outTarget && Array.isArray(outTarget.players) ? outTarget.players : [];
+    let idx = 0;
     for (const p of players.values()) {
       const prot = p.alive
         ? evaluateProtectionTick(p, cfg.mode, tNow)
         : { active: false, iFrames: false, expiring: false, remainingMs: 0, totalMs: modeRule.protectMs, progress: 0 };
-      outPlayers.push({
-        id: p.id,
-        name: p.name,
-        team: p.team,
-        isBot: p.isBot,
-        x: p.x,
-        y: p.y,
-        z: p.z,
-        yaw: p.yaw,
-        pitch: p.pitch,
-        mv: p.mv,
-        flags: p.flags,
-        weaponId: p.activeWeaponId,
-        alive: p.alive,
-        hp: p.hp,
-        reloading: Boolean(p.flags & FLAG.RELOADING),
-        invulnerable: prot.active,
-        iFrames: prot.iFrames,
-        protectExpiring: prot.expiring,
-        protectRemainingMs: prot.remainingMs,
-        protectTotalMs: prot.totalMs,
-        respawnMs: p.alive ? 0 : Math.max(0, p.respawnAt - tNow),
-        kills: p.kills,
-        deaths: p.deaths,
-        headshots: p.headshots,
-        laser: p.laser,
-      });
+      let entry = outPlayers[idx];
+      if (!entry) {
+        entry = {};
+        outPlayers[idx] = entry;
+      }
+      entry.id = p.id;
+      entry.name = p.name;
+      entry.team = p.team;
+      entry.isBot = p.isBot;
+      entry.x = p.x;
+      entry.y = p.y;
+      entry.z = p.z;
+      entry.yaw = p.yaw;
+      entry.pitch = p.pitch;
+      entry.mv = p.mv;
+      entry.flags = p.flags;
+      entry.weaponId = p.activeWeaponId;
+      entry.alive = p.alive;
+      entry.hp = p.hp;
+      entry.reloading = Boolean(p.flags & FLAG.RELOADING);
+      entry.invulnerable = prot.active;
+      entry.iFrames = prot.iFrames;
+      entry.protectExpiring = prot.expiring;
+      entry.protectRemainingMs = prot.remainingMs;
+      entry.protectTotalMs = prot.totalMs;
+      entry.respawnMs = p.alive ? 0 : Math.max(0, p.respawnAt - tNow);
+      entry.kills = p.kills;
+      entry.deaths = p.deaths;
+      entry.headshots = p.headshots;
+      entry.laser = p.laser;
+      idx++;
+    }
+    outPlayers.length = idx;
+    if (outTarget) {
+      outTarget.t = tNow;
+      outTarget.timeLeftSec = ended ? 0 : Math.max(0, Math.ceil((matchEndsAt - tNow) / 1000));
+      outTarget.mode = cfg.mode;
+      outTarget.killLimit = cfg.killLimit;
+      if (!outTarget.teamScores) outTarget.teamScores = { A: 0, B: 0 };
+      outTarget.teamScores.A = teamScores.A;
+      outTarget.teamScores.B = teamScores.B;
+      outTarget.ended = ended;
+      outTarget.winner = winner;
+      outTarget.players = outPlayers;
+      return outTarget;
     }
     return {
       t: tNow,

@@ -48,7 +48,7 @@ export class Room {
     this.map = VALID_MAPS.has(options.map) ? options.map : "military";
     this.killLimit = clampInt(options.killLimit, 1, 100, this.mode === GAME_MODE.TDM ? 30 : 20);
     this.timeLimit = clampInt(options.timeLimit, 60, 1200, 600);
-    this.maxPlayers = clampInt(options.maxPlayers, 2, 12, 10);
+    this.maxPlayers = clampInt(options.maxPlayers, 2, 18, 16);
     if (this.mode === GAME_MODE.TDM && this.maxPlayers % 2 !== 0) {
       this.maxPlayers = Math.max(2, this.maxPlayers - 1);
     }
@@ -320,8 +320,8 @@ export class Room {
       this.timeLimit = clampInt(settings.timeLimit, 60, 1200, this.timeLimit);
     }
     if (settings.maxPlayers !== undefined) {
-      let mp = clampInt(settings.maxPlayers, Math.max(2, this.players.size), 12, this.maxPlayers);
-      if (this.mode === GAME_MODE.TDM && mp % 2 !== 0) mp = Math.min(12, mp + 1);
+      let mp = clampInt(settings.maxPlayers, Math.max(2, this.players.size), 18, this.maxPlayers);
+      if (this.mode === GAME_MODE.TDM && mp % 2 !== 0) mp = Math.min(18, mp + 1);
       this.maxPlayers = mp;
     }
     if (settings.password !== undefined) {

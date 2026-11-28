@@ -151,27 +151,48 @@ export function createAssetLoader({
     mapId: initialIff.mapId || "military",
   };
 
-  // Both Ally (uIffIntensity = 0) and Enemy share the EXACT same shader cache key (1 WebGL program total)
+  // Ally, Enemy, and Protected variants share the EXACT same shader cache key (1 WebGL program total)
   const allyIffUniforms = createSoldierIffUniforms(THREE, {
+    relation: "ally",
     enemyColor: currentIffConfig.enemyColor,
     rimStrength: "off",
     mapId: currentIffConfig.mapId,
   });
-  const enemyIffUniforms = createSoldierIffUniforms(THREE, currentIffConfig);
-  const protectedIffUniforms = createSoldierIffUniforms(THREE, {
-    enemyColor: "red",
+  const enemyIffUniforms = createSoldierIffUniforms(THREE, {
+    relation: "enemy",
+    ...currentIffConfig,
+  });
+  const protectedAllyUniforms = createSoldierIffUniforms(THREE, {
+    relation: "ally",
+    enemyColor: currentIffConfig.enemyColor,
+    rimStrength: "off",
+    mapId: currentIffConfig.mapId,
+  });
+  const protectedEnemyUniforms = createSoldierIffUniforms(THREE, {
+    relation: "enemy",
+    enemyColor: currentIffConfig.enemyColor,
     rimStrength: "strong",
     mapId: currentIffConfig.mapId,
   });
-  if (protectedIffUniforms.uIffColor && protectedIffUniforms.uIffColor.value) {
-    protectedIffUniforms.uIffColor.value.setRGB(0.18, 0.78, 1.0);
+  function applyProtectedBlinkRim(uniforms) {
+    if (uniforms.uIffColor && uniforms.uIffColor.value) {
+      uniforms.uIffColor.value.setRGB(0.28, 0.86, 1.0);
+    }
+    if (uniforms.uIffIntensity) uniforms.uIffIntensity.value = 0.68;
+    if (uniforms.uIffHdrBoost) uniforms.uIffHdrBoost.value = 0.92;
+    if (uniforms.uIffEdgeParams && uniforms.uIffEdgeParams.value) {
+      uniforms.uIffEdgeParams.value.set(0.72, 0.58, 0.94, 0.86);
+    }
   }
-  if (protectedIffUniforms.uIffIntensity) protectedIffUniforms.uIffIntensity.value = 1.18;
-  if (protectedIffUniforms.uIffHdrBoost) protectedIffUniforms.uIffHdrBoost.value = 1.95;
-  if (protectedIffUniforms.uIffEdgeParams && protectedIffUniforms.uIffEdgeParams.value) {
-    protectedIffUniforms.uIffEdgeParams.value.set(0.32, 0.24, 0.72, 0.62);
-  }
-  const soldierBodyMats = { ally: null, enemy: null, protected: null };
+  applyProtectedBlinkRim(protectedAllyUniforms);
+  applyProtectedBlinkRim(protectedEnemyUniforms);
+  const soldierBodyMats = {
+    ally: null,
+    enemy: null,
+    protectedAlly: null,
+    protectedEnemy: null,
+    protected: null,
+  };
   const soldierTextures = new Set();
 
   const teamAccentMats = {};
@@ -180,9 +201,9 @@ export function createAssetLoader({
     const makeAccent = (name, colorNum, emissiveIntensity) => {
       const m = templateMat
         ? templateMat.clone()
-        : new THREE.MeshStandardMaterial({ roughness: 0.52, metalness: 0.08 });
+        : new THREE.MeshStandardMaterial({ roughness: 0.56, metalness: 0.08 });
       m.name = name;
-      m.roughness = 0.52;
+      m.roughness = 0.56;
       m.metalness = 0.08;
       m.color.setHex(colorNum);
       m.emissive.setHex(colorNum);
@@ -190,12 +211,12 @@ export function createAssetLoader({
       return m;
     };
 
-    const emissiveLevels = { A: 0.22, B: 0.24, FFA: 0.10 };
+    const emissiveLevels = { A: 0.08, B: 0.08, FFA: 0.04 };
     for (const key of ["A", "B", "FFA"]) {
       teamAccentMats[key] = makeAccent(`TeamColor_${key}`, TEAM_META[key].colorNum, emissiveLevels[key]);
     }
-    teamAccentMats.ally = makeAccent("TeamColor_ally", ALLY_IFF_META.colorNum, 0.34);
-    teamAccentMats.enemy = makeAccent("TeamColor_enemy", enemyPreset.colorNum, 0.42);
+    teamAccentMats.ally = makeAccent("TeamColor_ally", ALLY_IFF_META.colorNum, 0.12);
+    teamAccentMats.enemy = makeAccent("TeamColor_enemy", enemyPreset.colorNum, 0.10);
   }
   initTeamMaterials(null);
 
@@ -204,7 +225,30 @@ export function createAssetLoader({
     if (patch.rimStrength !== undefined) currentIffConfig.rimStrength = patch.rimStrength;
     if (patch.mapId !== undefined) currentIffConfig.mapId = patch.mapId;
 
-    const vals = syncSoldierIffUniforms(enemyIffUniforms, currentIffConfig);
+    syncSoldierIffUniforms(allyIffUniforms, {
+      relation: "ally",
+      enemyColor: currentIffConfig.enemyColor,
+      rimStrength: "off",
+      mapId: currentIffConfig.mapId,
+    });
+    const vals = syncSoldierIffUniforms(enemyIffUniforms, {
+      relation: "enemy",
+      ...currentIffConfig,
+    });
+    syncSoldierIffUniforms(protectedAllyUniforms, {
+      relation: "ally",
+      enemyColor: currentIffConfig.enemyColor,
+      rimStrength: "off",
+      mapId: currentIffConfig.mapId,
+    });
+    applyProtectedBlinkRim(protectedAllyUniforms);
+    syncSoldierIffUniforms(protectedEnemyUniforms, {
+      relation: "enemy",
+      enemyColor: currentIffConfig.enemyColor,
+      rimStrength: "strong",
+      mapId: currentIffConfig.mapId,
+    });
+    applyProtectedBlinkRim(protectedEnemyUniforms);
     if (vals && teamAccentMats.enemy) {
       teamAccentMats.enemy.color.setHex(vals.colorPreset.colorNum);
       teamAccentMats.enemy.emissive.setHex(vals.colorPreset.colorNum);
@@ -217,16 +261,20 @@ export function createAssetLoader({
   }
 
   function applySoldierTextureAnisotropy(renderer, targetAniso) {
-    const capped = Math.max(1, Math.min(8, Number(targetAniso) || 4));
+    const capped = Math.max(1, Math.min(16, Number(targetAniso) || 8));
     return updateTexturesAnisotropyInPlace(renderer, soldierTextures, capped);
   }
 
   function applySoldierEnvMap(targetEnv) {
-    for (const key of ["ally", "enemy", "protected"]) {
+    const seen = new Set();
+    for (const key of ["ally", "enemy", "protectedAlly", "protectedEnemy", "protected"]) {
       const mat = soldierBodyMats[key];
-      if (mat && "envMap" in mat && mat.envMap !== targetEnv) {
-        mat.envMap = targetEnv;
-        mat.needsUpdate = true;
+      if (mat && !seen.has(mat) && "envMap" in mat) {
+        seen.add(mat);
+        if (mat.envMap !== targetEnv) {
+          mat.envMap = targetEnv;
+          mat.needsUpdate = true;
+        }
       }
     }
   }
@@ -301,15 +349,15 @@ export function createAssetLoader({
     if (weaponId === "pistol") {
       muz.position.copy(pistolMuzAnchorPos);
       muzzleFlashRig.mesh.position.copy(pistolMuzAnchorPos);
-      flashL.position.set(pistolMuzAnchorPos.x, pistolMuzAnchorPos.y, pistolMuzAnchorPos.z - 0.04);
+      flashL.position.set(pistolMuzAnchorPos.x + 0.12, pistolMuzAnchorPos.y - 0.12, pistolMuzAnchorPos.z - 0.36);
     } else if (weaponId === "sniper") {
       muz.position.copy(awmMuzAnchorPos);
       muzzleFlashRig.mesh.position.copy(awmMuzAnchorPos);
-      flashL.position.set(awmMuzAnchorPos.x, awmMuzAnchorPos.y, awmMuzAnchorPos.z - 0.09);
+      flashL.position.set(awmMuzAnchorPos.x + 0.15, awmMuzAnchorPos.y - 0.14, awmMuzAnchorPos.z - 0.54);
     } else {
       muz.position.copy(m416MuzAnchorPos);
       muzzleFlashRig.mesh.position.copy(m416MuzAnchorPos);
-      flashL.position.set(m416MuzAnchorPos.x, m416MuzAnchorPos.y, m416MuzAnchorPos.z - 0.07);
+      flashL.position.set(m416MuzAnchorPos.x + 0.15, m416MuzAnchorPos.y - 0.14, m416MuzAnchorPos.z - 0.50);
     }
   }
 
@@ -484,8 +532,11 @@ export function createAssetLoader({
       }
       const ck = `${obj.material.uuid}:${obj.isSkinnedMesh ? 1 : 0}`;
       if (!matCache.has(ck)) {
-        const hydrated = hydratePbrMaterial(obj.material, obj.name, 1.1, Boolean(obj.isSkinnedMesh));
+        const hydrated = hydratePbrMaterial(obj.material, obj.name, 0.92, Boolean(obj.isSkinnedMesh));
         if (obj.isSkinnedMesh) {
+          if (hydrated.normalScale && typeof hydrated.normalScale.set === "function") {
+            hydrated.normalScale.set(1.28, 1.28);
+          }
           // Boost SWAT 1024px texture crispness at grazing/prone angles
           for (const texKey of ["map", "normalMap", "roughnessMap", "metalnessMap", "aoMap"]) {
             const t = hydrated[texKey];
@@ -502,16 +553,32 @@ export function createAssetLoader({
     });
 
     if (primarySkinnedMat) {
+      const makeProtectedClone = (name, uniforms) => {
+        const pMat = primarySkinnedMat.clone();
+        pMat.name = name;
+        pMat.transparent = true;
+        pMat.opacity = 0.56;
+        pMat.depthWrite = true;
+        applySoldierIffShader(pMat, uniforms);
+        return pMat;
+      };
       applySoldierIffShader(primarySkinnedMat, allyIffUniforms);
       const enemyMat = primarySkinnedMat.clone();
       enemyMat.name = `${primarySkinnedMat.name || "FSB_Operator_PBR"}_Enemy`;
       applySoldierIffShader(enemyMat, enemyIffUniforms);
-      const protectedMat = primarySkinnedMat.clone();
-      protectedMat.name = `${primarySkinnedMat.name || "FSB_Operator_PBR"}_Protected`;
-      applySoldierIffShader(protectedMat, protectedIffUniforms);
+      const protectedAllyMat = makeProtectedClone(
+        `${primarySkinnedMat.name || "FSB_Operator_PBR"}_ProtectedAlly`,
+        protectedAllyUniforms,
+      );
+      const protectedEnemyMat = makeProtectedClone(
+        `${primarySkinnedMat.name || "FSB_Operator_PBR"}_ProtectedEnemy`,
+        protectedEnemyUniforms,
+      );
       soldierBodyMats.ally = primarySkinnedMat;
       soldierBodyMats.enemy = enemyMat;
-      soldierBodyMats.protected = protectedMat;
+      soldierBodyMats.protectedAlly = protectedAllyMat;
+      soldierBodyMats.protectedEnemy = protectedEnemyMat;
+      soldierBodyMats.protected = protectedEnemyMat;
     }
 
     if (teamTemplate) initTeamMaterials(hydratePbrMaterial(teamTemplate, "TeamColor", 1.1));

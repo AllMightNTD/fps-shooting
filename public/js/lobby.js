@@ -81,7 +81,7 @@ export function createLobbyController({
     mode: "TDM",
     mapId: "military",
     difficulty: "medium",
-    botCount: 5,
+    botCount: 15,
     killLimit: 30,
   };
   let pendingJoinRoomId = null;
@@ -447,7 +447,7 @@ export function createLobbyController({
   }
   if (botCountEl) {
     botCountEl.addEventListener("change", () => {
-      botConfig.botCount = Number(botCountEl.value) || 5;
+      botConfig.botCount = Number(botCountEl.value) || 15;
       syncBotSetupUI();
     });
   }
@@ -492,7 +492,7 @@ export function createLobbyController({
     const mapId = createMapEl ? createMapEl.value : "military";
     const killLimit = Number(document.getElementById("createKills").value) || 30;
     const timeLimit = Number(document.getElementById("createTime").value) || 600;
-    const maxPlayers = Number(document.getElementById("createMaxPlayers").value) || 10;
+    const maxPlayers = Number(document.getElementById("createMaxPlayers").value) || 16;
     const password = document.getElementById("createPassword").value.trim();
     const allowSoloTest = document.getElementById("createAllowSolo").checked;
 

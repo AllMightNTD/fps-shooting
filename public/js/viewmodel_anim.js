@@ -143,9 +143,10 @@ export function createViewmodelAnimator({
       }
       const retWrap = $("scopeReticleWrap");
       if (retWrap) {
-        const retFilter = scopeOut.blur01 > 0.04 ? `blur(${(scopeOut.blur01 * 3.8).toFixed(2)}px)` : "";
-        const retOpacity = (1 - scopeOut.blur01 * 0.42).toFixed(3);
-        if (_uiCache.retFilter !== retFilter) { _uiCache.retFilter = retFilter; retWrap.style.filter = retFilter; }
+        const retScale = (1 + scopeOut.blur01 * 0.032).toFixed(4);
+        const retTransform = retScale === "1.0000" ? "" : `scale(${retScale})`;
+        const retOpacity = (1 - scopeOut.blur01 * 0.34).toFixed(3);
+        if (_uiCache.retTransform !== retTransform) { _uiCache.retTransform = retTransform; retWrap.style.transform = retTransform; }
         if (_uiCache.retOpacity !== retOpacity) { _uiCache.retOpacity = retOpacity; retWrap.style.opacity = retOpacity; }
       }
       const zoomEl = $("scopeZoomBadge");
@@ -367,6 +368,9 @@ export function createViewmodelAnimator({
     pistolTriggerNode.rotation.x = -pistolTrigPull * 0.45;
 
     const hip = 1 - ads;
+    const isCrouched = Boolean(curFlags & FLAG.CROUCH) && !(curFlags & FLAG.PRONE);
+    const isProne = Boolean(curFlags & FLAG.PRONE);
+    const stanceTuck = isProne ? 1.35 : isCrouched ? 1.0 : 0.0;
     const calm = 1 - 0.78 * ads;
     const bobK = mv * (1 - 0.88 * ads);
     const chW = !st.isTactical && rl > 0.74 && rl < 0.98 ? smooth01(Math.min((rl - 0.74) / 0.09, (0.98 - rl) / 0.08)) : 0;
@@ -376,17 +380,17 @@ export function createViewmodelAnimator({
     const adsPosZ = isPistol ? PISTOL_ADS_POS.z : isSniper ? -0.165 : ADS_POS.z;
 
     gun.position.set(
-      lerp(baseHip.x, targetAdsX, ads) + (swx + Math.sin(bob) * 0.0055 * bobK) * calm - (isPistol ? 0.024 : 0.044) * tl,
-      lerp(baseHip.y, adsPosY, ads) + (swy + Math.sin(bob * 2) * 0.007 * bobK) * calm - 0.055 * spr + 0.018 * tl + Math.sin(gt * 1.6) * 0.0016 * hip,
-      lerp(baseHip.z, adsPosZ, ads) + recoil * (isPistol ? 0.35 : 0.95 - 0.65 * ads) + 0.028 * tl - (isPistol ? 0.022 : 0.042) * chW,
+      lerp(baseHip.x, targetAdsX, ads) - 0.015 * stanceTuck * hip + (swx + Math.sin(bob) * 0.0055 * bobK) * calm - (isPistol ? 0.024 : 0.044) * tl,
+      lerp(baseHip.y, adsPosY, ads) - 0.010 * stanceTuck * hip + (swy + Math.sin(bob * 2) * 0.007 * bobK) * calm - 0.055 * spr + 0.018 * tl + Math.sin(gt * 1.6) * 0.0016 * hip,
+      lerp(baseHip.z, adsPosZ, ads) + 0.020 * stanceTuck * hip + recoil * (isPistol ? 0.35 : 0.95 - 0.65 * ads) + 0.028 * tl - (isPistol ? 0.022 : 0.042) * chW,
     );
 
     const hipPitch = (isPistol ? 0.028 : isSniper ? 0.032 : 0.036) * hip;
     const hipYaw = (isPistol ? 0.038 : isSniper ? 0.046 : 0.052) * hip;
     gun.rotation.set(
       hipPitch + (recoil * (isPistol ? 0.85 : 1.85) + swy * 1.8) * calm - 0.20 * spr + (isPistol ? 0.09 : 0.16) * tl,
-      hipYaw + (0.48 * spr + swx * 1.8) * calm + (isPistol ? 0.12 : 0.20) * tl,
-      swx * 1.2 * calm - (isPistol ? 0.10 : 0.24) * tl,
+      hipYaw + 0.024 * stanceTuck * hip + (0.48 * spr + swx * 1.8) * calm + (isPistol ? 0.12 : 0.20) * tl,
+      0.044 * stanceTuck * hip + swx * 1.2 * calm - (isPistol ? 0.10 : 0.24) * tl,
     );
 
     vmCam.position.copy(cam.position);
@@ -420,7 +424,7 @@ export function createViewmodelAnimator({
     const { armsCtrl, armsRoot } = assetLoader.getArms();
     if (armsCtrl) {
       const hideSniperVm = aliveSelf && cfg.scopeOverlay && scopeOut.hideWeaponModel;
-      const canShowArms = (engineMode === "solo" || meAlive) && engineMode !== "idle" && !hideSniperVm;
+      const canShowArms = gun.visible && (engineMode === "solo" || meAlive) && engineMode !== "idle" && !hideSniperVm;
       armsCtrl.update({
         weaponId: cfg.id,
         leftSocketPos: _leftTargetP,

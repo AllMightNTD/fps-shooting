@@ -32,22 +32,62 @@ import sys
 
 import bmesh
 import bpy
-from mathutils import Euler, Matrix, Vector
+from mathutils import Euler, Matrix, Quaternion, Vector
 
 TARGET_HEIGHT_M = 1.76
 MAX_JUMP_DURATION_S = 0.72
 MIN_JUMP_DURATION_S = 0.45
 
+ARM_RIFLE_BONE_KEYS = (
+    "leftshoulder",
+    "leftarm",
+    "leftforearm",
+    "lefthand",
+    "rightshoulder",
+    "rightarm",
+    "rightforearm",
+    "righthand",
+)
+
+UPPER_RIFLE_BONE_KEYS = (
+    "spine1",
+    "spine2",
+    "neck",
+    "head",
+    *ARM_RIFLE_BONE_KEYS,
+)
+
 CLIP_ALIASES: dict[str, tuple[str, ...]] = {
     "idle": ("idle", "rifle_idle", "rifle idle", "standing_idle", "standing idle"),
     "run": ("run", "rifle_run", "rifle run", "sprint", "jog"),
     "crouch": ("crouch", "crouch_idle", "crouch idle", "crouching_idle", "crouching idle"),
+    "crouch_forward": ("walk_crouching_forward", "crouch_forward", "crouch walk forward"),
+    "crouch_backward": ("walk_crouching_backward", "crouch_backward", "crouch walk backward"),
+    "crouch_left": ("walk_crouching_left", "crouch_left", "crouch walk left"),
+    "crouch_right": ("walk_crouching_right", "crouch_right", "crouch walk right"),
     "jump": ("jump", "rifle_jump", "rifle jump", "jump_up", "jump up"),
     "prone": ("prone", "prone_idle", "prone idle", "rifle_prone", "rifle prone"),
     "prone_move": ("prone_move", "prone move", "prone_forward", "prone forward", "crawl", "crawling"),
 }
 
-CYCLIC_CLIPS: tuple[str, ...] = ("idle", "run", "crouch", "prone", "prone_move")
+CLIP_EXCLUDE_TOKENS: dict[str, tuple[str, ...]] = {
+    "run": ("crouch",),
+    "crouch": ("walk", "run", "move", "forward", "backward", "left", "right"),
+    "prone": ("move", "crawl", "forward"),
+}
+
+CYCLIC_CLIPS: tuple[str, ...] = (
+    "idle",
+    "run",
+    "crouch",
+    "crouch_forward",
+    "crouch_backward",
+    "crouch_left",
+    "crouch_right",
+    "crouch_move",
+    "prone",
+    "prone_move",
+)
 
 BASE_ALIASES: tuple[str, ...] = (
     "base_rigged",
@@ -80,6 +120,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--out-bundle", type=Path, default=repo_root / "model" / "dist" / "soldier.bundle.js")
     parser.add_argument("--tex-size", type=int, default=1024)
     parser.add_argument("--fps", type=int, default=30)
+    parser.add_argument("--prep-glb", type=Path, default=repo_root / "model" / "assets" / "fsb_ready_for_rig.glb")
     return parser.parse_args(argv)
 
 
@@ -203,11 +244,20 @@ def _restore_pbr_textures(meshes: list[bpy.types.Object], tex_dir: Path, tex_siz
     mr_img = load_img(mr_path, "Non-Color") if mr_path.is_file() else None
     nm_img = load_img(nm_path, "Non-Color") if nm_path.is_file() else None
 
+    for m in list(bpy.data.materials):
+        if m.users == 0:
+            bpy.data.materials.remove(m)
+
     for obj in meshes:
         if not obj.data.materials:
             mat = bpy.data.materials.new("FSB_Operator_PBR")
             obj.data.materials.append(mat)
         mat = obj.data.materials[0]
+        existing_mat = bpy.data.materials.get("FSB_Operator_PBR")
+        if existing_mat and existing_mat is not mat:
+            existing_mat.name = "__unused_old_pbr"
+            if existing_mat.users == 0:
+                bpy.data.materials.remove(existing_mat)
         mat.name = "FSB_Operator_PBR"
         mat.use_nodes = True
         nt = mat.node_tree
@@ -289,22 +339,22 @@ def _attach_socket_and_team_patches(armature: bpy.types.Object, root_empty: bpy.
         mount.parent_bone = right_hand
         # Mixamo RightHand +Y runs toward LeftHand (barrel forward); rotating ~180 deg around Y
         # plus slight wrist roll aligns mount +Y (glTF -Z) forward and mount +Z (glTF +Y) upright.
-        mount.location = (0.0, 0.04, 0.0)
-        mount.rotation_euler = Euler((0.0, 3.141592653589793 - 0.35, 0.0), "XYZ")
+        mount.location = (0.0, 0.028, 0.006)
+        mount.rotation_euler = Euler((0.0, 3.141592653589793 - 0.32, 0.0), "XYZ")
     else:
         mount.parent = root_empty
         mount.location = (0.105, 0.115, 1.26)
 
-    # Shared TeamColor material overridden per team (A: #2F80FF, B: #FF4D2E, FFA: #8A8F98)
+    # Shared TeamColor material overridden per team (subtle tactical patch, not glaring neon)
     team_mat = bpy.data.materials.new("TeamColor")
     team_mat.use_nodes = True
     bsdf = next(n for n in team_mat.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
     bsdf.inputs["Base Color"].default_value = (0.184, 0.502, 1.0, 1.0)
-    bsdf.inputs["Roughness"].default_value = 0.52
-    bsdf.inputs["Metallic"].default_value = 0.08
+    bsdf.inputs["Roughness"].default_value = 0.58
+    bsdf.inputs["Metallic"].default_value = 0.06
     if "Emission Color" in bsdf.inputs:
         bsdf.inputs["Emission Color"].default_value = (0.184, 0.502, 1.0, 1.0)
-        bsdf.inputs["Emission Strength"].default_value = 0.22
+        bsdf.inputs["Emission Strength"].default_value = 0.08
 
     if head_bone:
         crown = _build_box_mesh("head_team_iff", 0.052, 0.014, 0.068, team_mat)
@@ -408,19 +458,43 @@ def _extract_action_for_clip(
             sample_end = min(f_end_i, sample_start + int(MAX_JUMP_DURATION_S * scene_fps))
 
     dst_bones = {b.name for b in target_armature.data.bones}
-    bone_map = {}
+    bone_map: dict[str, str] = {}
+    rev_bone_map: dict[str, str] = {}
     for sb in src_arm.data.bones:
         mapped = _map_bone_name(sb.name, dst_bones)
         if mapped:
             bone_map[sb.name] = mapped
+            rev_bone_map[mapped] = sb.name
+
+    # Topological parent-first traversal order on target_armature for exact rest-basis retargeting
+    dst_ordered_bones: list[bpy.types.Bone] = []
+    dst_rest_rel: dict[str, Matrix] = {}
+
+    def _collect_bone_tree(bone: bpy.types.Bone) -> None:
+        dst_ordered_bones.append(bone)
+        if bone.parent:
+            dst_rest_rel[bone.name] = bone.parent.matrix_local.to_3x3().inverted() @ bone.matrix_local.to_3x3()
+        else:
+            dst_rest_rel[bone.name] = bone.matrix_local.to_3x3().copy()
+        for child in bone.children:
+            _collect_bone_tree(child)
+
+    for root_bone in [b for b in target_armature.data.bones if not b.parent]:
+        _collect_bone_tree(root_bone)
+
+    # Character-space basis alignment: use armature matrix_local (excludes soldier_root 180° Z flip)
+    r_src_arm_local = src_arm.matrix_local.to_3x3().normalized()
+    r_dst_arm_local_inv = target_armature.matrix_local.to_3x3().normalized().inverted()
+    arm_basis_xfer = r_dst_arm_local_inv @ r_src_arm_local
 
     hips_name = _resolve_bone_name(target_armature, HIPS_BONE_CANDIDATES)
 
-    # Determine which local axis of Hips corresponds to Blender World Z (vertical bounce)
+    # Determine which local axis of Hips corresponds to Blender World Z (vertical bounce/crouch/prone drop)
     vertical_local_axis = 1
     if hips_name:
         hips_bone = target_armature.data.bones[hips_name]
-        world_z_in_local = hips_bone.matrix_local.to_3x3().inverted() @ Vector((0.0, 0.0, 1.0))
+        hips_world_r = target_armature.matrix_world.to_3x3().normalized() @ hips_bone.matrix_local.to_3x3().normalized()
+        world_z_in_local = hips_world_r.inverted() @ Vector((0.0, 0.0, 1.0))
         vertical_local_axis = max(range(3), key=lambda idx: abs(world_z_in_local[idx]))
 
     action = bpy.data.actions.new(name=clip_name)
@@ -449,43 +523,71 @@ def _extract_action_for_clip(
 
     base_hip_loc: Vector | None = raw_hip_locs[0].copy() if raw_hip_locs else None
     end_hip_loc: Vector | None = raw_hip_locs[-1].copy() if raw_hip_locs else None
-    first_frame_quats: dict[str, tuple[float, ...]] = {}
+    mean_hip_planar: Vector | None = None
+    if raw_hip_locs:
+        mean_hip_planar = Vector((0.0, 0.0, 0.0))
+        n_locs = float(len(raw_hip_locs))
+        for idx_l, lv in enumerate(raw_hip_locs):
+            alpha_l = idx_l / float(max(1, len(raw_hip_locs) - 1))
+            adj = lv - (end_hip_loc - base_hip_loc) * alpha_l
+            mean_hip_planar += adj
+        mean_hip_planar /= n_locs
+
+    first_frame_quats: dict[str, Quaternion] = {}
+    prev_frame_quats: dict[str, Quaternion] = {}
     first_frame_locs: dict[str, tuple[float, ...]] = {}
     total_steps = max(1, len(src_frames) - 1)
     out_frame = 1
+    keep_organic_sway = clip_name in ("prone_move", "run", "crouch_forward", "crouch_backward", "crouch_left", "crouch_right")
 
     for idx, src_f in enumerate(src_frames):
         scene.frame_set(src_f)
         bpy.context.view_layer.update()
 
-        for s_name, t_name in bone_map.items():
+        # Retarget every bone by matching armature-space orientation (handles A-pose vs T-pose rest mismatch)
+        dst_arm_pose_r: dict[str, Matrix] = {}
+        for bone in dst_ordered_bones:
+            t_name = bone.name
+            s_name = rev_bone_map.get(t_name)
+            p_pose = dst_arm_pose_r[bone.parent.name] if bone.parent else Matrix.Identity(3)
+            rest_rel = dst_rest_rel[t_name]
+
+            if s_name is None:
+                dst_arm_pose_r[t_name] = p_pose @ rest_rel
+                continue
+
             spb = src_arm.pose.bones[s_name]
+            desired_r = arm_basis_xfer @ spb.matrix.to_3x3().normalized()
+            local_r = (p_pose @ rest_rel).inverted() @ desired_r
+            q = local_r.to_quaternion().normalized()
+            prev_q = prev_frame_quats.get(t_name)
+            if prev_q is not None and q.dot(prev_q) < 0.0:
+                q = -q
+            prev_frame_quats[t_name] = q.copy()
+            dst_arm_pose_r[t_name] = desired_r
+
             tpb = target_armature.pose.bones[t_name]
             tpb.rotation_mode = "QUATERNION"
-
-            if spb.rotation_mode == "QUATERNION":
-                q = tuple(spb.rotation_quaternion)
-            else:
-                q = tuple(spb.rotation_euler.to_quaternion())
             tpb.rotation_quaternion = q
             tpb.keyframe_insert(data_path="rotation_quaternion", frame=out_frame)
             if out_frame == 1:
-                first_frame_quats[t_name] = q
+                first_frame_quats[t_name] = q.copy()
 
             if t_name == hips_name and base_hip_loc is not None and end_hip_loc is not None:
                 loc = raw_hip_locs[idx].copy()
-                if clip_name == "prone_move":
-                    # Preserve organic crawling body sway while canceling any linear planar travel
+                if keep_organic_sway:
+                    # Preserve natural stride/crawl hip weight transfer while zeroing linear drift & centering over capsule
                     alpha = idx / float(total_steps)
                     for ax in range(3):
                         if ax != vertical_local_axis:
                             linear_drift = (end_hip_loc[ax] - base_hip_loc[ax]) * alpha
-                            loc[ax] = loc[ax] - linear_drift
+                            center_off = mean_hip_planar[ax] if mean_hip_planar is not None else 0.0
+                            loc[ax] = loc[ax] - linear_drift - center_off
                 else:
                     # Enforce strict In-Place: zero horizontal planar drift while keeping vertical bounce
                     for ax in range(3):
                         if ax != vertical_local_axis:
-                            loc[ax] = base_hip_loc[ax]
+                            loc[ax] = 0.0
                 tpb.location = loc
                 tpb.keyframe_insert(data_path="location", frame=out_frame)
                 if out_frame == 1:
@@ -493,12 +595,16 @@ def _extract_action_for_clip(
 
         out_frame += 1
 
-    # Enforce seamless loop closure on cyclic clips
+    # Enforce seamless loop closure on cyclic clips (keeping shortest-arc quaternion sign)
     if clip_name in CYCLIC_CLIPS and out_frame > 2:
         last_f = out_frame - 1
-        for t_name, q in first_frame_quats.items():
+        for t_name, q0 in first_frame_quats.items():
+            q_close = q0.copy()
+            prev_q = prev_frame_quats.get(t_name)
+            if prev_q is not None and q_close.dot(prev_q) < 0.0:
+                q_close = -q_close
             tpb = target_armature.pose.bones[t_name]
-            tpb.rotation_quaternion = q
+            tpb.rotation_quaternion = q_close
             tpb.keyframe_insert(data_path="rotation_quaternion", frame=last_f)
         if hips_name and hips_name in first_frame_locs:
             tpb = target_armature.pose.bones[hips_name]
@@ -530,6 +636,313 @@ def _push_actions_to_nla(armature: bpy.types.Object, actions: list[bpy.types.Act
         strip.action_frame_start = act.frame_range[0]
         strip.action_frame_end = act.frame_range[1]
         strip.name = act.name
+
+
+def _upgrade_mesh_from_prep_glb(
+    armature: bpy.types.Object,
+    base_meshes: list[bpy.types.Object],
+    prep_glb_path: Path,
+) -> list[bpy.types.Object]:
+    """Replace 18k decimated mesh with higher-detail prep GLB mesh via DataTransfer bone weights."""
+    if not prep_glb_path or not prep_glb_path.is_file() or not base_meshes:
+        return base_meshes
+    src_mesh = base_meshes[0]
+    src_tris = sum(max(1, len(p.vertices) - 2) for p in src_mesh.data.polygons)
+
+    armature.data.pose_position = "REST"
+    bpy.context.view_layer.update()
+
+    before = set(bpy.data.objects)
+    bpy.ops.import_scene.gltf(filepath=str(prep_glb_path))
+    imported = [o for o in bpy.data.objects if o not in before]
+    hi_candidates = [o for o in imported if o.type == "MESH"]
+    if not hi_candidates:
+        for o in imported:
+            bpy.data.objects.remove(o, do_unlink=True)
+        return base_meshes
+
+    hi_mesh = hi_candidates[0]
+    hi_tris = sum(max(1, len(p.vertices) - 2) for p in hi_mesh.data.polygons)
+    if hi_tris <= src_tris:
+        for o in imported:
+            bpy.data.objects.remove(o, do_unlink=True)
+        armature.data.pose_position = "POSE"
+        return base_meshes
+
+    # Detach GLB hierarchy keeping world alignment and transform into armature local space
+    bpy.ops.object.select_all(action="DESELECT")
+    hi_mesh.select_set(True)
+    bpy.context.view_layer.objects.active = hi_mesh
+    bpy.ops.object.parent_clear(type="CLEAR_KEEP_TRANSFORM")
+    bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+    for o in imported:
+        if o != hi_mesh:
+            bpy.data.objects.remove(o, do_unlink=True)
+
+    inv_arm = armature.matrix_world.inverted()
+    hi_mesh.parent = armature
+    hi_mesh.matrix_parent_inverse.identity()
+    hi_mesh.location = (0.0, 0.0, 0.0)
+    hi_mesh.rotation_euler = (0.0, 0.0, 0.0)
+    hi_mesh.scale = (1.0, 1.0, 1.0)
+    for v in hi_mesh.data.vertices:
+        v.co = inv_arm @ v.co
+    hi_mesh.data.update()
+
+    # Copy all Mixamo bone vertex groups & transfer interpolated weights cleanly in REST space
+    hi_mesh.vertex_groups.clear()
+    for vg in src_mesh.vertex_groups:
+        hi_mesh.vertex_groups.new(name=vg.name)
+
+    dt_mod = hi_mesh.modifiers.new(name="WeightTransfer", type="DATA_TRANSFER")
+    dt_mod.object = src_mesh
+    dt_mod.use_vert_data = True
+    dt_mod.data_types_verts = {"VGROUP_WEIGHTS"}
+    dt_mod.vert_mapping = "POLYINTERP_NEAREST"
+
+    bpy.ops.object.select_all(action="DESELECT")
+    hi_mesh.select_set(True)
+    bpy.context.view_layer.objects.active = hi_mesh
+    bpy.ops.object.modifier_apply(modifier=dt_mod.name)
+
+    arm_mod = hi_mesh.modifiers.new(name="Armature", type="ARMATURE")
+    arm_mod.object = armature
+    hi_mesh.name = src_mesh.name
+    hi_mesh.data.name = src_mesh.data.name
+
+    for old in base_meshes:
+        bpy.data.objects.remove(old, do_unlink=True)
+    for m in list(bpy.data.materials):
+        if m.users == 0:
+            bpy.data.materials.remove(m)
+
+    armature.data.pose_position = "POSE"
+    bpy.context.view_layer.update()
+    print(f"[OK] Upgraded SWAT mesh sharpness: {src_tris:,} -> {hi_tris:,} tris from {prep_glb_path.name}")
+    return [hi_mesh]
+
+
+def _is_arm_rifle_bone(bone_name: str) -> bool:
+    low = bone_name.split(":")[-1].lower()
+    if low in ARM_RIFLE_BONE_KEYS:
+        return True
+    return any(tok in low for tok in ("thumb", "index", "middle", "ring", "pinky"))
+
+
+def _is_upper_rifle_bone(bone_name: str) -> bool:
+    low = bone_name.split(":")[-1].lower()
+    if low in UPPER_RIFLE_BONE_KEYS:
+        return True
+    return any(tok in low for tok in ("thumb", "index", "middle", "ring", "pinky"))
+
+
+def _assign_action(armature: bpy.types.Object, action: bpy.types.Action | None) -> None:
+    armature.animation_data_create()
+    armature.animation_data.action = action
+    if action and hasattr(armature.animation_data, "action_slot") and getattr(action, "slots", None):
+        armature.animation_data.action_slot = action.slots[0]
+
+
+def _collect_armature_tree(armature: bpy.types.Object) -> tuple[list[bpy.types.Bone], dict[str, Matrix]]:
+    ordered: list[bpy.types.Bone] = []
+    rest_rel: dict[str, Matrix] = {}
+
+    def _walk(bone: bpy.types.Bone) -> None:
+        ordered.append(bone)
+        if bone.parent:
+            rest_rel[bone.name] = bone.parent.matrix_local.to_3x3().inverted() @ bone.matrix_local.to_3x3()
+        else:
+            rest_rel[bone.name] = bone.matrix_local.to_3x3().copy()
+        for ch in bone.children:
+            _walk(ch)
+
+    for rb in [b for b in armature.data.bones if not b.parent]:
+        _walk(rb)
+    return ordered, rest_rel
+
+
+def _sample_idle_arm_targets(
+    idle_act: bpy.types.Action,
+    armature: bpy.types.Object,
+) -> dict[str, Quaternion]:
+    """Sample character-space (armature-space) arm & hand orientations from frame-1 of idle."""
+    _assign_action(armature, idle_act)
+    bpy.context.scene.frame_set(int(round(idle_act.frame_range[0])))
+    bpy.context.view_layer.update()
+    targets: dict[str, Quaternion] = {}
+    for pb in armature.pose.bones:
+        if _is_arm_rifle_bone(pb.name):
+            targets[pb.name] = pb.matrix.to_3x3().normalized().to_quaternion()
+    _assign_action(armature, None)
+    return targets
+
+
+def _stabilize_clip_rifle_hold(
+    clip_act: bpy.types.Action,
+    idle_arm_targets: dict[str, Quaternion],
+    armature: bpy.types.Object,
+    blend_weight: float,
+    cyclic: bool = True,
+) -> None:
+    """Blend shoulder/arm/hand orientations in armature space toward tactical combat-ready rifle hold.
+
+    Keeps lower body, hips, and spine torso sway 100% intact while pulling splayed/crossed elbows
+    back into a shoulder-welded two-hand rifle grip pointing straight ahead.
+    """
+    if not clip_act or not idle_arm_targets or blend_weight <= 0.0:
+        return
+    ordered_bones, rest_rel = _collect_armature_tree(armature)
+    f_start = int(round(clip_act.frame_range[0]))
+    f_end = max(f_start + 1, int(round(clip_act.frame_range[1])))
+    _assign_action(armature, clip_act)
+
+    # Pre-sample original armature-space pose rotations across all frames before mutating keyframes
+    frame_arm_quats: list[dict[str, Quaternion]] = []
+    for f in range(f_start, f_end + 1):
+        bpy.context.scene.frame_set(f)
+        bpy.context.view_layer.update()
+        snap = {pb.name: pb.matrix.to_3x3().normalized().to_quaternion() for pb in armature.pose.bones}
+        frame_arm_quats.append(snap)
+
+    prev_local_q: dict[str, Quaternion] = {}
+    first_local_q: dict[str, Quaternion] = {}
+
+    for idx, f in enumerate(range(f_start, f_end + 1)):
+        src_quats = frame_arm_quats[idx]
+        arm_pose_r: dict[str, Matrix] = {}
+        for bone in ordered_bones:
+            b_name = bone.name
+            p_r = arm_pose_r[bone.parent.name] if bone.parent else Matrix.Identity(3)
+            q_orig = src_quats[b_name]
+
+            if b_name not in idle_arm_targets:
+                arm_pose_r[b_name] = q_orig.to_matrix()
+                continue
+
+            q_tgt = idle_arm_targets[b_name].copy()
+            if q_orig.dot(q_tgt) < 0.0:
+                q_tgt = -q_tgt
+            # Shoulders blend slightly gentler than forearms/hands so natural stride sway stays organic
+            short = b_name.split(":")[-1].lower()
+            w = blend_weight * 0.72 if "shoulder" in short else blend_weight
+            q_blend = q_orig.slerp(q_tgt, w).normalized()
+            arm_pose_r[b_name] = q_blend.to_matrix()
+
+            local_r = (p_r @ rest_rel[b_name]).inverted() @ arm_pose_r[b_name]
+            q_loc = local_r.to_quaternion().normalized()
+            pq = prev_local_q.get(b_name)
+            if pq is not None and q_loc.dot(pq) < 0.0:
+                q_loc = -q_loc
+            prev_local_q[b_name] = q_loc.copy()
+            if idx == 0:
+                first_local_q[b_name] = q_loc.copy()
+
+            pb = armature.pose.bones[b_name]
+            pb.rotation_mode = "QUATERNION"
+            pb.rotation_quaternion = q_loc
+            pb.keyframe_insert(data_path="rotation_quaternion", frame=f)
+
+    if cyclic and f_end > f_start:
+        for b_name, q0 in first_local_q.items():
+            q_close = q0.copy()
+            pq = prev_local_q.get(b_name)
+            if pq is not None and q_close.dot(pq) < 0.0:
+                q_close = -q_close
+            pb = armature.pose.bones[b_name]
+            pb.rotation_quaternion = q_close
+            pb.keyframe_insert(data_path="rotation_quaternion", frame=f_end)
+
+    _assign_action(armature, None)
+
+
+def _build_tactical_crouch_idle_from_walk(
+    walk_fwd_act: bpy.types.Action,
+    armature: bpy.types.Object,
+    scene_fps: int,
+) -> bpy.types.Action:
+    """Build a height-balanced tactical crouch idle (hipZ ~0.66m, headZ ~1.05m) from crouch walk.
+
+    Matches the 4 directional walk_crouching_* clips (+24cm vs kneeling crouch.fbx) so starting
+    and stopping movement has zero vertical pop and aligns with hitreg crouch head height (1.08m).
+    """
+    import math
+
+    _assign_action(armature, walk_fwd_act)
+    f0 = int(round(walk_fwd_act.frame_range[0]))
+    f1 = max(f0 + 1, int(round(walk_fwd_act.frame_range[1])))
+    lf_name = _resolve_bone_name(armature, ("mixamorig:LeftFoot", "LeftFoot"))
+    rf_name = _resolve_bone_name(armature, ("mixamorig:RightFoot", "RightFoot"))
+    hips_name = _resolve_bone_name(armature, HIPS_BONE_CANDIDATES)
+    spine1_name = _resolve_bone_name(armature, ("mixamorig:Spine1", "Spine1"))
+    spine2_name = _resolve_bone_name(armature, ("mixamorig:Spine2", "Spine2"))
+    head_name = _resolve_bone_name(armature, HEAD_BONE_CANDIDATES)
+
+    # Pick the frame with both feet most squarely planted on the ground
+    best_frame = f0
+    best_score = 1e9
+    if lf_name and rf_name:
+        for f in range(f0, f1 + 1):
+            bpy.context.scene.frame_set(f)
+            bpy.context.view_layer.update()
+            lz = (armature.matrix_world @ armature.pose.bones[lf_name].head).z
+            rz = (armature.matrix_world @ armature.pose.bones[rf_name].head).z
+            score = max(lz, rz) + abs(lz - rz) * 0.5
+            if score < best_score:
+                best_score = score
+                best_frame = f
+
+    bpy.context.scene.frame_set(best_frame)
+    bpy.context.view_layer.update()
+    base_quats = {pb.name: pb.rotation_quaternion.copy() for pb in armature.pose.bones}
+    base_hips_loc = armature.pose.bones[hips_name].location.copy() if hips_name else Vector((0.0, 0.0, 0.0))
+
+    vertical_axis = 1
+    if hips_name:
+        hb = armature.data.bones[hips_name]
+        hb_world_r = armature.matrix_world.to_3x3().normalized() @ hb.matrix_local.to_3x3().normalized()
+        vz = hb_world_r.inverted() @ Vector((0.0, 0.0, 1.0))
+        vertical_axis = max(range(3), key=lambda ax: abs(vz[ax]))
+
+    # Remove old kneeling crouch action if present so NLA carries a single canonical 'crouch' clip
+    old_crouch = bpy.data.actions.get("crouch")
+    if old_crouch:
+        bpy.data.actions.remove(old_crouch)
+
+    out_act = bpy.data.actions.new(name="crouch")
+    _assign_action(armature, out_act)
+    total_frames = max(31, int(round(2.0 * scene_fps)) + 1)  # 61 frames @ 30fps (2.0s breathing cycle)
+
+    for idx in range(total_frames):
+        f = idx + 1
+        t = idx / float(total_frames - 1) if total_frames > 1 else 0.0
+        phase = t * math.pi * 2.0
+        breath = math.sin(phase)
+
+        for b_name, q0 in base_quats.items():
+            pb = armature.pose.bones[b_name]
+            pb.rotation_mode = "QUATERNION"
+            q = q0.copy()
+            if b_name == spine1_name:
+                q = (q @ Euler((breath * 0.008, 0.0, 0.0), "XYZ").to_quaternion()).normalized()
+            elif b_name == spine2_name:
+                q = (q @ Euler((breath * 0.015, 0.0, 0.0), "XYZ").to_quaternion()).normalized()
+            elif b_name == head_name:
+                q = (q @ Euler((-breath * 0.012, 0.0, 0.0), "XYZ").to_quaternion()).normalized()
+            pb.rotation_quaternion = q
+            pb.keyframe_insert(data_path="rotation_quaternion", frame=f)
+
+            if b_name == hips_name:
+                loc = base_hips_loc.copy()
+                # Keep pelvis centered horizontally over capsule while breathing subtly vertically
+                for ax in range(3):
+                    if ax != vertical_axis:
+                        loc[ax] = 0.0
+                loc[vertical_axis] += breath * 0.005
+                pb.location = loc
+                pb.keyframe_insert(data_path="location", frame=f)
+
+    _assign_action(armature, None)
+    return out_act
 
 
 def _write_bundle_js(glb_path: Path, bundle_path: Path) -> None:
@@ -586,6 +999,7 @@ def main() -> int:
 
     armature = armatures[0]
     _normalize_rig_transform(armature, meshes)
+    meshes = _upgrade_mesh_from_prep_glb(armature, meshes, args.prep_glb)
     _restore_pbr_textures(meshes, args.tex_dir, args.tex_size)
 
     # Wrap in soldier_root rotated 180 deg around Z (Blender) -> faces -Z in Three.js
@@ -603,15 +1017,49 @@ def main() -> int:
         bpy.data.actions.remove(old_act)
 
     built_actions: list[bpy.types.Action] = []
+    built_map: dict[str, bpy.types.Action] = {}
     for clip_name, aliases in CLIP_ALIASES.items():
-        excl = ("move", "crawl", "forward") if clip_name == "prone" else ()
+        excl = CLIP_EXCLUDE_TOKENS.get(clip_name, ())
         clip_path = _find_asset_file(args.anims_dir, aliases, exclude_tokens=excl)
         if clip_path is None:
             print(f"[WARN] Clip '{clip_name}' not found in {args.anims_dir}; skipping.")
             continue
         act = _extract_action_for_clip(clip_name, clip_path, armature, args.fps)
         built_actions.append(act)
+        built_map[clip_name] = act
         print(f"[OK] Built clip '{clip_name}' from {clip_path.name} ({int(act.frame_range[1])} frames)")
+
+    # Stabilize arms/hands in armature space toward tactical combat-ready shoulder weld on moving clips
+    if "idle" in built_map:
+        idle_arm_targets = _sample_idle_arm_targets(built_map["idle"], armature)
+        if "run" in built_map:
+            _stabilize_clip_rifle_hold(built_map["run"], idle_arm_targets, armature, blend_weight=0.55, cyclic=True)
+            print("[OK] Stabilized 'run' upper-limb rifle hold toward combat-ready shoulder weld")
+        for c_key, w_blend in (
+            ("crouch_forward", 0.82),
+            ("crouch_backward", 0.72),
+            ("crouch_left", 0.68),
+            ("crouch_right", 0.75),
+        ):
+            if c_key in built_map:
+                _stabilize_clip_rifle_hold(built_map[c_key], idle_arm_targets, armature, blend_weight=w_blend, cyclic=True)
+                print(f"[OK] Stabilized '{c_key}' tactical shoulder-welded rifle hold (w={w_blend})")
+
+    # Build height-balanced tactical crouch idle (+24cm vs kneeling crouch.fbx -> matches 4 crouch walks)
+    if "crouch_forward" in built_map:
+        old_crouch = built_map.get("crouch")
+        if old_crouch and old_crouch in built_actions:
+            built_actions.remove(old_crouch)
+        tactical_crouch = _build_tactical_crouch_idle_from_walk(built_map["crouch_forward"], armature, args.fps)
+        built_actions.append(tactical_crouch)
+        built_map["crouch"] = tactical_crouch
+        print(
+            f"[OK] Built height-balanced tactical 'crouch' idle from 'crouch_forward' ({int(tactical_crouch.frame_range[1])} frames)"
+        )
+    elif "crouch" in built_map and "idle" in built_map:
+        idle_arm_targets = _sample_idle_arm_targets(built_map["idle"], armature)
+        _stabilize_clip_rifle_hold(built_map["crouch"], idle_arm_targets, armature, blend_weight=0.80, cyclic=True)
+        print("[OK] Stabilized fallback 'crouch' rifle hold from 'idle'")
 
     if not built_actions:
         raise RuntimeError(f"No animation clips found in {args.anims_dir} (need idle/run/crouch/jump)")

@@ -36,18 +36,18 @@ test("forwardFromYawPitch and getEyeHeight match Three.js YXZ camera conventions
 });
 
 test("Stand/Crouch/Prone hitboxes enforce head > body > limb priority and respect cover height", () => {
-  // Standing target at origin facing +Z (yaw = Math.PI)
+  // Standing target at origin facing +Z (yaw = Math.PI) — Heroic scale ~1.92m tall x ~0.83m wide
   const standTarget = { id: "t1", x: 0, y: 0, z: -10, yaw: Math.PI, flags: 0, alive: true };
-  assert.equal(raycastPlayerHitboxes(0, 1.62, 0, 0, 0, -1, 50, standTarget).part, "head");
-  assert.equal(raycastPlayerHitboxes(0, 1.2, 0, 0, 0, -1, 50, standTarget).part, "body");
-  assert.equal(raycastPlayerHitboxes(0, 0.45, 0, 0, 0, -1, 50, standTarget).part, "limb");
+  assert.equal(raycastPlayerHitboxes(0, 1.77, 0, 0, 0, -1, 50, standTarget).part, "head");
+  assert.equal(raycastPlayerHitboxes(0, 1.26, 0, 0, 0, -1, 50, standTarget).part, "body");
+  assert.equal(raycastPlayerHitboxes(0, 0.47, 0, 0, 0, -1, 50, standTarget).part, "limb");
 
-  // Arm-through-chest lateral shot: hits left arm first at x=-0.29, then torso -> must upgrade to "body"
+  // Arm-through-chest lateral shot: hits left arm first at x=-0.335, then torso -> must upgrade to "body"
   const sideTarget = { id: "t2", x: 0, y: 0, z: -10, yaw: 0, flags: 0, alive: true };
-  const armThroughTorso = raycastPlayerHitboxes(-5, 1.2, -10, 1, 0, 0, 20, sideTarget);
+  const armThroughTorso = raycastPlayerHitboxes(-5, 1.26, -10, 1, 0, 0, 20, sideTarget);
   assert.equal(armThroughTorso.part, "body");
 
-  // Crouched target behind 1.45m wall: head at 1.08 + 0.175 = 1.255 < 1.45 -> wall blocks low shot, high shot misses crouched head
+  // Crouched target behind 1.45m wall: head at 1.18 + 0.20 = 1.38 < 1.45 -> wall blocks low shot, high shot misses crouched head
   const crouchTarget = { id: "t3", x: 0, y: 0, z: -10, yaw: 0, flags: FLAG.CROUCH, alive: true };
   const arenaWithCover = {
     boxes: [{ x0: -2, x1: 2, y0: 0, y1: 1.45, z0: -6, z1: -5 }],
@@ -56,7 +56,7 @@ test("Stand/Crouch/Prone hitboxes enforce head > body > limb priority and respec
   const highShot = resolveAuthoritativeShot({
     shooterId: "s1",
     weaponCfg: WEAPONS.m416,
-    origin: { x: 0, y: 1.62, z: 0 },
+    origin: { x: 0, y: 1.77, z: 0 },
     dir: { x: 0, y: 0, z: -1 },
     arena: arenaWithCover,
     targets: [crouchTarget],
@@ -66,7 +66,7 @@ test("Stand/Crouch/Prone hitboxes enforce head > body > limb priority and respec
   const lowShot = resolveAuthoritativeShot({
     shooterId: "s1",
     weaponCfg: WEAPONS.m416,
-    origin: { x: 0, y: 1.08, z: 0 },
+    origin: { x: 0, y: 1.18, z: 0 },
     dir: { x: 0, y: 0, z: -1 },
     arena: arenaWithCover,
     targets: [crouchTarget],
@@ -76,8 +76,8 @@ test("Stand/Crouch/Prone hitboxes enforce head > body > limb priority and respec
   // Prone target rotated along yaw=0 (head forward at -Z, legs at +Z)
   const proneTarget = { id: "t4", x: 0, y: 0, z: -10, yaw: 0, flags: FLAG.PRONE, alive: true };
   const boxes = buildPlayerHitboxes(proneTarget);
-  assert.ok(boxes.head.cz < -10.4 && boxes.head.cy < 0.45);
-  assert.equal(raycastPlayerHitboxes(0, 0.36, 0, 0, 0, -1, 50, proneTarget).part, "head");
+  assert.ok(boxes.head.cz < -10.5 && boxes.head.cy < 0.45);
+  assert.equal(raycastPlayerHitboxes(0, 0.39, 0, 0, 0, -1, 50, proneTarget).part, "head");
 });
 
 test("raycastArenaDistance ignores moveOnly glass/window colliders and AWM projectile simulates gravity drop", () => {
@@ -297,7 +297,7 @@ test("Match server-authoritative combat: shared TDM/FFA damage, AWM+Glock finish
     room.match.poseHistory.record(pB, now);
 
     const h1 = room.match.handleFire(pA, {
-      origin: { x: 0, y: 1.62, z: 0 },
+      origin: { x: 0, y: 1.77, z: 0 },
       dir: { x: 0, y: 0, z: -1 },
       yaw: 0,
       pitch: 0,
@@ -311,7 +311,7 @@ test("Match server-authoritative combat: shared TDM/FFA damage, AWM+Glock finish
 
     now += WEAPONS.m416.fireInterval + 5;
     const h2 = room.match.handleFire(pA, {
-      origin: { x: 0, y: 1.16, z: 0 },
+      origin: { x: 0, y: 1.32, z: 0 },
       dir: { x: 0, y: 0, z: -1 },
       yaw: 0,
       pitch: 0,
@@ -332,14 +332,14 @@ test("Match server-authoritative combat: shared TDM/FFA damage, AWM+Glock finish
 
     // 2. AWM limb (80 dmg -> 20 HP) + switch to Glock-17 (equipTime 240ms enforced!) -> body finish (24 dmg -> kill)
     room.match.handleSwitchWeapon(pA, { slot: 3 }, now);
-    const earlyAwm = room.match.handleFire(pA, { origin: { x: 0, y: 1.7, z: 0 }, dir: { x: 0, y: 0, z: -1 }, yaw: 0, pitch: 0 }, now + 100);
+    const earlyAwm = room.match.handleFire(pA, { origin: { x: 0, y: EYE_HEIGHT_STAND, z: 0 }, dir: { x: 0, y: 0, z: -1 }, yaw: 0, pitch: 0 }, now + 100);
     assert.equal(earlyAwm.ok, false);
 
     now += WEAPONS.sniper.equipTimeMs + 10;
-    const legPitch = Math.atan2(0.45 - 1.7, 10);
+    const legPitch = Math.atan2(0.47 - EYE_HEIGHT_STAND, 10);
     const legDir = forwardFromYawPitch(0, legPitch);
     const awmLimb = room.match.handleFire(pA, {
-      origin: { x: 0, y: 1.7, z: 0 },
+      origin: { x: 0, y: EYE_HEIGHT_STAND, z: 0 },
       dir: legDir,
       yaw: 0,
       pitch: legPitch,
@@ -352,14 +352,14 @@ test("Match server-authoritative combat: shared TDM/FFA damage, AWM+Glock finish
     assert.equal(pB.hp, 20);
 
     room.match.handleSwitchWeapon(pA, { slot: 2 }, now + 20);
-    const earlyGlock = room.match.handleFire(pA, { origin: { x: 0, y: 1.7, z: 0 }, dir: { x: 0, y: 0, z: -1 }, yaw: 0, pitch: 0 }, now + 100);
+    const earlyGlock = room.match.handleFire(pA, { origin: { x: 0, y: EYE_HEIGHT_STAND, z: 0 }, dir: { x: 0, y: 0, z: -1 }, yaw: 0, pitch: 0 }, now + 100);
     assert.equal(earlyGlock.ok, false);
 
     now += 20 + WEAPONS.pistol.equipTimeMs + 10;
-    const bodyPitch = Math.atan2(1.16 - 1.7, 10);
+    const bodyPitch = Math.atan2(1.26 - EYE_HEIGHT_STAND, 10);
     const bodyDir = forwardFromYawPitch(0, bodyPitch);
     const glockFinish = room.match.handleFire(pA, {
-      origin: { x: 0, y: 1.7, z: 0 },
+      origin: { x: 0, y: EYE_HEIGHT_STAND, z: 0 },
       dir: bodyDir,
       yaw: 0,
       pitch: bodyPitch,
@@ -382,9 +382,9 @@ test("Match server-authoritative combat: shared TDM/FFA damage, AWM+Glock finish
       room.match.poseHistory.record(pB, tStep);
     }
 
-    const bodyAt10Pitch = Math.atan2(1.2 - 1.7, 10);
+    const bodyAt10Pitch = Math.atan2(1.26 - EYE_HEIGHT_STAND, 10);
     const lagHit = room.match.handleFire(pA, {
-      origin: { x: 2.0, y: 1.7, z: 0 },
+      origin: { x: 2.0, y: EYE_HEIGHT_STAND, z: 0 },
       dir: forwardFromYawPitch(0, bodyAt10Pitch),
       yaw: 0,
       pitch: bodyAt10Pitch,

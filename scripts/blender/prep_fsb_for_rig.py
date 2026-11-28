@@ -35,7 +35,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--out-fbx", type=Path, default=repo_root / "model" / "assets" / "fsb_ready_for_rig.fbx")
     parser.add_argument("--out-glb", type=Path, default=repo_root / "model" / "assets" / "fsb_ready_for_rig.glb")
     parser.add_argument("--tex-dir", type=Path, default=repo_root / "model" / "assets" / "fsb_textures")
-    parser.add_argument("--target-tris", type=int, default=18000)
+    parser.add_argument("--target-tris", type=int, default=28000)
     parser.add_argument("--tex-size", type=int, default=1024)
     parser.add_argument("--merge-dist", type=float, default=0.00015)
     return parser.parse_args(argv)

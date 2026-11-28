@@ -502,19 +502,9 @@ export function createSceneManager({
 
   function createWarmupSoldierGroup() {
     const container = new THREE.Group();
-    // Warmup enemy variant so shared `soldier_iff_pbr_v1` shader program compiles upfront during Loading
+    // Warmup enemy & protected variants so shared `soldier_iff_pbr_v1` shader program compiles upfront
     const rig = remoteMgr.buildSoldierVisual("B", "__warmup__", "enemy");
     container.add(rig.root);
-    const shieldGeo = new THREE.SphereGeometry(0.95, 16, 12);
-    const shieldMat = new THREE.MeshBasicMaterial({
-      color: TEAM_META.A.colorNum,
-      transparent: true,
-      opacity: 0.16,
-      wireframe: true,
-    });
-    const shieldDome = new THREE.Mesh(shieldGeo, shieldMat);
-    shieldDome.position.set(0, 0.92, 0);
-    container.add(shieldDome);
 
     const muzFlash = new THREE.Mesh(remoteMuzFlashGeo, remoteMuzFlashMat);
     muzFlash.position.set(0.11, 1.3, -0.78);
@@ -530,8 +520,6 @@ export function createSceneManager({
       group: container,
       dispose() {
         S.remove(container);
-        shieldGeo.dispose();
-        shieldMat.dispose();
       },
     };
   }

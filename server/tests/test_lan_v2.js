@@ -244,7 +244,7 @@ test("Room lifecycle WAITING -> STARTING -> PLAYING -> ENDING -> WAITING & host/
   now += WEAPONS.m416.fireInterval + 5;
   const hit1Follow = room.match.handleFire(
     pHost,
-    { origin: { x: 6, y: 1.16, z: 0 }, dir: { x: 0, y: 0, z: -1 }, yaw: 0, pitch: 0, clientTime: now },
+    { origin: { x: 6, y: 1.32, z: 0 }, dir: { x: 0, y: 0, z: -1 }, yaw: 0, pitch: 0, clientTime: now },
     now,
   );
   assert.equal(hit1Follow.damage, 27);
@@ -263,7 +263,7 @@ test("Room lifecycle WAITING -> STARTING -> PLAYING -> ENDING -> WAITING & host/
   room.match.poseHistory.record(pG1, now);
   room.match.handleFire(
     pHost,
-    { origin: { x: 6, y: 1.16, z: 0 }, dir: { x: 0, y: 0, z: -1 }, yaw: 0, pitch: 0, clientTime: now },
+    { origin: { x: 6, y: 1.32, z: 0 }, dir: { x: 0, y: 0, z: -1 }, yaw: 0, pitch: 0, clientTime: now },
     now,
   );
 

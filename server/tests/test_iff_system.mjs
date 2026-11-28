@@ -16,6 +16,7 @@ import {
   DEFAULT_ENEMY_HIGHLIGHT_COLOR,
   DEFAULT_ENEMY_RIM_STRENGTH,
   SOLDIER_IFF_CACHE_KEY,
+  UNIFORM_IFF_PRESETS,
   applySoldierIffShader,
   computeFriendlyMarkerLayout,
   computeIffUniformValues,
@@ -413,11 +414,16 @@ test("applySoldierIffShader injects Geometric-Normal Fresnel and shares 1 cache 
 
   const mockShader = {
     uniforms: {},
-    fragmentShader: "#include <common>\n#include <normal_fragment_begin>\n#include <normal_fragment_maps>\n#include <tonemapping_fragment>",
+    fragmentShader:
+      "#include <common>\n#include <map_fragment>\n#include <normal_fragment_begin>\n#include <normal_fragment_maps>\n#include <tonemapping_fragment>\n#include <fog_fragment>",
   };
   enemyMat.onBeforeCompile(mockShader);
 
   assert.equal(mockShader.uniforms.uIffColor, enemyUniforms.uIffColor);
+  assert.equal(mockShader.uniforms.uIffClothTint, enemyUniforms.uIffClothTint);
+  assert.equal(mockShader.uniforms.uIffHeroParams, enemyUniforms.uIffHeroParams);
+  assert.ok(mockShader.fragmentShader.includes("iffClothMask"));
+  assert.ok(mockShader.fragmentShader.includes("iffPreFogRgb"));
   assert.ok(mockShader.fragmentShader.includes("vec3 iffGeomNormal = normal;"));
   assert.ok(
     mockShader.fragmentShader.indexOf("vec3 iffGeomNormal = normal;") <
@@ -425,11 +431,36 @@ test("applySoldierIffShader injects Geometric-Normal Fresnel and shares 1 cache 
     "Geometric normal MUST be captured BEFORE normalMap perturbation to preserve interior PBR sharpness",
   );
   assert.ok(mockShader.fragmentShader.includes("smoothstep(iffEdgeLo, iffEdgeHi, 1.0 - iffNdotV)"));
+  assert.ok(mockShader.fragmentShader.includes("pow(iffRim, 1.65)"));
+  assert.ok(enemyUniforms.uIffEdgeParams.value.x >= 0.70, "Strong preset rim must stay thin on silhouette edge");
 
   // In-place uniform sync changes enemy color to yellow with zero shader recompile
   syncSoldierIffUniforms(enemyUniforms, { enemyColor: "yellow", rimStrength: "crisp", mapId: "harbor" });
   assert.ok(enemyUniforms.uIffColor.value.g > 0.7);
   assert.equal(enemyUniforms.uIffIntensity.value, 0.74);
+});
+
+test("Uniform Recolor (Ally Cobalt-Navy vs Enemy Urban Titanium-Slate) & Hero Visibility calibrate cleanly per map", () => {
+  assert.ok(UNIFORM_IFF_PRESETS.ally.clothRgbSrgb[2] > UNIFORM_IFF_PRESETS.ally.clothRgbSrgb[0] * 2);
+  assert.ok(
+    UNIFORM_IFF_PRESETS.enemy.clothRgbSrgb[0] >= 0.25 &&
+      UNIFORM_IFF_PRESETS.enemy.clothRgbSrgb[2] > UNIFORM_IFF_PRESETS.enemy.clothRgbSrgb[0],
+  );
+
+  const allyMil = computeIffUniformValues({ relation: "ally", rimStrength: "strong", mapId: "military" });
+  const enemyMil = computeIffUniformValues({ relation: "enemy", enemyColor: "red", rimStrength: "strong", mapId: "military" });
+  const enemyHarbor = computeIffUniformValues({ relation: "enemy", enemyColor: "red", rimStrength: "strong", mapId: "harbor" });
+
+  // Allies wear Cobalt-Navy & never receive enemy highlight rim even if strong rim is enabled
+  assert.equal(allyMil.intensity, 0);
+  assert.ok(allyMil.clothRgb[2] > allyMil.clothRgb[0] * 4);
+  // Enemies wear cool Urban Wolf-Grey (much higher luminance & neutral cool ratio than brown ground)
+  assert.ok(enemyMil.clothRgb[0] > allyMil.clothRgb[0] * 3);
+  assert.ok(enemyMil.clothRgb[2] >= enemyMil.clothRgb[0]);
+  // Hero Visibility attenuates distance fog & lifts shaded armor stronger on dark Harbor night
+  assert.ok(enemyMil.fogAtten > 0.25 && enemyMil.fogAtten < 0.6);
+  assert.ok(enemyHarbor.heroFillLift > enemyMil.heroFillLift);
+  assert.ok(allyMil.coolRimStrength > 0.1);
 });
 
 test("remote_players manager enforces 3B (blue LED only on Allies, clean rimmed Enemies) & live team-switch sync", () => {
@@ -467,6 +498,9 @@ test("remote_players manager enforces 3B (blue LED only on Allies, clean rimmed 
     const bodyMats = {
       ally: { name: "FSB_Operator_PBR" },
       enemy: { name: "FSB_Operator_PBR_Enemy" },
+      protectedAlly: { name: "FSB_Operator_PBR_ProtectedAlly" },
+      protectedEnemy: { name: "FSB_Operator_PBR_ProtectedEnemy" },
+      protected: { name: "FSB_Operator_PBR_ProtectedEnemy" },
     };
     const teamAccentMats = {
       A: { name: "TeamColor_A" },
@@ -537,6 +571,24 @@ test("remote_players manager enforces 3B (blue LED only on Allies, clean rimmed 
     assert.equal(enemyAv.relation, "enemy");
     assert.equal(enemyAv.rig.root.getObjectByName("head_team_iff").visible, false);
     assert.equal(enemyAv.nameplate.visible, false);
+
+    // CS2-style direct-body blinking during Spawn Protection uses relation-specific protected material
+    assert.equal(enemyAv.shieldDome, null);
+    assert.equal(enemyAv.shieldBaseRing, null);
+    const t0 = Date.now();
+    enemyAv.snapshots = [{ t: t0 - 10, x: 0, y: 0, z: -10, yaw: 0, pitch: 0, mv: 0, flags: 0, hp: 100, alive: true, invulnerable: true, iFrames: true, protectExpiring: false }];
+    mgr.updateRemotePlayers(0.016);
+    assert.equal(enemyAv.shieldBlinkActive, true);
+    const activeMat = enemyAv.rig.root.getObjectByName("FSB_Soldier").material;
+    assert.ok(activeMat === bodyMats.protectedEnemy || activeMat === bodyMats.enemy);
+
+    currentMode = "TDM";
+    meTeam = "B";
+    mgr.syncAllRelations();
+    enemyAv.snapshots = [{ t: t0 - 10, x: 0, y: 0, z: -10, yaw: 0, pitch: 0, mv: 0, flags: 0, hp: 100, alive: true, invulnerable: true, iFrames: true, protectExpiring: false }];
+    mgr.updateRemotePlayers(0.016);
+    const activeAllyMat = enemyAv.rig.root.getObjectByName("FSB_Soldier").material;
+    assert.ok(activeAllyMat === bodyMats.protectedAlly || activeAllyMat === bodyMats.ally);
   } finally {
     globalThis.document = prevDoc;
   }

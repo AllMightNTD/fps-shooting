@@ -211,6 +211,34 @@ test("Bot AI controller & Lobby utils handle TDM/FFA modes, 3 difficulties, weap
   const ffaSum = computeBotTeamSummary({ mode: "FFA", botCount: 5 });
   assert.equal(ffaSum.allies, 0);
   assert.equal(ffaSum.enemies, 5);
+  const tdm8v8 = computeBotTeamSummary({ mode: "TDM" });
+  assert.equal(tdm8v8.teamLabel, "8v8");
+  assert.equal(tdm8v8.botCount, 15);
+  const tdm9v9 = computeBotTeamSummary({ mode: "TDM", botCount: 17 });
+  assert.equal(tdm9v9.teamLabel, "9v9");
+  assert.equal(tdm9v9.allies, 8);
+  assert.equal(tdm9v9.enemies, 9);
+
+  // Check RoomManager & Bot Match support full 8v8 (16 players / 15 bots) and 9v9 (18 players / 17 bots)
+  const capMgr = new RoomManager(() => 1000);
+  const capHost = capMgr.handleHello(makeMockWs(), { name: "Host8v8" });
+  const defaultRoom = capMgr.createRoom(capHost, { mode: GAME_MODE.TDM, map: "military" }).room;
+  assert.equal(defaultRoom.maxPlayers, 16);
+  const full9v9Room = capMgr.createRoom(capHost, { mode: GAME_MODE.TDM, map: "military", maxPlayers: 18 }).room;
+  assert.equal(full9v9Room.maxPlayers, 18);
+
+  const arena = loadMilitaryArena();
+  const match9v9 = createBotMatchController({
+    arena,
+    config: normalizeBotConfig({ mode: "TDM", mapId: "military", difficulty: "medium", botCount: 17 }),
+    weaponsApi,
+    humanId: "human-local",
+    humanName: "Player1",
+    nowFn: () => 10_000,
+  });
+  assert.equal(match9v9.players.size, 18);
+  const botNames9v9 = Array.from(match9v9.players.values()).filter((p) => p.isBot).map((p) => p.name);
+  assert.equal(new Set(botNames9v9).size, 17, "All 17 AI callsigns for 9v9 must be unique");
 
   const clamped = normalizeBotConfig({ mode: "TDM", mapId: "military", difficulty: "hard", botCount: 5, killLimit: 2 });
   assert.equal(clamped.killLimit, 5);
@@ -218,7 +246,6 @@ test("Bot AI controller & Lobby utils handle TDM/FFA modes, 3 difficulties, weap
   // 2. Bot Match Controller integration (TDM 3v3 on Khu Quân Sự Cũ)
   let tMs = 10_000;
   let endPayload = null;
-  const arena = loadMilitaryArena();
   const match = createBotMatchController({
     arena,
     config: clamped,
