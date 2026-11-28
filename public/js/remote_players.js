@@ -1,6 +1,16 @@
 /**
  * Remote LAN Player Avatars, 100ms Snapshot Interpolation & Team Nameplates.
+ * Supports both legacy procedural soldier rigs and Mixamo/AccuRIG SkinnedMesh AnimationMixer rigs.
  */
+
+import {
+  SOLDIER_BONE_ALIASES,
+  cloneSkinnedHierarchy,
+  findSoldierClip,
+  hasSkinnedMesh,
+  resolveRigBone,
+  selectSoldierAnimState,
+} from "./skinned_clone.js";
 
 export function lerpAngle(a, b, t) {
   let d = ((b - a + Math.PI) % (Math.PI * 2)) - Math.PI;
@@ -23,6 +33,65 @@ export function createRemotePlayersManager({
 }) {
   const remotePlayers = new Map();
   const _muzWorldPos = new THREE.Vector3();
+  const _hitboxMat = new THREE.MeshBasicMaterial({ visible: false });
+  const _headHitGeo = new THREE.SphereGeometry(0.155, 8, 6);
+  const _torsoHitGeo = new THREE.BoxGeometry(0.36, 0.44, 0.24);
+  const _hipsHitGeo = new THREE.BoxGeometry(0.34, 0.24, 0.22);
+  const _thighHitGeo = new THREE.BoxGeometry(0.16, 0.42, 0.16);
+  const _calfHitGeo = new THREE.BoxGeometry(0.14, 0.42, 0.16);
+
+  function addBoneHitbox(parent, name, geo, pos, part, playerId, hitMeshes) {
+    if (!parent) return;
+    const mesh = new THREE.Mesh(geo, _hitboxMat);
+    mesh.name = name;
+    mesh.position.set(pos[0], pos[1], pos[2]);
+    mesh.userData.hitTarget = { id: playerId, part };
+    parent.add(mesh);
+    hitMeshes.push(mesh);
+  }
+
+  function buildSkinnedHitboxes(root, playerId) {
+    const hitMeshes = [];
+    const headBone = resolveRigBone(root, SOLDIER_BONE_ALIASES.head);
+    const spineBone = resolveRigBone(root, SOLDIER_BONE_ALIASES.spine);
+    const hipsBone = resolveRigBone(root, SOLDIER_BONE_ALIASES.hips);
+    const lUpLeg = resolveRigBone(root, SOLDIER_BONE_ALIASES.leftUpLeg);
+    const lLeg = resolveRigBone(root, SOLDIER_BONE_ALIASES.leftLeg);
+    const rUpLeg = resolveRigBone(root, SOLDIER_BONE_ALIASES.rightUpLeg);
+    const rLeg = resolveRigBone(root, SOLDIER_BONE_ALIASES.rightLeg);
+
+    addBoneHitbox(headBone, "hitbox_head", _headHitGeo, [0, 0.08, 0], "head", playerId, hitMeshes);
+    addBoneHitbox(spineBone, "hitbox_torso", _torsoHitGeo, [0, 0.06, 0], "body", playerId, hitMeshes);
+    addBoneHitbox(hipsBone, "hitbox_hips", _hipsHitGeo, [0, 0, 0], "body", playerId, hitMeshes);
+    addBoneHitbox(lUpLeg, "hitbox_thigh_l", _thighHitGeo, [0, -0.2, 0], "limb", playerId, hitMeshes);
+    addBoneHitbox(lLeg, "hitbox_calf_l", _calfHitGeo, [0, -0.2, 0], "limb", playerId, hitMeshes);
+    addBoneHitbox(rUpLeg, "hitbox_thigh_r", _thighHitGeo, [0, -0.2, 0], "limb", playerId, hitMeshes);
+    addBoneHitbox(rLeg, "hitbox_calf_r", _calfHitGeo, [0, -0.2, 0], "limb", playerId, hitMeshes);
+
+    if (hitMeshes.length === 0) {
+      addBoneHitbox(root, "hitbox_fallback_body", _torsoHitGeo, [0, 1.0, 0], "body", playerId, hitMeshes);
+      addBoneHitbox(root, "hitbox_fallback_head", _headHitGeo, [0, 1.63, 0], "head", playerId, hitMeshes);
+    }
+    return { hitMeshes, headBone, spineBone };
+  }
+
+  function buildSoldierActions(mixer, animations) {
+    const actions = {};
+    if (!mixer || !Array.isArray(animations) || !animations.length) return actions;
+    for (const key of ["idle", "run", "crouch", "jump"]) {
+      const clip = findSoldierClip(animations, key);
+      if (!clip) continue;
+      const act = mixer.clipAction(clip);
+      if (key === "jump") {
+        act.setLoop(THREE.LoopOnce, 1);
+        act.clampWhenFinished = true;
+      } else {
+        act.setLoop(THREE.LoopRepeat, Infinity);
+      }
+      actions[key] = act;
+    }
+    return actions;
+  }
 
   function tagHitMeshes(root, playerId) {
     const hitMeshes = [];
@@ -47,7 +116,7 @@ export function createRemotePlayersManager({
   function buildSoldierVisual(team, playerId) {
     const tKey = team === "A" || team === "B" ? team : "FFA";
     const teamAccentMats = getTeamAccentMats();
-    const { soldierProto } = getPrototypes();
+    const { soldierProto, soldierAnimations } = getPrototypes();
 
     if (!soldierProto) {
       const root = new THREE.Group();
@@ -82,10 +151,12 @@ export function createRemotePlayersManager({
       return { root, upper, headGroup, legL, legR, weaponMount, hitMeshes: tagHitMeshes(root, playerId), isFallback: true };
     }
 
-    const root = soldierProto.clone();
+    const isSkinned = hasSkinnedMesh(soldierProto);
+    const root = isSkinned ? cloneSkinnedHierarchy(soldierProto, THREE) : soldierProto.clone();
     const accMat = teamAccentMats[tKey];
     root.traverse((o) => {
       o.layers.set(0);
+      if (o.isSkinnedMesh) o.frustumCulled = false;
       if (
         o.isMesh &&
         (o.name.includes("team") || (o.material && (o.material.name === "TeamColor" || o.material.name === "Soldier_TeamAccent")))
@@ -93,6 +164,29 @@ export function createRemotePlayersManager({
         o.material = accMat;
       }
     });
+
+    if (isSkinned) {
+      const mixer = new THREE.AnimationMixer(root);
+      const actions = buildSoldierActions(mixer, soldierAnimations);
+      const initialAct = actions.idle || Object.values(actions)[0] || null;
+      if (initialAct) initialAct.play();
+      const { hitMeshes, headBone, spineBone } = buildSkinnedHitboxes(root, playerId);
+      const weaponMount = resolveRigBone(root, SOLDIER_BONE_ALIASES.rightHand);
+      return {
+        root,
+        isSkinned: true,
+        isFallback: false,
+        mixer,
+        actions,
+        activeAction: initialAct,
+        activeState: initialAct ? "idle" : "",
+        headBone,
+        spineBone,
+        weaponMount,
+        hitMeshes,
+      };
+    }
+
     return {
       root,
       upper: root.getObjectByName("upper_body") || root,
@@ -266,8 +360,11 @@ export function createRemotePlayersManager({
   function upgradeRemoteSoldiers() {
     const { soldierProto } = getPrototypes();
     if (!soldierProto) return;
+    const protoIsSkinned = hasSkinnedMesh(soldierProto);
     for (const av of remotePlayers.values()) {
-      if (av.rig.isFallback) swapAvatarRig(av, av.team);
+      if (av.rig.isFallback || Boolean(av.rig.isSkinned) !== protoIsSkinned) {
+        swapAvatarRig(av, av.team);
+      }
     }
   }
 
@@ -369,40 +466,67 @@ export function createRemotePlayersManager({
       av.rig.root.rotation.x = 0;
       const targetCrouch = pose.flags & FLAG.CROUCH ? 1 : 0;
       av.crouchK += (targetCrouch - av.crouchK) * Math.min(1, 14 * dt);
-      av.rig.root.position.y = -0.44 * av.crouchK;
       av.shieldDome.visible = Boolean(pose.invulnerable);
       updateNameplateSprite(av.nameplate, av.name, av.team, pose.hp);
 
       // Show nameplates only on teammates in TDM (hide enemies & FFA competitors)
       av.nameplate.visible = currentMode === "TDM" && av.team === meTeam;
 
-      if (av.rig.upper && !av.rig.isFallback) {
-        av.rig.upper.rotation.x = pose.pitch * 0.45 + 0.18 * av.crouchK;
-      }
-      if (av.rig.headGroup) av.rig.headGroup.rotation.x = pose.pitch * 0.55;
+      if (av.rig.isSkinned) {
+        const rig = av.rig;
+        const desiredState = selectSoldierAnimState({ alive: pose.alive, mv: pose.mv, flags: pose.flags, FLAG });
+        const hasDedicatedCrouch = Boolean(rig.actions.crouch);
+        rig.root.position.y = hasDedicatedCrouch ? 0 : -0.44 * av.crouchK;
 
-      if (av.rig.armsGroup) {
-        if (av.reloadEndsAt > nowMs && av.reloadDurMs > 0) {
-          const pRel = Math.max(0, Math.min(1, 1 - (av.reloadEndsAt - nowMs) / av.reloadDurMs));
-          av.rig.armsGroup.rotation.x = Math.sin(pRel * Math.PI) * 0.38;
-          av.rig.armsGroup.rotation.z = -Math.sin(pRel * Math.PI) * 0.28;
-        } else {
-          av.rig.armsGroup.rotation.x *= 0.8;
-          av.rig.armsGroup.rotation.z *= 0.8;
+        if (rig.mixer) {
+          const nextAct = rig.actions[desiredState] || rig.actions.idle || Object.values(rig.actions)[0] || null;
+          if (nextAct && nextAct !== rig.activeAction) {
+            nextAct.reset();
+            nextAct.setEffectiveWeight(1);
+            nextAct.play();
+            if (rig.activeAction) rig.activeAction.crossFadeTo(nextAct, 0.14, true);
+            rig.activeAction = nextAct;
+            rig.activeState = desiredState;
+          }
+          if (rig.activeAction && desiredState === "run") {
+            rig.activeAction.setEffectiveTimeScale(Math.max(0.75, Math.min(1.45, pose.mv / 1.0)));
+          } else if (rig.activeAction) {
+            rig.activeAction.setEffectiveTimeScale(1.0);
+          }
+          rig.mixer.update(dt);
         }
-      }
-
-      if (pose.mv > 0.05) {
-        av.walkPhase += dt * (6 + pose.mv * 4.5);
-        const swing = Math.sin(av.walkPhase) * 0.55 * Math.min(1.2, pose.mv);
-        if (av.rig.legL) av.rig.legL.rotation.x = swing;
-        if (av.rig.legR) av.rig.legR.rotation.x = -swing;
+        if (rig.spineBone) rig.spineBone.rotation.x += pose.pitch * 0.28;
+        if (rig.headBone) rig.headBone.rotation.x += pose.pitch * 0.52;
       } else {
-        if (av.rig.legL) av.rig.legL.rotation.x *= 0.85;
-        if (av.rig.legR) av.rig.legR.rotation.x *= 0.85;
+        av.rig.root.position.y = -0.44 * av.crouchK;
+        if (av.rig.upper && !av.rig.isFallback) {
+          av.rig.upper.rotation.x = pose.pitch * 0.45 + 0.18 * av.crouchK;
+        }
+        if (av.rig.headGroup) av.rig.headGroup.rotation.x = pose.pitch * 0.55;
+
+        if (av.rig.armsGroup) {
+          if (av.reloadEndsAt > nowMs && av.reloadDurMs > 0) {
+            const pRel = Math.max(0, Math.min(1, 1 - (av.reloadEndsAt - nowMs) / av.reloadDurMs));
+            av.rig.armsGroup.rotation.x = Math.sin(pRel * Math.PI) * 0.38;
+            av.rig.armsGroup.rotation.z = -Math.sin(pRel * Math.PI) * 0.28;
+          } else {
+            av.rig.armsGroup.rotation.x *= 0.8;
+            av.rig.armsGroup.rotation.z *= 0.8;
+          }
+        }
+
+        if (pose.mv > 0.05) {
+          av.walkPhase += dt * (6 + pose.mv * 4.5);
+          const swing = Math.sin(av.walkPhase) * 0.55 * Math.min(1.2, pose.mv);
+          if (av.rig.legL) av.rig.legL.rotation.x = swing;
+          if (av.rig.legR) av.rig.legR.rotation.x = -swing;
+        } else {
+          if (av.rig.legL) av.rig.legL.rotation.x *= 0.85;
+          if (av.rig.legR) av.rig.legR.rotation.x *= 0.85;
+        }
+        if (av.rig.legL) av.rig.legL.position.y = 0.86 - 0.14 * av.crouchK;
+        if (av.rig.legR) av.rig.legR.position.y = 0.86 - 0.14 * av.crouchK;
       }
-      if (av.rig.legL) av.rig.legL.position.y = 0.86 - 0.14 * av.crouchK;
-      if (av.rig.legR) av.rig.legR.position.y = 0.86 - 0.14 * av.crouchK;
 
       if (av.flashTimer > 0) {
         av.flashTimer -= dt;

@@ -46,6 +46,7 @@ export function createAssetLoader({
   let pistolWorldProto = null;
   let awmWorldProto = null;
   let soldierProto = null;
+  let soldierAnimations = [];
   let armsCtrl = null;
   let armsRoot = null;
   let sharedModelsLoaded = false;
@@ -377,14 +378,22 @@ export function createAssetLoader({
       obj.layers.set(0);
       if (!obj.isMesh) return;
       obj.castShadow = obj.receiveShadow = true;
+      if (obj.isSkinnedMesh) obj.frustumCulled = false;
+      if (obj.geometry && !obj.geometry.attributes.uv2 && obj.geometry.attributes.uv) {
+        obj.geometry.setAttribute("uv2", obj.geometry.attributes.uv);
+      }
       if (obj.material && (obj.material.name === "TeamColor" || obj.material.name === "Soldier_TeamAccent")) {
         teamTemplate = obj.material;
       }
-      if (!matCache.has(obj.material)) matCache.set(obj.material, hydratePbrMaterial(obj.material, obj.name, 1.1));
-      obj.material = matCache.get(obj.material);
+      const ck = `${obj.material.uuid}:${obj.isSkinnedMesh ? 1 : 0}`;
+      if (!matCache.has(ck)) {
+        matCache.set(ck, hydratePbrMaterial(obj.material, obj.name, 1.1, Boolean(obj.isSkinnedMesh)));
+      }
+      obj.material = matCache.get(ck);
     });
     if (teamTemplate) initTeamMaterials(hydratePbrMaterial(teamTemplate, "TeamColor", 1.1));
     soldierProto = root;
+    soldierAnimations = Array.isArray(gltf.animations) ? gltf.animations : [];
     if (onSoldiersUpgraded) onSoldiersUpgraded();
     window.__soldierLoaded = true;
   }
@@ -422,7 +431,7 @@ export function createAssetLoader({
     viewGroups: { m416ViewGroup, pistolViewGroup, pistolPivot, sniperViewGroup },
     applyViewmodelWeapon,
     loadAllSharedModelsAsync,
-    getPrototypes: () => ({ m416WorldProto, pistolWorldProto, awmWorldProto, soldierProto }),
+    getPrototypes: () => ({ m416WorldProto, pistolWorldProto, awmWorldProto, soldierProto, soldierAnimations }),
     getArms: () => ({ armsCtrl, armsRoot }),
     getNodes: () => ({
       boltVis,
